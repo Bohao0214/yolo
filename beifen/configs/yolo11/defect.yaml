@@ -1,0 +1,66 @@
+yolo_version: yolo11
+exp_name: defect
+data: configs/data/defect.yaml
+data_root: /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c
+model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
+epochs: 100
+imgsz: 640
+batch: 10
+device: ""
+
+workers: 8
+conf: 0.20
+nms_iou: 0.7  # 评估/可视化/推理使用的 NMS IoU（默认 0.7）
+match_iou: 0.50  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值）
+
+mode: train_test #test # train_test
+weights: /home/ubuntu/project/deduibi/yolo/models/defect/exp_2601261106/best/best.pt
+patience: 0        # 0 表示禁用早停；数值越大，在验证集无提升时停止得越晚
+lr0: 0.012          # 值越大 → 初期收敛更快但不稳定风险更高；值越小 → 更安全但收敛更慢
+lrf: 0.12           # 值越大 → 最终学习率更高；值越小 → 后期训练更保守
+warmup_epochs: 0.0 # 较长的 warmup 有助于稳定初期训练；0 表示关闭 warmup
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ""  # 设为 "cpu" 可避免评估指标时 GPU 显存溢出
+
+enable_focal_loss: false  # 开关控制；false 表示使用原始 BCE 损失
+focal_gamma: 1.5         # 值越大 → 越关注困难样本（常用 2.0）
+focal_alpha: 0.90        # 值越大 → 正样本权重越高（正样本稀少时常取 0.75~0.95）
+
+enable_hard_mining: false  # 开关控制；false 表示保持原始采样方式
+hard_mining_target: 0.45    # 当得分低于该阈值时视为困难正样本
+hard_mining_neg_topk: 0.05   # 按得分选取前 k% 的负样本作为困难负样本
+hard_mining_pos_weight: 2.0 # 困难正样本重复采样倍数（如 3 倍）
+hard_mining_neg_weight: 1.0 # 困难负样本重复采样倍数（如 3 倍）
+hard_mining_conf: 0.001     # 用于样本打分的置信度阈值
+hard_mining_batch: 1        # 挖掘阶段前向推理使用的 batch size
+hard_mining_device: ""      # 若挖掘阶段 GPU 显存不足，可设为 "cpu"
+hard_mining_imgsz: 320      # 降低分辨率以减少挖掘显存
+hard_mining_half: true      # 挖掘使用 fp16 以省显存
+hard_mining_max_images: 0   # >0 时只抽样部分图片进行挖掘
+hard_mining_seed: 42        # 抽样随机种子
+
+# FP 抑制结构改造（可选，关闭则保持原版）
+enable_fp_enhancements: false
+# 1) 高频抑制门控：默认只对 P3 (index 0) 做抑制
+enable_hf_gate: false
+hf_gate_scales: [0]       # 0/1/2 对应 P3/P4/P5
+hf_gate_alpha: 0.5        # 抑制强度（0~1）
+hf_gate_learnable: false   # 是否让 alpha 可学习
+# 2) 分类一致性正则（减少孤立点触发）
+enable_cls_consistency: false
+cls_consistency_scales: [1, 2]  # 仅中/大尺度更安全
+# 3) 反光不变特征分支（输入端归一化 RGB 拼接）
+enable_color_invariant: false
+color_invariant_eps: 1.0e-6
+
+threshold_sweep:
+  fix: iou              # 固定变量：iou 或 conf
+  fix_list: [0.1, 0.2, 0.3, 0.4,0.5, 0.6, 0.7, 0.8, 0.9]
+  curve: [0.01, 0.01, 1.00]   # start, step, end
+  table: [0.00, 0.05, 1.00]   # start, step, end

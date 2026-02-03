@@ -1,0 +1,6 @@
+path: /home/ubuntu/project/deduibi/yolo/dataset/datasetm6c
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names: ["defect"]

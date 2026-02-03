@@ -1,0 +1,31 @@
+yolo_version: yolo8
+exp_name: defect
+data: configs/data/defect.yaml
+data_root: /home/ubuntu/project/deduibi/yolo/dataset/datasetm6c
+model: models/pretrained/yolo8n.pt  # choices: yolo8n.pt, yolo8s.pt, yolo8m.pt, yolo8l.pt, yolo8x.pt
+epochs: 300
+imgsz: 640
+batch: 32
+device: ""
+workers: 8
+conf: 0.20
+mode: train_test
+weights: models/defect/exp_2601221534/best/best.pt
+patience: 0        # 0 disables early stopping; higher values stop later if no val improvement
+lr0: 0.02          # higher -> faster start but more risk of instability; lower -> safer, slower
+lrf: 0.2           # higher -> higher final LR; lower -> more conservative late training
+warmup_epochs: 0.0 # longer warmup can stabilize early training; 0 removes warmup
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+val_split: 0.0
+seed: 42
+metric_conf: 0.001
+threshold_curve:
+  start: 0.01
+  end: 1.00
+  step: 0.01
+threshold_table:
+  start: 0.00
+  end: 1.00
+  step: 0.05
