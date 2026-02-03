@@ -1,0 +1,50 @@
+
+# 实验结果
+experiments
+
+# =====================
+# YOLO dataset images
+# =====================
+dataset/**/images/**/*.jpg
+dataset/**/images/**/*.png
+dataset/**/images/**/*.jpeg
+dataset/**/images/**/*.bmp
+dataset/**/images/**/*.tif
+dataset/**/images/**/*.tiff
+dataset/**/images/**/*.webp
+
+dataset/yolo
+dataset/raw
+# =====================
+# Pretrained weights
+# =====================
+models/pretrained/*.pt
+models/pretrained/*.onnx
+models/pretrained/*.engine
+
+models/defect/
+
+#备份文件
+beifen/analysis
+
+# 实验结果文件
+analyze/result
+
+# Python
+__pycache__/
+*.pyc
+*.pkl
+*.pth
+
+# 环境
+.env
+.venv
+conda_env.yml
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
