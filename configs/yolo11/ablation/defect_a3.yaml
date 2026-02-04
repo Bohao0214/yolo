@@ -36,9 +36,9 @@ enhance:
   bifpn_channels: 0
   enable_carafe: true
   carafe_replace_neck: true
-  carafe_kernel: 5
+  carafe_kernel: 3
   carafe_up_kernel: 3
-  carafe_comp_channels: 64
+  carafe_comp_channels: 32
   head_type: base
   head_blocks: 1
   enable_dcn: false

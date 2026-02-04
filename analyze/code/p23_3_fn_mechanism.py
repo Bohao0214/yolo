@@ -1,8 +1,10 @@
 """P2.3.3（整合版）图像级 + 目标级 FN 机制拆解（YOLO）。
 
 P2.3.0 评估口径冻结：
-- 置信度阈值（conf）过滤 -> NMS（非极大值抑制，重叠框去重）-> max_det
-- 匹配阈值 tp_iou（IoU=交并比），目标级一对一匹配（匈牙利算法最大化 IoU 总和）
+- 预测框后处理流水线：先 置信度阈值（conf）过滤 -> 再 NMS（非极大值抑制，重叠框去重）-> 最后 max_det
+- 匹配阈值：tp_iou（IoU=交并比），目标级一对一匹配（匈牙利算法：最大化 IoU 总和）
+
+新增：无响应阈值 score_floor（写入 config.json）。
 
 术语（首次出现给出中文解释）：
 - IoU = 交并比
@@ -10,13 +12,15 @@ P2.3.0 评估口径冻结：
 - GT = 标注框
 - FP/TP/FN = 误报/命中/漏检
 
-python /home/ubuntu/project/deduibi/yolo/analyze/code/p23_3_fn_mechanism.py \
-  --weights /home/ubuntu/project/deduibi/yolo/models/defect/exp_260202_base/best/best.pt \
-  --image_dir /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c/images/val \
-  --image_dir /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c/images/test \
-  --out_root /home/ubuntu/project/deduibi/yolo/analyze/result \
+运行示例：
+python /home/ubuntu/hpproject/yolo/analyze/code/p23_3_fn_mechanism.py \
+  --weights /home/ubuntu/hpproject/yolo/models/defect/exp_260202_base/best/best.pt \
+  --image_dir /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/val \
+  --image_dir /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test \
+  --out_root /home/ubuntu/hpproject/yolo/analyze/result \
   --conf 0.3 --tp_iou 0.2 --nms_iou 0.6 --max_det 20 \
-  --batch 4 --infer_chunk 16
+  --batch 4 --infer_chunk 16 \
+  --score_floor 0.01
 
 """
 
@@ -77,7 +81,11 @@ def ensure_cv2() -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="P2.3.3 FN 机制拆解（图像级 + 目标级）。")
-    p.add_argument("--weights", type=str, default="/home/ubuntu/project/deduibi/yolo/models/defect/exp_260202_base/best/best.pt")
+    p.add_argument(
+        "--weights",
+        type=str,
+        default="/home/ubuntu/hpproject/yolo/models/defect/exp_260202_base/best/best.pt",
+    )
     p.add_argument(
         "--image_dir",
         type=str,
@@ -85,8 +93,10 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Dataset image directory (val/test). Can be provided multiple times or comma-separated.",
     )
-    p.add_argument("--out_root", type=str, default="/home/ubuntu/project/deduibi/yolo/analyze/result")
+    p.add_argument("--out_root", type=str, default="/home/ubuntu/hpproject/yolo/analyze/result")
     p.add_argument("--reuse_report_dir", type=str, default="", help="Reuse report_dir that may contain infer_export.csv.")
+
+    # resources
     p.add_argument("--batch", type=int, default=4)
     p.add_argument("--infer_chunk", type=int, default=16)
     p.add_argument("--imgsz", type=int, default=640)
@@ -99,16 +109,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_det", type=int, default=20)
 
     # diag thresholds
-    p.add_argument("--no_resp_score", type=float, default=0.001)
+    p.add_argument("--score_floor", type=float, default=0.01, help="无响应阈值：best_score_all < score_floor 判为无响应。")
+    p.add_argument(
+        "--no_resp_score",
+        type=float,
+        default=None,
+        help="Deprecated: use --score_floor. If set (and score_floor keeps default), it will override score_floor.",
+    )
     p.add_argument("--raw_max_det", type=int, default=3000, help="Max raw boxes per image when running inference.")
 
     # density / highlight
-    p.add_argument("--dense_threshold", type=int, default=4)
+    p.add_argument("--dense_threshold", type=int, default=4, help="gt_count_in_image >= dense_threshold 视为密集。")
     p.add_argument("--enable_highlight", type=int, default=1)
     p.add_argument("--white_thresh", type=int, default=250)
     p.add_argument("--hl_bright_percentile", type=float, default=95.0)
     p.add_argument("--hl_grad_percentile", type=float, default=90.0)
     p.add_argument("--highlight_frac", type=float, default=0.05)
+
     return p.parse_args()
 
 
@@ -142,14 +159,17 @@ def list_images(image_dir: Path) -> List[Path]:
 def _label_dir_candidates(image_dir: Path) -> List[Path]:
     parts = list(image_dir.parts)
     candidates: List[Path] = []
+
     if "images" in parts:
         idx = parts.index("images")
         for name in ("labels", "label", "lable"):
             candidates.append(Path(*parts[:idx], name, *parts[idx + 1 :]))
+
     if "image" in parts:
         idx = parts.index("image")
         for name in ("labels", "label", "lable"):
             candidates.append(Path(*parts[:idx], name, *parts[idx + 1 :]))
+
     if image_dir.name in {"train", "val", "test"}:
         parent = image_dir.parent
         if parent.name in {"images", "image"}:
@@ -157,8 +177,10 @@ def _label_dir_candidates(image_dir: Path) -> List[Path]:
                 candidates.append(parent.parent / name / image_dir.name)
         for name in ("labels", "label", "lable"):
             candidates.append(image_dir.parent / name)
+
     for name in ("labels", "label", "lable"):
         candidates.append(image_dir.parent / name)
+
     seen = set()
     uniq: List[Path] = []
     for c in candidates:
@@ -323,6 +345,23 @@ def safe_ratio(num: int, den: int) -> float:
     return float(num) / float(den) if den > 0 else 0.0
 
 
+def best_score_overlap(gt_box: np.ndarray, boxes: np.ndarray, scores: np.ndarray) -> float:
+    """best_score_all: GT 相关候选最高分（定义为 IoU>0 的候选集合内最高 score）。"""
+    if boxes.size == 0 or scores.size == 0:
+        return 0.0
+    ious = compute_iou_vec(gt_box, boxes)
+    mask = ious > 0.0
+    if not np.any(mask):
+        return 0.0
+    return float(np.max(scores[mask]))
+
+
+def best_iou(gt_box: np.ndarray, boxes: np.ndarray) -> float:
+    if boxes.size == 0:
+        return 0.0
+    return float(np.max(compute_iou_vec(gt_box, boxes)))
+
+
 def short_side(box: Tuple[float, float, float, float]) -> float:
     return max(0.0, min(box[2] - box[0], box[3] - box[1]))
 
@@ -457,13 +496,22 @@ def build_highlight_mask(
     return highlight_mask.astype(np.uint8)
 
 
+def init_scale_counter(sources: List[str]) -> Dict[str, Dict[str, int]]:
+    return {src: {b[0]: 0 for b in SCALE_BUCKETS} for src in sources}
+
+
 def main() -> None:
     args = parse_args()
     ensure_cv2()
+
     if int(args.batch) >= 8:
         raise ValueError("--batch 必须 < 8")
     if int(args.infer_chunk) > 16:
         raise ValueError("--infer_chunk 不要太高（建议 <= 16）")
+
+    # Backward-compatible alias
+    if args.no_resp_score is not None and float(args.score_floor) == 0.01:
+        args.score_floor = float(args.no_resp_score)
 
     reuse_args: Dict[str, object] = {}
     if args.reuse_report_dir:
@@ -492,6 +540,7 @@ def main() -> None:
     report_dir = make_report_dir(Path(args.out_root))
 
     config = {
+        "version": "p23_3_fn_mechanism_v2",
         "created_at": dt.datetime.now().isoformat(timespec="seconds"),
         "weights": str(args.weights),
         "image_dir": [str(p) for p in image_dirs],
@@ -507,7 +556,7 @@ def main() -> None:
         "infer_chunk": int(args.infer_chunk),
         "imgsz": int(args.imgsz),
         "device": str(args.device),
-        "no_resp_score": float(args.no_resp_score),
+        "score_floor": float(args.score_floor),
         "raw_max_det": int(args.raw_max_det),
         "dense_threshold": int(args.dense_threshold),
         "enable_highlight": bool(int(args.enable_highlight)),
@@ -517,20 +566,21 @@ def main() -> None:
             "hl_grad_percentile": float(args.hl_grad_percentile),
             "highlight_frac": float(args.highlight_frac),
         },
+        "scale_buckets": [{"name": n, "lo": lo, "hi": hi} for (n, lo, hi) in SCALE_BUCKETS],
         "eval_pipeline": "conf -> NMS -> max_det; one-to-one match @ tp_iou (Hungarian maximize IoU)",
-        "diag_definitions": {
-            "no_response": "标注框附近几乎无有效响应（重叠候选极少或最高分极低）。",
-            "low_score": "存在候选但最高分 < conf（被置信度阈值挡住）。",
-            "regression_poor": "最高分 >= conf，但最大 IoU 始终 < tp_iou；或匹配冲突未分配到候选。",
-            "postproc_suppressed": "conf 后出现可达 tp_iou 的候选，但在 NMS 或 max_det 阶段被移除。",
-        },
-        "fn_diag_summary_stat_type": {
-            "overall": "FN 四类总体占比",
-            "scale": "按 GT 短边尺度分桶",
-            "density": "按 gt_count_in_image 密集度分桶",
-            "highlight": "按高光/非高光分桶（如启用）",
-            "image_fn_gt_scale": "图像级 FN 图中的 GT 尺度分布",
-            "image_fn_gt_density": "图像级 FN 图的密集度分布",
+        "config_eval": {
+            "best_score_all": "在 P_all（未过 conf 的候选集合）中，取与 GT 有重叠（IoU>0）的候选最高分。",
+            "rules_priority": [
+                "no_response: best_score_all < score_floor",
+                "low_score: score_floor <= best_score_all < conf",
+                "regression_poor: best_score_all >= conf AND best_iou_conf < tp_iou",
+                "postproc_suppressed: best_iou_conf >= tp_iou AND best_iou_final < tp_iou",
+            ],
+            "supp_stage": {
+                "nms": "postproc_suppressed 且 best_iou_nms < tp_iou",
+                "max_det": "postproc_suppressed 且 best_iou_nms >= tp_iou 且 best_iou_final < tp_iou",
+                "unknown": "无法从阶段 IoU 明确归因（或匹配冲突导致 FN）。",
+            },
         },
         "abbr": {
             "IoU": "交并比",
@@ -550,34 +600,36 @@ def main() -> None:
     if not items:
         raise RuntimeError("未找到图像。")
 
-    # image-level summary
+    sources = [d.name for d in image_dirs]
+    sources_all = ["all"] + sources
+
+    # image-level stats
     img_stats: Dict[str, Dict[str, int]] = {}
-    for d in image_dirs:
-        img_stats[d.name] = {
-            "img_total": 0,
-            "gt1_pred1": 0,
-            "gt1_pred0": 0,
-            "gt0_pred1": 0,
-            "gt0_pred0": 0,
-        }
-    img_stats["all"] = {k: 0 for k in img_stats[image_dirs[0].name].keys()}
+    for s in sources_all:
+        img_stats[s] = {"img_total": 0, "gt1_pred1": 0, "gt1_pred0": 0, "gt0_pred1": 0, "gt0_pred0": 0}
 
     image_fn_cases: List[dict] = []
-    image_fn_gt_scale: Dict[str, Dict[str, int]] = {name: {b[0]: 0 for b in SCALE_BUCKETS} for name in list(img_stats.keys())}
-    image_fn_density: Dict[str, Dict[str, int]] = {name: {"dense": 0, "sparse": 0} for name in list(img_stats.keys())}
+    image_fn_gt_scale: Dict[str, Dict[str, int]] = {s: {b[0]: 0 for b in SCALE_BUCKETS} for s in sources_all}
+    image_fn_density: Dict[str, Dict[str, int]] = {s: {"dense": 0, "sparse": 0} for s in sources_all}
 
+    # target-level: GT/TP/FN per scale bucket (B1)
+    gt_scale_counts = init_scale_counter(sources_all)
+    tp_scale_counts = init_scale_counter(sources_all)
+    fn_scale_counts = init_scale_counter(sources_all)
+
+    # target-level: FN cases
     fn_rows: List[dict] = []
 
-    diag_counts_by_source: Dict[str, Dict[str, int]] = {name: {k: 0 for k in DIAG_TYPES} for name in img_stats.keys()}
+    # target-level: FN diag counts
+    diag_counts_by_source: Dict[str, Dict[str, int]] = {s: {k: 0 for k in DIAG_TYPES} for s in sources_all}
     diag_scale_by_source: Dict[str, Dict[str, Dict[str, int]]] = {
-        name: {b[0]: {k: 0 for k in DIAG_TYPES} for b in SCALE_BUCKETS} for name in img_stats.keys()
+        s: {b[0]: {k: 0 for k in DIAG_TYPES} for b in SCALE_BUCKETS} for s in sources_all
     }
     diag_density_by_source: Dict[str, Dict[str, Dict[str, int]]] = {
-        name: {"dense": {k: 0 for k in DIAG_TYPES}, "sparse": {k: 0 for k in DIAG_TYPES}} for name in img_stats.keys()
+        s: {"dense": {k: 0 for k in DIAG_TYPES}, "sparse": {k: 0 for k in DIAG_TYPES}} for s in sources_all
     }
     diag_highlight_by_source: Dict[str, Dict[str, Dict[str, int]]] = {
-        name: {"highlight": {k: 0 for k in DIAG_TYPES}, "non_highlight": {k: 0 for k in DIAG_TYPES}}
-        for name in img_stats.keys()
+        s: {"highlight": {k: 0 for k in DIAG_TYPES}, "non_highlight": {k: 0 for k in DIAG_TYPES}} for s in sources_all
     }
 
     # reuse export if available
@@ -590,6 +642,7 @@ def main() -> None:
             pred_map = parse_infer_export(export_path, image_index, warnings)
             if pred_map:
                 use_export = True
+                warnings.append("- [提醒] infer_export.csv 可能已过 conf 过滤，best_score_all/low_score/no_response 可能偏小。")
             else:
                 warnings.append("- [提醒] infer_export.csv 解析为空，将回退到重新推理。")
         else:
@@ -610,9 +663,9 @@ def main() -> None:
         chunk = items[start : start + int(args.infer_chunk)]
         result_map: Dict[str, object] = {}
         if model is not None:
-            sources = [str(p[0]) for p in chunk]
+            sources_chunk = [str(p[0]) for p in chunk]
             results = model.predict(
-                source=sources,
+                source=sources_chunk,
                 imgsz=int(args.imgsz),
                 conf=0.0,
                 iou=1.0,
@@ -643,7 +696,7 @@ def main() -> None:
             gt_boxes = load_labels(label_path, w, h)
             gt_arr = np.array(gt_boxes, dtype=np.float32) if gt_boxes else np.zeros((0, 4), dtype=np.float32)
 
-            # raw preds
+            # raw preds (P_all)
             preds_raw: List[Tuple[Tuple[float, float, float, float], float]] = []
             if use_export:
                 preds_raw = pred_map.get(str(img_path), [])
@@ -661,27 +714,22 @@ def main() -> None:
                             xyxy = boxes.xyxy.detach().cpu().numpy() if boxes.xyxy is not None else np.zeros((0, 4))
                         confs = boxes.conf.detach().cpu().numpy() if getattr(boxes, "conf", None) is not None else np.zeros(len(xyxy))
                         for box, score in zip(xyxy, confs):
-                            preds_raw.append(
-                                (
-                                    (float(box[0]), float(box[1]), float(box[2]), float(box[3])),
-                                    float(score),
-                                )
-                            )
+                            preds_raw.append(((float(box[0]), float(box[1]), float(box[2]), float(box[3])), float(score)))
 
             pred_boxes = np.array([p[0] for p in preds_raw], dtype=np.float32) if preds_raw else np.zeros((0, 4), dtype=np.float32)
             pred_scores = np.array([p[1] for p in preds_raw], dtype=np.float32) if preds_raw else np.zeros((0,), dtype=np.float32)
 
-            # stage: after conf
+            # stage P_conf
             conf_mask = pred_scores >= float(args.conf)
             pred_conf_boxes = pred_boxes[conf_mask] if pred_boxes.size > 0 else pred_boxes
             pred_conf_scores = pred_scores[conf_mask] if pred_scores.size > 0 else pred_scores
 
-            # stage: after NMS
+            # stage P_nms
             keep_nms = nms_numpy(pred_conf_boxes, pred_conf_scores, float(args.nms_iou))
             pred_nms_boxes = pred_conf_boxes[keep_nms] if keep_nms else np.zeros((0, 4), dtype=np.float32)
             pred_nms_scores = pred_conf_scores[keep_nms] if keep_nms else np.zeros((0,), dtype=np.float32)
 
-            # stage: after max_det
+            # stage P_final
             if pred_nms_scores.size > 0:
                 order = pred_nms_scores.argsort()[::-1][: int(args.max_det)]
                 pred_final_boxes = pred_nms_boxes[order]
@@ -708,36 +756,52 @@ def main() -> None:
                 img_stats[source_name]["gt0_pred0"] += 1
                 img_stats["all"]["gt0_pred0"] += 1
 
+            # image-level FN cases list (GT>0 but final pred=0)
             if has_gt and not has_pred:
+                shorts = [short_side(g) for g in gt_boxes]
+                if shorts:
+                    gt_min_short = float(np.min(shorts))
+                    gt_med_short = float(np.median(shorts))
+                    gt_max_short = float(np.max(shorts))
+                else:
+                    gt_min_short, gt_med_short, gt_max_short = 0.0, 0.0, 0.0
+
+                hist = {b[0]: 0 for b in SCALE_BUCKETS}
+                for g in gt_boxes:
+                    hist[bucket_name(short_side(g))] += 1
+                hist_str = f"lt16={hist['<16']},16_32={hist['16-32']},32_64={hist['32-64']},gt64={hist['>64']}"
+
                 image_fn_cases.append(
                     {
                         "image_path": str(img_path),
                         "source_name": source_name,
                         "gt_count": len(gt_boxes),
+                        "gt_min_short": f"{gt_min_short:.1f}",
+                        "gt_median_short": f"{gt_med_short:.1f}",
+                        "gt_max_short": f"{gt_max_short:.1f}",
+                        "gt_scale_bucket_hist": hist_str,
                     }
                 )
+
                 density_bucket = "dense" if len(gt_boxes) >= int(args.dense_threshold) else "sparse"
                 image_fn_density[source_name][density_bucket] += 1
                 image_fn_density["all"][density_bucket] += 1
-                for gt in gt_boxes:
-                    bucket = bucket_name(short_side(gt))
-                    image_fn_gt_scale[source_name][bucket] += 1
-                    image_fn_gt_scale["all"][bucket] += 1
+                for g in gt_boxes:
+                    b = bucket_name(short_side(g))
+                    image_fn_gt_scale[source_name][b] += 1
+                    image_fn_gt_scale["all"][b] += 1
 
-            # target-level matching (Hungarian maximize IoU)
+            # target-level matching on P_final (Hungarian)
             if gt_arr.size > 0 and pred_final_boxes.size > 0:
                 iou_mat = compute_iou_matrix(gt_arr, pred_final_boxes)
-            else:
-                iou_mat = np.zeros((gt_arr.shape[0], pred_final_boxes.shape[0]), dtype=np.float32)
-
-            if iou_mat.size > 0:
                 cost = np.where(iou_mat >= float(args.tp_iou), 1.0 - iou_mat, 1.0)
                 assignment = hungarian_assign(cost)
             else:
+                iou_mat = np.zeros((gt_arr.shape[0], pred_final_boxes.shape[0]), dtype=np.float32)
                 assignment = [-1] * gt_arr.shape[0]
 
-            matched_pred = set()
             matched_gt = set()
+            matched_pred = set()
             for gi, pj in enumerate(assignment):
                 if pj is None or pj < 0:
                     continue
@@ -749,110 +813,122 @@ def main() -> None:
                     matched_gt.add(gi)
                     matched_pred.add(pj)
 
-            tp = len(matched_gt)
-            fn = len(gt_boxes) - tp
-            fp = int(pred_final_boxes.shape[0]) - len(matched_pred)
-
-            # pred_dup stats
-            if iou_mat.size > 0:
-                for gi in range(iou_mat.shape[0]):
-                    dup_cnt = int(np.sum(iou_mat[gi] >= float(args.tp_iou)))
-                    if dup_cnt >= 2:
-                        # gt 被多个预测覆盖
-                        pass
+            # scale-bucket GT/TP/FN (for recall)
+            for gi, g in enumerate(gt_boxes):
+                b = bucket_name(short_side(g))
+                gt_scale_counts[source_name][b] += 1
+                gt_scale_counts["all"][b] += 1
+                if gi in matched_gt:
+                    tp_scale_counts[source_name][b] += 1
+                    tp_scale_counts["all"][b] += 1
+                else:
+                    fn_scale_counts[source_name][b] += 1
+                    fn_scale_counts["all"][b] += 1
 
             # target-level FN diagnosis
-            if fn > 0:
-                # prepare highlight mask if enabled
-                highlight_integral = None
-                if int(args.enable_highlight) == 1:
-                    img = cv2.imread(str(img_path))
-                    if img is None:
-                        raise FileNotFoundError(f"Failed to read image: {img_path}")
-                    hl_mask = build_highlight_mask(
-                        img,
-                        int(args.white_thresh),
-                        float(args.hl_bright_percentile),
-                        float(args.hl_grad_percentile),
-                    )
-                    highlight_integral = compute_integral(hl_mask)
-                    del img, hl_mask
+            fn_count = len(gt_boxes) - len(matched_gt)
+            highlight_integral = None
+            if fn_count > 0 and int(args.enable_highlight) == 1:
+                img = cv2.imread(str(img_path))
+                if img is None:
+                    raise FileNotFoundError(f"Failed to read image: {img_path}")
+                hl_mask = build_highlight_mask(
+                    img,
+                    int(args.white_thresh),
+                    float(args.hl_bright_percentile),
+                    float(args.hl_grad_percentile),
+                )
+                highlight_integral = compute_integral(hl_mask)
+                del img, hl_mask
 
-                for gi, gt in enumerate(gt_boxes):
-                    if gi in matched_gt:
-                        continue
-                    gt_box = np.array(gt, dtype=np.float32)
+            for gi, g in enumerate(gt_boxes):
+                if gi in matched_gt:
+                    continue
+                gt_box = np.array(g, dtype=np.float32)
 
-                    best_score_raw = float(np.max(pred_scores[compute_iou_vec(gt_box, pred_boxes) > 0.0])) if pred_scores.size > 0 and np.any(compute_iou_vec(gt_box, pred_boxes) > 0.0) else 0.0
-                    best_score_after_conf = float(np.max(pred_conf_scores[compute_iou_vec(gt_box, pred_conf_boxes) > 0.0])) if pred_conf_scores.size > 0 and np.any(compute_iou_vec(gt_box, pred_conf_boxes) > 0.0) else 0.0
-                    best_iou_raw = float(np.max(compute_iou_vec(gt_box, pred_boxes))) if pred_boxes.size > 0 else 0.0
-                    best_iou_after_conf = float(np.max(compute_iou_vec(gt_box, pred_conf_boxes))) if pred_conf_boxes.size > 0 else 0.0
-                    best_iou_after_nms = float(np.max(compute_iou_vec(gt_box, pred_nms_boxes))) if pred_nms_boxes.size > 0 else 0.0
-                    best_iou_after_maxdet = float(np.max(compute_iou_vec(gt_box, pred_final_boxes))) if pred_final_boxes.size > 0 else 0.0
+                s_all = best_score_overlap(gt_box, pred_boxes, pred_scores)
+                iou_conf = best_iou(gt_box, pred_conf_boxes)
+                iou_nms = best_iou(gt_box, pred_nms_boxes)
+                iou_final = best_iou(gt_box, pred_final_boxes)
 
+                # A2: mutually exclusive rules (priority)
+                diag_type = "no_response"
+                supp_stage = ""
+                if s_all < float(args.score_floor):
                     diag_type = "no_response"
-                    suppressed_stage = "none"
-                    if best_score_raw <= float(args.no_resp_score) or best_iou_raw == 0.0:
-                        diag_type = "no_response"
-                    elif best_score_raw < float(args.conf):
-                        diag_type = "low_score"
-                        suppressed_stage = "conf"
-                    elif best_iou_after_conf < float(args.tp_iou):
-                        diag_type = "regression_poor"
+                elif s_all < float(args.conf):
+                    diag_type = "low_score"
+                elif iou_conf < float(args.tp_iou):
+                    diag_type = "regression_poor"
+                elif iou_final < float(args.tp_iou):
+                    diag_type = "postproc_suppressed"
+                    if iou_nms < float(args.tp_iou):
+                        supp_stage = "nms"
+                    elif iou_nms >= float(args.tp_iou):
+                        supp_stage = "max_det"
                     else:
-                        if best_iou_after_nms < float(args.tp_iou):
-                            diag_type = "postproc_suppressed"
-                            suppressed_stage = "NMS"
-                        elif best_iou_after_maxdet < float(args.tp_iou):
-                            diag_type = "postproc_suppressed"
-                            suppressed_stage = "max_det"
-                        else:
-                            diag_type = "regression_poor"
+                        supp_stage = "unknown"
+                else:
+                    # Rare: iou_final 达标但仍 FN（通常为匹配冲突），按 regression_poor 处理。
+                    diag_type = "regression_poor"
+                    supp_stage = "unknown"
 
-                    diag_counts_by_source[source_name][diag_type] += 1
-                    diag_counts_by_source["all"][diag_type] += 1
+                density_bucket = "dense" if len(gt_boxes) >= int(args.dense_threshold) else "sparse"
+                scale_bucket = bucket_name(short_side(g))
 
-                    scale_bucket = bucket_name(short_side(gt))
-                    diag_scale_by_source[source_name][scale_bucket][diag_type] += 1
-                    diag_scale_by_source["all"][scale_bucket][diag_type] += 1
-
-                    density_bucket = "dense" if len(gt_boxes) >= int(args.dense_threshold) else "sparse"
-                    diag_density_by_source[source_name][density_bucket][diag_type] += 1
-                    diag_density_by_source["all"][density_bucket][diag_type] += 1
-
+                highlight_flag = "not_enabled"
+                if highlight_integral is not None:
                     highlight_flag = "non_highlight"
-                    if highlight_integral is not None:
-                        ratio = mask_ratio_for_box(highlight_integral, gt, w, h)
-                        if ratio >= float(args.highlight_frac):
-                            highlight_flag = "highlight"
+                    ratio = mask_ratio_for_box(highlight_integral, g, w, h)
+                    if ratio >= float(args.highlight_frac):
+                        highlight_flag = "highlight"
+
+                # update counts
+                diag_counts_by_source[source_name][diag_type] += 1
+                diag_counts_by_source["all"][diag_type] += 1
+                diag_scale_by_source[source_name][scale_bucket][diag_type] += 1
+                diag_scale_by_source["all"][scale_bucket][diag_type] += 1
+                diag_density_by_source[source_name][density_bucket][diag_type] += 1
+                diag_density_by_source["all"][density_bucket][diag_type] += 1
+                if highlight_flag in {"highlight", "non_highlight"}:
                     diag_highlight_by_source[source_name][highlight_flag][diag_type] += 1
                     diag_highlight_by_source["all"][highlight_flag][diag_type] += 1
 
-                    fn_rows.append(
-                        {
-                            "image_path": str(img_path),
-                            "source_name": source_name,
-                            "gt_id": gi,
-                            "gt_xyxy": format_box(gt),
-                            "gt_short_side_px": f"{short_side(gt):.1f}",
-                            "gt_count_in_image": len(gt_boxes),
-                            "best_score_raw": f"{best_score_raw:.6f}",
-                            "best_score_after_conf": f"{best_score_after_conf:.6f}",
-                            "best_iou_after_conf": f"{best_iou_after_conf:.6f}",
-                            "best_iou_after_nms": f"{best_iou_after_nms:.6f}",
-                            "best_iou_after_maxdet": f"{best_iou_after_maxdet:.6f}",
-                            "diag_type": diag_type,
-                            "suppressed_stage": suppressed_stage,
-                            "scale_bucket": scale_bucket,
-                            "density_bucket": density_bucket,
-                            "highlight_flag": highlight_flag if int(args.enable_highlight) == 1 else "not_enabled",
-                        }
-                    )
+                fn_rows.append(
+                    {
+                        "image_path": str(img_path),
+                        "source_name": source_name,
+                        "gt_id": gi,
+                        "gt_xyxy": format_box(g),
+                        "gt_short_side_px": f"{short_side(g):.1f}",
+                        "gt_count_in_image": len(gt_boxes),
+                        "best_score_all": f"{s_all:.6f}",
+                        "score_floor": f"{float(args.score_floor):.6f}",
+                        "best_iou_conf": f"{iou_conf:.6f}",
+                        "best_iou_nms": f"{iou_nms:.6f}",
+                        "best_iou_final": f"{iou_final:.6f}",
+                        "diag_type": diag_type,
+                        "supp_stage": supp_stage,
+                        "scale_bucket": scale_bucket,
+                        "density_bucket": density_bucket,
+                        "highlight_flag": highlight_flag,
+                    }
+                )
 
-                if highlight_integral is not None:
-                    del highlight_integral
+            if highlight_integral is not None:
+                del highlight_integral
 
-            del gt_arr, pred_boxes, pred_scores, pred_conf_boxes, pred_conf_scores, pred_nms_boxes, pred_nms_scores, pred_final_boxes, pred_final_scores
+            del (
+                gt_arr,
+                pred_boxes,
+                pred_scores,
+                pred_conf_boxes,
+                pred_conf_scores,
+                pred_nms_boxes,
+                pred_nms_scores,
+                pred_final_boxes,
+                pred_final_scores,
+            )
 
         if model is not None:
             del result_map
@@ -860,7 +936,7 @@ def main() -> None:
             if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    # write image-level summary
+    # image_level.csv
     image_level_rows: List[dict] = []
     for source_name, s in img_stats.items():
         recall = safe_ratio(s["gt1_pred1"], s["gt1_pred1"] + s["gt1_pred0"])
@@ -895,13 +971,22 @@ def main() -> None:
         ],
     )
 
+    # image_fn_cases.csv
     write_csv(
         report_dir / "image_fn_cases.csv",
         image_fn_cases,
-        ["image_path", "source_name", "gt_count"],
+        [
+            "image_path",
+            "source_name",
+            "gt_count",
+            "gt_min_short",
+            "gt_median_short",
+            "gt_max_short",
+            "gt_scale_bucket_hist",
+        ],
     )
 
-    # write fn_cases
+    # fn_cases.csv
     write_csv(
         report_dir / "fn_cases.csv",
         fn_rows,
@@ -912,129 +997,286 @@ def main() -> None:
             "gt_xyxy",
             "gt_short_side_px",
             "gt_count_in_image",
-            "best_score_raw",
-            "best_score_after_conf",
-            "best_iou_after_conf",
-            "best_iou_after_nms",
-            "best_iou_after_maxdet",
+            "best_score_all",
+            "score_floor",
+            "best_iou_conf",
+            "best_iou_nms",
+            "best_iou_final",
             "diag_type",
-            "suppressed_stage",
+            "supp_stage",
             "scale_bucket",
             "density_bucket",
             "highlight_flag",
         ],
     )
 
-    # build fn_diag_summary
-    fn_diag_rows: List[dict] = []
-    for source_name in diag_counts_by_source.keys():
-        total = sum(diag_counts_by_source[source_name].values())
-        for diag in DIAG_TYPES:
-            fn_diag_rows.append(
-                {
-                    "source_name": source_name,
-                    "stat_type": "overall",
-                    "diag_type": diag,
-                    "bucket": "all",
-                    "count": diag_counts_by_source[source_name][diag],
-                    "ratio_within_group": f"{safe_ratio(diag_counts_by_source[source_name][diag], total):.6f}",
-                }
-            )
-        for bucket in diag_scale_by_source[source_name]:
-            b_total = sum(diag_scale_by_source[source_name][bucket].values())
-            for diag in DIAG_TYPES:
-                fn_diag_rows.append(
-                    {
-                        "source_name": source_name,
-                        "stat_type": "scale",
-                        "diag_type": diag,
-                        "bucket": bucket,
-                        "count": diag_scale_by_source[source_name][bucket][diag],
-                        "ratio_within_group": f"{safe_ratio(diag_scale_by_source[source_name][bucket][diag], b_total):.6f}",
-                    }
-                )
-        for bucket in diag_density_by_source[source_name]:
-            b_total = sum(diag_density_by_source[source_name][bucket].values())
-            for diag in DIAG_TYPES:
-                fn_diag_rows.append(
-                    {
-                        "source_name": source_name,
-                        "stat_type": "density",
-                        "diag_type": diag,
-                        "bucket": bucket,
-                        "count": diag_density_by_source[source_name][bucket][diag],
-                        "ratio_within_group": f"{safe_ratio(diag_density_by_source[source_name][bucket][diag], b_total):.6f}",
-                    }
-                )
-        if int(args.enable_highlight) == 1:
-            for bucket in diag_highlight_by_source[source_name]:
-                b_total = sum(diag_highlight_by_source[source_name][bucket].values())
-                for diag in DIAG_TYPES:
-                    fn_diag_rows.append(
-                        {
-                            "source_name": source_name,
-                            "stat_type": "highlight",
-                            "diag_type": diag,
-                            "bucket": bucket,
-                            "count": diag_highlight_by_source[source_name][bucket][diag],
-                            "ratio_within_group": f"{safe_ratio(diag_highlight_by_source[source_name][bucket][diag], b_total):.6f}",
-                        }
-                    )
+    # fn_diag_summary.csv (single file contains: overall + scale recall + key cross)
+    score_sum: Dict[Tuple[str, str, str], float] = {}
+    score_cnt: Dict[Tuple[str, str, str], int] = {}
 
-        # image-level FN distributions (gt scale & density)
-        for bucket in image_fn_gt_scale[source_name]:
-            total_scale = sum(image_fn_gt_scale[source_name].values())
+    def acc_score(src: str, stat_type: str, bucket: str, score: float) -> None:
+        key = (src, stat_type, bucket)
+        score_sum[key] = score_sum.get(key, 0.0) + score
+        score_cnt[key] = score_cnt.get(key, 0) + 1
+
+    for r in fn_rows:
+        try:
+            s_all = float(r["best_score_all"])
+        except Exception:
+            continue
+        src = r["source_name"]
+        scale_b = r["scale_bucket"]
+        dens_b = r["density_bucket"]
+        hl_b = r["highlight_flag"]
+
+        acc_score(src, "overall", "all", s_all)
+        acc_score("all", "overall", "all", s_all)
+        acc_score(src, "scale", scale_b, s_all)
+        acc_score("all", "scale", scale_b, s_all)
+        acc_score(src, "density", dens_b, s_all)
+        acc_score("all", "density", dens_b, s_all)
+        if hl_b in {"highlight", "non_highlight"}:
+            acc_score(src, "highlight", hl_b, s_all)
+            acc_score("all", "highlight", hl_b, s_all)
+
+    def mean_score(src: str, stat_type: str, bucket: str) -> str:
+        key = (src, stat_type, bucket)
+        c = score_cnt.get(key, 0)
+        if c <= 0:
+            return ""
+        return f"{(score_sum.get(key, 0.0) / float(c)):.6f}"
+
+    fn_diag_rows: List[dict] = []
+    score_floor_str = f"{float(args.score_floor):.6f}"
+
+    def add_diag_row(
+        source_name: str,
+        stat_type: str,
+        bucket: str,
+        gt: object,
+        tp: object,
+        fn: object,
+        recall: object,
+        fn_no_resp: int,
+        fn_low_score: int,
+        fn_reg_poor: int,
+        fn_postproc: int,
+        denom: int,
+    ) -> None:
+        fn_diag_rows.append(
+            {
+                "source_name": source_name,
+                "stat_type": stat_type,
+                "bucket": bucket,
+                "score_floor": score_floor_str,
+                "best_score_all": mean_score(source_name, stat_type, bucket),
+                "GT": gt,
+                "TP": tp,
+                "FN": fn,
+                "Recall": recall,
+                "FN_no_resp": fn_no_resp,
+                "FN_low_score": fn_low_score,
+                "FN_reg_poor": fn_reg_poor,
+                "FN_postproc": fn_postproc,
+                "ratio_no_resp": f"{safe_ratio(fn_no_resp, denom):.6f}" if denom > 0 else "0.000000",
+                "ratio_low_score": f"{safe_ratio(fn_low_score, denom):.6f}" if denom > 0 else "0.000000",
+                "ratio_reg_poor": f"{safe_ratio(fn_reg_poor, denom):.6f}" if denom > 0 else "0.000000",
+                "ratio_postproc": f"{safe_ratio(fn_postproc, denom):.6f}" if denom > 0 else "0.000000",
+                "count": "",
+                "ratio_within_group": "",
+            }
+        )
+
+    for source_name in sources_all:
+        # overall
+        gt_all = sum(gt_scale_counts[source_name].values())
+        tp_all = sum(tp_scale_counts[source_name].values())
+        fn_all = sum(fn_scale_counts[source_name].values())
+        recall_all = f"{safe_ratio(tp_all, tp_all + fn_all):.6f}"
+        fn_no = diag_counts_by_source[source_name]["no_response"]
+        fn_low = diag_counts_by_source[source_name]["low_score"]
+        fn_reg = diag_counts_by_source[source_name]["regression_poor"]
+        fn_post = diag_counts_by_source[source_name]["postproc_suppressed"]
+        denom = fn_no + fn_low + fn_reg + fn_post
+        add_diag_row(
+            source_name,
+            "overall",
+            "all",
+            gt_all,
+            tp_all,
+            fn_all,
+            recall_all,
+            fn_no,
+            fn_low,
+            fn_reg,
+            fn_post,
+            denom,
+        )
+
+        # scale bucket
+        for b, _, _ in SCALE_BUCKETS:
+            gt_k = gt_scale_counts[source_name][b]
+            tp_k = tp_scale_counts[source_name][b]
+            fn_k = fn_scale_counts[source_name][b]
+            recall_k = f"{safe_ratio(tp_k, tp_k + fn_k):.6f}"
+            fn_no_k = diag_scale_by_source[source_name][b]["no_response"]
+            fn_low_k = diag_scale_by_source[source_name][b]["low_score"]
+            fn_reg_k = diag_scale_by_source[source_name][b]["regression_poor"]
+            fn_post_k = diag_scale_by_source[source_name][b]["postproc_suppressed"]
+            denom_k = fn_no_k + fn_low_k + fn_reg_k + fn_post_k
+            add_diag_row(
+                source_name,
+                "scale",
+                b,
+                gt_k,
+                tp_k,
+                fn_k,
+                recall_k,
+                fn_no_k,
+                fn_low_k,
+                fn_reg_k,
+                fn_post_k,
+                denom_k,
+            )
+
+        # density
+        for b in ("dense", "sparse"):
+            fn_no_k = diag_density_by_source[source_name][b]["no_response"]
+            fn_low_k = diag_density_by_source[source_name][b]["low_score"]
+            fn_reg_k = diag_density_by_source[source_name][b]["regression_poor"]
+            fn_post_k = diag_density_by_source[source_name][b]["postproc_suppressed"]
+            denom_k = fn_no_k + fn_low_k + fn_reg_k + fn_post_k
+            add_diag_row(
+                source_name,
+                "density",
+                b,
+                "",
+                "",
+                denom_k,
+                "",
+                fn_no_k,
+                fn_low_k,
+                fn_reg_k,
+                fn_post_k,
+                denom_k,
+            )
+
+        # highlight
+        if int(args.enable_highlight) == 1:
+            for b in ("highlight", "non_highlight"):
+                fn_no_k = diag_highlight_by_source[source_name][b]["no_response"]
+                fn_low_k = diag_highlight_by_source[source_name][b]["low_score"]
+                fn_reg_k = diag_highlight_by_source[source_name][b]["regression_poor"]
+                fn_post_k = diag_highlight_by_source[source_name][b]["postproc_suppressed"]
+                denom_k = fn_no_k + fn_low_k + fn_reg_k + fn_post_k
+                add_diag_row(
+                    source_name,
+                    "highlight",
+                    b,
+                    "",
+                    "",
+                    denom_k,
+                    "",
+                    fn_no_k,
+                    fn_low_k,
+                    fn_reg_k,
+                    fn_post_k,
+                    denom_k,
+                )
+
+        # image-level FN distributions
+        total_scale = sum(image_fn_gt_scale[source_name].values())
+        for b, _, _ in SCALE_BUCKETS:
+            c = image_fn_gt_scale[source_name][b]
             fn_diag_rows.append(
                 {
                     "source_name": source_name,
                     "stat_type": "image_fn_gt_scale",
-                    "diag_type": "all",
-                    "bucket": bucket,
-                    "count": image_fn_gt_scale[source_name][bucket],
-                    "ratio_within_group": f"{safe_ratio(image_fn_gt_scale[source_name][bucket], total_scale):.6f}",
+                    "bucket": b,
+                    "score_floor": score_floor_str,
+                    "best_score_all": "",
+                    "GT": "",
+                    "TP": "",
+                    "FN": "",
+                    "Recall": "",
+                    "FN_no_resp": "",
+                    "FN_low_score": "",
+                    "FN_reg_poor": "",
+                    "FN_postproc": "",
+                    "ratio_no_resp": "",
+                    "ratio_low_score": "",
+                    "ratio_reg_poor": "",
+                    "ratio_postproc": "",
+                    "count": c,
+                    "ratio_within_group": f"{safe_ratio(c, total_scale):.6f}",
                 }
             )
-        for bucket in image_fn_density[source_name]:
-            total_dense = sum(image_fn_density[source_name].values())
+
+        total_dense = sum(image_fn_density[source_name].values())
+        for b in ("dense", "sparse"):
+            c = image_fn_density[source_name][b]
             fn_diag_rows.append(
                 {
                     "source_name": source_name,
                     "stat_type": "image_fn_gt_density",
-                    "diag_type": "all",
-                    "bucket": bucket,
-                    "count": image_fn_density[source_name][bucket],
-                    "ratio_within_group": f"{safe_ratio(image_fn_density[source_name][bucket], total_dense):.6f}",
+                    "bucket": b,
+                    "score_floor": score_floor_str,
+                    "best_score_all": "",
+                    "GT": "",
+                    "TP": "",
+                    "FN": "",
+                    "Recall": "",
+                    "FN_no_resp": "",
+                    "FN_low_score": "",
+                    "FN_reg_poor": "",
+                    "FN_postproc": "",
+                    "ratio_no_resp": "",
+                    "ratio_low_score": "",
+                    "ratio_reg_poor": "",
+                    "ratio_postproc": "",
+                    "count": c,
+                    "ratio_within_group": f"{safe_ratio(c, total_dense):.6f}",
                 }
             )
 
     write_csv(
         report_dir / "fn_diag_summary.csv",
         fn_diag_rows,
-        ["source_name", "stat_type", "diag_type", "bucket", "count", "ratio_within_group"],
+        [
+            "source_name",
+            "stat_type",
+            "bucket",
+            "score_floor",
+            "best_score_all",
+            "GT",
+            "TP",
+            "FN",
+            "Recall",
+            "FN_no_resp",
+            "FN_low_score",
+            "FN_reg_poor",
+            "FN_postproc",
+            "ratio_no_resp",
+            "ratio_low_score",
+            "ratio_reg_poor",
+            "ratio_postproc",
+            "count",
+            "ratio_within_group",
+        ],
     )
 
-    # write README
+    # README.md (keep concise)
     readme_lines: List[str] = []
     readme_lines.append("# P2.3.3 目标级/图像级 FN 机制拆解")
     readme_lines.append("")
-    readme_lines.append("口径：conf -> NMS -> max_det；一对一匹配使用匈牙利算法（最大化 IoU 总和），仅 IoU>=tp_iou 参与有效匹配。")
+    readme_lines.append("口径：conf -> NMS -> max_det；目标级一对一匹配=匈牙利算法（最大化 IoU 总和），仅 IoU>=tp_iou 计为有效匹配。")
+    readme_lines.append(f"无响应阈值：score_floor={float(args.score_floor):.6f}；best_score_all=在 P_all 中与 GT 有重叠候选的最高分。")
+    readme_lines.append("机制判定（互斥优先级）：no_response(s_all<score_floor)；low_score(score_floor<=s_all<conf)；regression_poor(s_all>=conf & iou_conf<tp_iou)；postproc_suppressed(iou_conf>=tp_iou & iou_final<tp_iou, supp_stage=nms/max_det/unknown)。")
     readme_lines.append("输出文件：config.json, image_level.csv, image_fn_cases.csv, fn_cases.csv, fn_diag_summary.csv, README.md。")
-    readme_lines.append("FN 四类：no_response / low_score / regression_poor / postproc_suppressed（suppressed_stage=conf/NMS/max_det/none）。")
-    readme_lines.append("fn_diag_summary.csv 的 stat_type 包含 overall/scale/density/highlight 以及 image_fn_gt_scale/image_fn_gt_density。")
-    if int(args.enable_highlight) != 1:
-        readme_lines.append("本轮未纳入高光交叉统计（enable_highlight=0）。")
-    if use_export:
-        readme_lines.append("注意：infer_export.csv 若已过 conf 过滤，low_score/no_response 可能偏小。")
     readme_lines.append("")
     readme_lines.append("运行示例：")
     readme_lines.append(
-        "python /home/ubuntu/project/deduibi/yolo/analyze/code/p23_3_fn_mechanism.py \\\n"
-        "  --weights /home/ubuntu/project/deduibi/yolo/models/defect/exp_260202_base/best/best.pt \\\n"
-        "  --image_dir /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c/images/val \\\n"
-        "  --image_dir /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c/images/test \\\n"
-        "  --out_root /home/ubuntu/project/deduibi/yolo/analyze/result \\\n"
-        "  --conf 0.3 --tp_iou 0.2 --nms_iou 0.6 --max_det 20 \\\n"
-        "  --batch 4 --infer_chunk 16"
+        "python /home/ubuntu/hpproject/yolo/analyze/code/p23_3_fn_mechanism.py \\\n  --weights /home/ubuntu/hpproject/yolo/models/defect/exp_260202_base/best/best.pt \\\n  --image_dir /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/val \\\n  --image_dir /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test \\\n  --out_root /home/ubuntu/hpproject/yolo/analyze/result \\\n  --conf 0.3 --tp_iou 0.2 --nms_iou 0.6 --max_det 20 \\\n  --batch 4 --infer_chunk 16 \\\n  --score_floor 0.01"
     )
     with (report_dir / "README.md").open("w", encoding="utf-8") as f:
         f.write("\n".join(readme_lines) + "\n")
