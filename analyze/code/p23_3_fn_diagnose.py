@@ -15,6 +15,20 @@ FN 诊断类型（diag_type）：
 2) low_score：有响应但最高分 < conf（被置信度阈值挡住）
 3) regression_poor：有较高分候选，但 IoU 始终 < tp_iou（定位/尺寸不稳）
 4) postproc_suppressed：conf 后曾出现可达 tp_iou 的候选，但被 NMS 或 max_det 抑制
+
+python /home/ubuntu/project/deduibi/yolo/analyze/code/p23_3_fn_diagnose.py \
+  --weights /home/ubuntu/project/deduibi/yolo/models/defect/exp_260202_base/best/best.pt \
+  --image_dir /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c/images/val \
+  --image_dir /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c/images/test \
+  --out_root /home/ubuntu/project/deduibi/yolo/analyze/result \
+  --batch 4 --infer_chunk 16 \
+  --conf 0.3 --tp_iou 0.24 --nms_iou 0.67 --max_det 100
+
+  
+python /home/ubuntu/project/deduibi/yolo/analyze/code/p23_3_fn_diagnose.py \
+  --reuse_report_dir /home/ubuntu/project/deduibi/yolo/analyze/result/report_2602031613 \
+  --out_root /home/ubuntu/project/deduibi/yolo/analyze/result
+
 """
 
 from __future__ import annotations

@@ -1,3 +1,27 @@
+import locale
+import os
+
+
+def _ensure_utf8_locale() -> None:
+    """Avoid UnicodeDecodeError in subprocess(text=True) under ASCII locales.
+
+    NumPy may call `lscpu` (via numpy.testing) while importing SciPy, and if Python's
+    preferred encoding is ASCII but `lscpu` output contains non-ASCII characters,
+    decoding can crash training at the plotting stage.
+    """
+
+    try:
+        enc = (locale.getpreferredencoding(False) or "").lower()
+        if enc in {"ascii", "ansi_x3.4-1968"}:
+            os.environ.setdefault("LANG", "C.UTF-8")
+            os.environ.setdefault("LC_ALL", "C.UTF-8")
+            locale.setlocale(locale.LC_ALL, "")
+    except Exception:
+        pass
+
+
+_ensure_utf8_locale()
+
 import argparse
 import datetime as dt
 import gc
@@ -223,21 +247,28 @@ def main() -> None:
     model = YOLO(init_weights)
     apply_yolo_enhancements(model, cfg)
     if mode in {"train_test", "finetune_test"}:
-        model.train(
-            data=str(run_data_yaml),
-            epochs=epochs,
-            imgsz=imgsz,
-            batch=batch,
-            device=device,
-            workers=workers,
-            patience=patience,
-            lr0=lr0,
-            lrf=lrf,
-            warmup_epochs=warmup_epochs,
-            project=str(exp_dir),
-            name="train",
-            exist_ok=True,
-        )
+        try:
+            model.train(
+                data=str(run_data_yaml),
+                epochs=epochs,
+                imgsz=imgsz,
+                batch=batch,
+                device=device,
+                workers=workers,
+                patience=patience,
+                lr0=lr0,
+                lrf=lrf,
+                warmup_epochs=warmup_epochs,
+                project=str(exp_dir),
+                name="train",
+                exist_ok=True,
+            )
+        except UnicodeDecodeError as exc:
+            print(
+                "WARNING: Training hit UnicodeDecodeError during plotting (likely SciPy->NumPy lscpu decode). "
+                "Proceeding with whatever checkpoints were saved. "
+                f"Details: {exc}"
+            )
         update_args_yaml(exp_dir, cfg, cfg_path)
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
