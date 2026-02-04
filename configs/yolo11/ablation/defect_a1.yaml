@@ -12,7 +12,7 @@ conf: 0.34
 nms_iou: 0.25
 max_det: 200
 match_iou: 0.45
-mode: test
+mode: train_test
 weights: /home/ubuntu/project/deduibi/yolo/models/defect/exp_260203_231a1/best/best.pt
 patience: 0
 lr0: 0.012
