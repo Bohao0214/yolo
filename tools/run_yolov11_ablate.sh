@@ -153,6 +153,7 @@ done
 # for e in e3 e4 e5; do
 #   python src/train.py --config configs/yolo11/ablation/defect_${e}.yaml || true
 # done
+
 # for a in a1; do   
 #   CUDA_VISIBLE_DEVICES=0 
 #   python src/train.py --config configs/yolo11/ablation/defect_${a}.yaml || true; 
