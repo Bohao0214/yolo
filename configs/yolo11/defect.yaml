@@ -1,7 +1,7 @@
 yolo_version: yolo11
 exp_name: defect
 data: configs/data/defect.yaml
-data_root: /home/ubuntu/project/deduibi/yolo/dataset/yolo/datasetm6c
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
 epochs: 100
 imgsz: 640
