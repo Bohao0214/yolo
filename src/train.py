@@ -240,7 +240,8 @@ def main() -> None:
     enhance241_cfg = cfg.get("enhance241", {}) or {}
     if not isinstance(enhance241_cfg, dict):
         raise ValueError("enhance241 must be a mapping when provided in config.")
-    enabled_switches = sorted([k for k, v in enhance241_cfg.items() if bool(v)])
+    known_flags = {"b1", "b2", "a2", "c1", "d1"}
+    enabled_switches = sorted([k for k in known_flags if bool(enhance241_cfg.get(k, False))])
     enable_b1 = bool(enhance241_cfg.get("b1", False))
     enable_b2 = bool(enhance241_cfg.get("b2", False))
 
@@ -280,7 +281,11 @@ def main() -> None:
     def apply_enhance241(yolo_model: Any) -> Any:
         if not enabled_switches:
             return yolo_model
-        unsupported = [k for k in enabled_switches if k not in {"b1", "b2"}]
+        unsupported = [
+            k
+            for k, v in enhance241_cfg.items()
+            if k not in known_flags and isinstance(v, bool) and v
+        ]
         if unsupported:
             raise RuntimeError(f"Unsupported enhance241 switches enabled: {unsupported}. Only b1/b2 are supported.")
         if enable_b1:
