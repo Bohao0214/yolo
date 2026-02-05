@@ -2,7 +2,6 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict
 
-from yolo_enhance import apply_yolo_enhancements
 
 def load_yaml(path: Path) -> Dict[str, Any]:
     import yaml  # type: ignore
@@ -39,7 +38,6 @@ def main() -> None:
     from ultralytics import YOLO
 
     model = YOLO(weights)
-    apply_yolo_enhancements(model, cfg)
     model.predict(
         source=source,
         save=save_pic,

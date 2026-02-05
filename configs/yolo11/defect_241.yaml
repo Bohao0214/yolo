@@ -1,5 +1,6 @@
 yolo_version: yolo11
 exp_name: defect
+run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
@@ -26,34 +27,8 @@ save_test_pic: true
 val_split: 0.0
 seed: 42
 metric_conf: 0.01
-metric_pre_nms_topk: 5000
-metric_pre_nms_topk_fallback: 2000
-metric_nms_time_limit: 0.05
 eval_batch: 1
 eval_device: ""  # 设为 "cpu" 可避免评估指标时 GPU 显存溢出
-
-enhance:
-  # Route-1: P2 small-object head
-  enable_p2: false # P开启后，降低置信度阈值以适应更多小目标检测
-  p2_source: auto           # auto/backbone/p3_upsample，auto 优先 backbone，失败时退化为上采样 P3
-  p2_backbone_select: first # backbone 候选过多时选择 first/last
-  p2_pan_fuse: true          # 未开启 BiFPN 时，使用简化 PAN 底向上融合
-  # Route-2: BiFPN + CARAFE
-  enable_bifpn: false
-  bifpn_depth: 1             # BiFPN 叠加层数
-  bifpn_channels: 0          # 0 表示自动使用 P3 通道数
-  enable_carafe: false
-  carafe_replace_neck: false  # 仅替换现有 neck 上采样算子（保持 PAN/FPN 结构）
-  carafe_kernel: 5
-  carafe_up_kernel: 3
-  carafe_comp_channels: 64
-  # Route-3: Head 对齐（base/dyhead/tood）
-  head_type: base
-  head_blocks: 1
-  # Route-4: DCNv2（点状使用）
-  enable_dcn: false
-  dcn_scales: [1]            # 0=最高分辨率(P2/P3)，依次向下
-  dcn_kernel: 3
 
 threshold_sweep:
   fix: iou              # 固定变量：iou 或 conf

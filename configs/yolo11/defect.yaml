@@ -1,5 +1,6 @@
 yolo_version: yolo11
 exp_name: defect
+run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt

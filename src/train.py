@@ -32,7 +32,6 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 
 from data.make_split import create_val_split
-from yolo_enhance import apply_yolo_enhancements
 from eval import (
     compute_ap,
     compute_auc,
@@ -43,12 +42,12 @@ from eval import (
     save_image_level_report,
     save_metric_plots,
     save_multi_curve,
+    save_multi_curve_grouped,
     save_multi_xy_curves,
+    save_multi_xy_curves_grouped,
     save_threshold_table,
     save_threshold_table_multi,
-    annotate_fp_fn_images,
 )
-from nms_patch import patch_nms
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -183,17 +182,33 @@ def main() -> None:
     exp_name = cfg.get("exp_name", "defect")
     project_root = Path(cfg.get("project_root", root)).resolve()
     exp_root = project_root / "experiments" / yolo_version / exp_name
-    timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
-    exp_dir = exp_root / f"exp_{timestamp}"
+    run_name = str(cfg.get("run_name", "")).strip()
+    if run_name:
+        exp_dir = exp_root / run_name
+    else:
+        timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
+        exp_dir = exp_root / f"exp_{timestamp}"
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     data_yaml = Path(cfg.get("data", project_root / "configs" / "data" / "defect.yaml")).resolve()
-    data_root_override = str(cfg.get("data_root", ""))
+    data_root_cfg = cfg.get("data_root", "")
+    data_roots: List[Path] = []
+    if isinstance(data_root_cfg, (list, tuple)):
+        data_roots = [Path(str(p)).resolve() for p in data_root_cfg if str(p).strip()]
+    else:
+        data_root_str = str(data_root_cfg or "").strip()
+        if data_root_str:
+            data_roots = [Path(data_root_str).resolve()]
+
+    data_root_override = str(data_roots[0]) if data_roots else str(data_root_cfg or "")
     val_split = float(cfg.get("val_split", 0.0))
     seed = int(cfg.get("seed", 42))
     run_data_yaml, data_root = build_data_yaml(
         data_yaml, exp_dir, val_split, seed, data_root_override
     )
+    if not data_roots:
+        data_roots = [data_root]
+
 
     model_path = str(cfg.get("model", "yolo11n.pt"))
     weights_path = str(cfg.get("weights", ""))
@@ -217,9 +232,6 @@ def main() -> None:
     max_det = int(cfg.get("max_det", 300))
     match_iou = float(cfg.get("match_iou", 0.5))
     image_conf = float(cfg.get("image_conf", conf))
-    metric_pre_nms_topk = int(cfg.get("metric_pre_nms_topk", 5000))
-    metric_pre_nms_topk_fallback = int(cfg.get("metric_pre_nms_topk_fallback", 2000))
-    metric_nms_time_limit = float(cfg.get("metric_nms_time_limit", 0.05))
 
     from ultralytics import YOLO
 
@@ -245,7 +257,6 @@ def main() -> None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
     model = YOLO(init_weights)
-    apply_yolo_enhancements(model, cfg)
     if mode in {"train_test", "finetune_test"}:
         try:
             model.train(
@@ -288,64 +299,31 @@ def main() -> None:
             pass
         gc.collect()
         model = YOLO(str(eval_weights))
-        apply_yolo_enhancements(model, cfg)
     elif mode == "test":
         test_weight = Path(weights_path)
         if test_weight.exists():
             model = YOLO(str(test_weight))
-            apply_yolo_enhancements(model, cfg)
         else:
             cached = resolve_pretrained_weight(project_root, test_weight.name)
             model = YOLO(str(cached))
-            apply_yolo_enhancements(model, cfg)
 
-    data_info = load_yaml(run_data_yaml)
-    train_entry = data_info.get("train", "images/train")
-    val_entry = data_info.get("val", "images/val")
-    test_entry = data_info.get("test", "")
-    train_source = resolve_data_entry(str(train_entry), data_root)
-    val_source = resolve_data_entry(str(val_entry), data_root)
-    test_source = resolve_data_entry(str(test_entry), data_root) if test_entry else None
+    # Resolve split sources across one or multiple dataset roots.
+    data_info_cfg = load_yaml(data_yaml)
+    train_entry = data_info_cfg.get("train", "images/train")
+    val_entry = data_info_cfg.get("val", "images/val") or train_entry
+    test_entry = data_info_cfg.get("test", "")
 
-    nms_cfg = {
-        "metric_pre_nms_topk": metric_pre_nms_topk,
-        "metric_pre_nms_topk_fallback": metric_pre_nms_topk_fallback,
-        "metric_nms_time_limit": metric_nms_time_limit,
-    }
-    with patch_nms(nms_cfg):
-        if save_train_pic and train_source.exists():
-            model.predict(
-                source=str(train_source),
-                save=True,
-                conf=conf,
-                iou=nms_iou,
-                max_det=max_det,
-                project=str(exp_dir),
-                name="train_vis",
-                exist_ok=True,
-            )
-        if save_val_pic and val_source.exists():
-            model.predict(
-                source=str(val_source),
-                save=True,
-                conf=conf,
-                iou=nms_iou,
-                max_det=max_det,
-                project=str(exp_dir),
-                name="val_vis",
-                exist_ok=True,
-            )
-        if save_test_pic and test_source and test_source.exists():
-            model.predict(
-                source=str(test_source),
-                save=True,
-                conf=conf,
-                iou=nms_iou,
-                max_det=max_det,
-                project=str(exp_dir),
-                name="test_vis",
-                exist_ok=True,
-            )
+    val_sources: List[Path] = []
+    test_sources: List[Path] = []
+    for dr in data_roots:
+        val_p = resolve_data_entry(str(val_entry), dr)
+        if val_p.exists():
+            val_sources.append(val_p)
+        if test_entry:
+            test_p = resolve_data_entry(str(test_entry), dr)
+            if test_p.exists():
+                test_sources.append(test_p)
+
 
     metrics_dir = exp_dir / "metrics"
     sweep_cfg = cfg.get("threshold_sweep", {})
@@ -364,28 +342,24 @@ def main() -> None:
         np.arange(float(table_range[0]), float(table_range[2]) + 1e-9, float(table_range[1])), 2
     )
 
-    def eval_split(tag: str, source: Path) -> None:
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            import json
+    def _concat_scores(scores_list: List[np.ndarray]) -> np.ndarray:
+        scores_list = [s for s in scores_list if s.size]
+        if not scores_list:
+            return np.array([], dtype=np.float32)
+        return np.concatenate(scores_list, axis=0)
 
-            sweep_meta = {
-                "fix": fix_var,
-                "fix_list": fix_list,
-                "curve": curve_range,
-                "table": table_range,
-            }
-            (metrics_dir / f"{tag}_threshold_sweep.json").write_text(
-                json.dumps(sweep_meta, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-        with patch_nms(nms_cfg):
+    def _concat_labels(labels_list: List[np.ndarray]) -> np.ndarray:
+        labels_list = [l for l in labels_list if l.size]
+        if not labels_list:
+            return np.array([], dtype=np.int32)
+        return np.concatenate(labels_list, axis=0)
+
+    def _compute_scores_all(fn, sources: List[Path], *args: object) -> Tuple[np.ndarray, np.ndarray]:
+        labels_all: List[np.ndarray] = []
+        scores_all: List[np.ndarray] = []
+        for src in sources:
             try:
-                labels, scores = compute_image_scores(
-                    model, source, metric_conf, eval_batch, eval_device, nms_iou, max_det
-                )
+                lab, sc = fn(model, src, *args)
             except RuntimeError as exc:
                 if "out of memory" not in str(exc).lower():
                     raise
@@ -397,177 +371,25 @@ def main() -> None:
                 except Exception:
                     pass
                 gc.collect()
-                labels, scores = compute_image_scores(model, source, metric_conf, 1, "cpu", nms_iou, max_det)
-            if labels.size == 0:
-                return
-            recall, precision, fpr = compute_threshold_metrics(labels, scores, curve_vals)
-            auroc = compute_auc(fpr, recall)
-            ap = compute_ap(recall, precision)
-            save_metric_plots(metrics_dir, tag, curve_vals, recall, precision, fpr)
-            with open(metrics_dir / f"{tag}_summary.txt", "w", encoding="utf-8") as f:
-                f.write(f"image_auroc: {auroc:.6f}\n")
-                f.write(f"image_ap: {ap:.6f}\n")
+                # CPU fallback for this shard
+                if fn is compute_image_scores:
+                    lab, sc = fn(model, src, *args[:1], 1, "cpu", *args[3:])
+                else:
+                    lab, sc = fn(model, src, *args[:2], 1, "cpu", *args[4:])
+            labels_all.append(lab)
+            scores_all.append(sc)
+        return _concat_labels(labels_all), _concat_scores(scores_all)
 
-            multi_rows: List[dict] = []
-            curve_recall = []
-            curve_fpr = []
-            roc_curves: List[Tuple[str, np.ndarray, np.ndarray]] = []
-            pr_curves: List[Tuple[str, np.ndarray, np.ndarray]] = []
-
-            if fix_var == "iou":
-                var_vals = curve_vals
-                for iou_thr in fix_list:
-                    try:
-                        labels_i, scores_i = compute_image_scores_iou(
-                            model, source, metric_conf, float(iou_thr), eval_batch, eval_device, nms_iou, max_det
-                        )
-                    except RuntimeError as exc:
-                        if "out of memory" not in str(exc).lower():
-                            raise
-                        try:
-                            import torch
-
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                        except Exception:
-                            pass
-                        gc.collect()
-                        labels_i, scores_i = compute_image_scores_iou(
-                            model, source, metric_conf, float(iou_thr), 1, "cpu", nms_iou, max_det
-                        )
-                    if labels_i.size == 0:
-                        continue
-                    rec_i, prec_i, fpr_i = compute_threshold_metrics(labels_i, scores_i, var_vals)
-                    curve_recall.append((f"iou={float(iou_thr):.2f}", rec_i))
-                    curve_fpr.append((f"iou={float(iou_thr):.2f}", fpr_i))
-                    roc_curves.append((f"iou={float(iou_thr):.2f}", fpr_i, rec_i))
-                    pr_curves.append((f"iou={float(iou_thr):.2f}", rec_i, prec_i))
-                    for thr, rec_v, fpr_v in zip(var_vals, rec_i, fpr_i):
-                        multi_rows.append(
-                            {
-                                "fixed_var": "iou",
-                                "fixed_value": float(iou_thr),
-                                "threshold": float(thr),
-                                "recall": float(rec_v),
-                                "fpr": float(fpr_v),
-                            }
-                        )
-
-                save_multi_curve(
-                    metrics_dir,
-                    f"{tag}_recall_vs_conf_multi.png",
-                    var_vals,
-                    curve_recall,
-                    xlabel="conf threshold",
-                    ylabel="recall",
-                    title=f"{tag} Recall vs conf (fixed IoU)",
-                )
-                save_multi_curve(
-                    metrics_dir,
-                    f"{tag}_fpr_vs_conf_multi.png",
-                    var_vals,
-                    curve_fpr,
-                    xlabel="conf threshold",
-                    ylabel="fpr",
-                    title=f"{tag} FPR vs conf (fixed IoU)",
-                )
-                if roc_curves:
-                    save_multi_xy_curves(
-                        metrics_dir,
-                        f"{tag}_roc.png",
-                        roc_curves,
-                        xlabel="FPR",
-                        ylabel="TPR/Recall",
-                        title=f"{tag} ROC (fixed IoU)",
-                    )
-                if pr_curves:
-                    save_multi_xy_curves(
-                        metrics_dir,
-                        f"{tag}_pr.png",
-                        pr_curves,
-                        xlabel="Recall",
-                        ylabel="Precision",
-                        title=f"{tag} PR (fixed IoU)",
-                    )
-
-            elif fix_var == "conf":
-                iou_vals = curve_vals
-                scores_by_iou = []
-                labels_ref = None
-                for iou_thr in iou_vals:
-                    try:
-                        labels_i, scores_i = compute_image_scores_iou(
-                            model, source, metric_conf, float(iou_thr), eval_batch, eval_device, nms_iou, max_det
-                        )
-                    except RuntimeError as exc:
-                        if "out of memory" not in str(exc).lower():
-                            raise
-                        try:
-                            import torch
-
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                        except Exception:
-                            pass
-                        gc.collect()
-                        labels_i, scores_i = compute_image_scores_iou(
-                            model, source, metric_conf, float(iou_thr), 1, "cpu", nms_iou, max_det
-                        )
-                    if labels_ref is None:
-                        labels_ref = labels_i
-                    scores_by_iou.append(scores_i)
-
-                if labels_ref is not None and scores_by_iou:
-                    for conf_thr in fix_list:
-                        thr_arr = np.array([float(conf_thr)], dtype=np.float32)
-                        rec_curve = []
-                        fpr_curve = []
-                        for scores_i in scores_by_iou:
-                            rec_i, _, fpr_i = compute_threshold_metrics(labels_ref, scores_i, thr_arr)
-                            rec_curve.append(rec_i[0])
-                            fpr_curve.append(fpr_i[0])
-                        curve_recall.append((f"conf={float(conf_thr):.2f}", np.array(rec_curve)))
-                        curve_fpr.append((f"conf={float(conf_thr):.2f}", np.array(fpr_curve)))
-                        for thr, rec_v, fpr_v in zip(iou_vals, rec_curve, fpr_curve):
-                            multi_rows.append(
-                                {
-                                    "fixed_var": "conf",
-                                    "fixed_value": float(conf_thr),
-                                    "threshold": float(thr),
-                                    "recall": float(rec_v),
-                                    "fpr": float(fpr_v),
-                                }
-                            )
-
-                    save_multi_curve(
-                        metrics_dir,
-                        f"{tag}_recall_vs_iou_multi.png",
-                        iou_vals,
-                        curve_recall,
-                        xlabel="iou_match",
-                        ylabel="recall",
-                        title=f"{tag} Recall vs IoU (fixed conf)",
-                    )
-                    save_multi_curve(
-                        metrics_dir,
-                        f"{tag}_fpr_vs_iou_multi.png",
-                        iou_vals,
-                        curve_fpr,
-                        xlabel="iou_match",
-                        ylabel="fpr",
-                        title=f"{tag} FPR vs IoU (fixed conf)",
-                    )
-
-            if multi_rows:
-                save_threshold_table_multi(metrics_dir, tag, multi_rows)
-            else:
-                save_threshold_table(metrics_dir, tag, labels, scores, table_vals)
-
-            # Image-level TP/FP/TN/FN summary and optional visualization marking.
+    def eval_visuals(split: str, sources: List[Path]) -> List[Dict[str, object]]:
+        if not sources:
+            return []
+        vis_root = exp_dir / f"{split}_vis"
+        all_items: List[Dict[str, object]] = []
+        for src in sources:
             try:
                 items = compute_image_level_results(
                     model,
-                    source,
+                    src,
                     conf_threshold=image_conf,
                     iou_match=match_iou,
                     metric_conf=metric_conf,
@@ -575,6 +397,9 @@ def main() -> None:
                     device=eval_device,
                     nms_iou=nms_iou,
                     max_det=max_det,
+                    split=split,
+                    vis_root=vis_root,
+                    save_visuals=True,
                 )
             except RuntimeError as exc:
                 if "out of memory" not in str(exc).lower():
@@ -589,7 +414,7 @@ def main() -> None:
                 gc.collect()
                 items = compute_image_level_results(
                     model,
-                    source,
+                    src,
                     conf_threshold=image_conf,
                     iou_match=match_iou,
                     metric_conf=metric_conf,
@@ -597,42 +422,243 @@ def main() -> None:
                     device="cpu",
                     nms_iou=nms_iou,
                     max_det=max_det,
+                    split=split,
+                    vis_root=vis_root,
+                    save_visuals=True,
+                )
+            all_items.extend(items)
+        return all_items
+
+    # 1) Per-split error visualizations (kept separate)
+    val_items: List[Dict[str, object]] = []
+    test_items: List[Dict[str, object]] = []
+    if save_val_pic:
+        val_items = eval_visuals("val", val_sources)
+    if save_test_pic:
+        test_items = eval_visuals("test", test_sources)
+
+    # 2) Combined metrics/curves/tables (val+test merged, and multiple roots merged)
+    all_sources = val_sources + test_sources
+    if all_sources:
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        tag = "eval"
+
+        # Save sweep meta
+        try:
+            import json
+
+            sweep_meta = {"fix": fix_var, "fix_list": fix_list, "curve": curve_range, "table": table_range}
+            (metrics_dir / f"{tag}_threshold_sweep.json").write_text(
+                json.dumps(sweep_meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+        # Base ROC/PR vs confidence threshold (reference)
+        labels_base, scores_base = _compute_scores_all(
+            compute_image_scores, all_sources, metric_conf, eval_batch, eval_device, nms_iou, max_det
+        )
+        if labels_base.size:
+            recall, precision, fpr = compute_threshold_metrics(labels_base, scores_base, curve_vals)
+            auroc = compute_auc(fpr, recall)
+            ap = compute_ap(recall, precision)
+            save_metric_plots(metrics_dir, tag, curve_vals, recall, precision, fpr)
+            with open(metrics_dir / f"{tag}_summary.txt", "w", encoding="utf-8") as f:
+                f.write(f"image_auroc: {auroc:.6f}\n")
+                f.write(f"image_ap: {ap:.6f}\n")
+
+        multi_rows: List[dict] = []
+        curve_recall: List[Tuple[str, np.ndarray]] = []
+        curve_fpr: List[Tuple[str, np.ndarray]] = []
+        roc_curves: List[Tuple[str, np.ndarray, np.ndarray]] = []
+        pr_curves: List[Tuple[str, np.ndarray, np.ndarray]] = []
+
+        group_size = 3
+        if fix_var == "iou":
+            # x-axis: confidence threshold
+            var_curve_vals = curve_vals
+            var_table_vals = table_vals
+            for iou_thr in fix_list:
+                labels_i, scores_i = _compute_scores_all(
+                    compute_image_scores_iou,
+                    all_sources,
+                    metric_conf,
+                    float(iou_thr),
+                    eval_batch,
+                    eval_device,
+                    nms_iou,
+                    max_det,
+                )
+                if labels_i.size == 0:
+                    continue
+                rec_i, prec_i, fpr_i = compute_threshold_metrics(labels_i, scores_i, var_curve_vals)
+                curve_recall.append((f"iou={float(iou_thr):.2f}", rec_i))
+                curve_fpr.append((f"iou={float(iou_thr):.2f}", fpr_i))
+                roc_curves.append((f"iou={float(iou_thr):.2f}", fpr_i, rec_i))
+                pr_curves.append((f"iou={float(iou_thr):.2f}", rec_i, prec_i))
+
+                # table (coarser thresholds)
+                rec_t, _, fpr_t = compute_threshold_metrics(labels_i, scores_i, var_table_vals)
+                for thr, rec_v, fpr_v in zip(var_table_vals, rec_t, fpr_t):
+                    multi_rows.append(
+                        {
+                            "fixed_var": "iou",
+                            "fixed_value": float(iou_thr),
+                            "threshold": float(thr),
+                            "recall": float(rec_v),
+                            "fpr": float(fpr_v),
+                        }
+                    )
+
+            # grouped plots: 3 curves per figure
+            save_multi_curve_grouped(
+                metrics_dir,
+                f"{tag}_recall_vs_conf",
+                var_curve_vals,
+                curve_recall,
+                xlabel="conf threshold",
+                ylabel="recall",
+                title=f"{tag} Recall vs conf (fixed IoU)",
+                group_size=group_size,
+                group_label="iougroup",
+            )
+            save_multi_curve_grouped(
+                metrics_dir,
+                f"{tag}_fpr_vs_conf",
+                var_curve_vals,
+                curve_fpr,
+                xlabel="conf threshold",
+                ylabel="fpr",
+                title=f"{tag} FPR vs conf (fixed IoU)",
+                group_size=group_size,
+                group_label="iougroup",
+            )
+            if roc_curves:
+                save_multi_xy_curves_grouped(
+                    metrics_dir,
+                    f"{tag}_roc",
+                    roc_curves,
+                    xlabel="FPR",
+                    ylabel="TPR/Recall",
+                    title=f"{tag} ROC (fixed IoU)",
+                    group_size=group_size,
+                    group_label="iougroup",
+                )
+            if pr_curves:
+                save_multi_xy_curves_grouped(
+                    metrics_dir,
+                    f"{tag}_pr",
+                    pr_curves,
+                    xlabel="Recall",
+                    ylabel="Precision",
+                    title=f"{tag} PR (fixed IoU)",
+                    group_size=group_size,
+                    group_label="iougroup",
                 )
 
-            meta = {
-                "conf_threshold": float(image_conf),
-                "iou_match": float(match_iou),
-                "nms_iou": float(nms_iou),
-                "max_det": int(max_det),
-                "metric_conf": float(metric_conf),
-                "eval_batch": int(eval_batch),
-                "eval_device": str(eval_device),
-            }
-            save_image_level_report(metrics_dir, tag, items, meta)
+        elif fix_var == "conf":
+            # x-axis: iou_match threshold
+            iou_curve_vals = curve_vals
+            iou_table_vals = table_vals
+            labels_ref: np.ndarray = np.array([], dtype=np.int32)
 
-            vis_dir = exp_dir / f"{tag}_vis"
-            annotate_fp_fn_images(vis_dir, items)
+            # Compute score arrays for every iou we need (curve + table).
+            iou_all = sorted({float(x) for x in np.concatenate([iou_curve_vals, iou_table_vals]).tolist()})
+            scores_by_iou: Dict[float, np.ndarray] = {}
+            for iou_thr in iou_all:
+                labels_i, scores_i = _compute_scores_all(
+                    compute_image_scores_iou,
+                    all_sources,
+                    metric_conf,
+                    float(iou_thr),
+                    eval_batch,
+                    eval_device,
+                    nms_iou,
+                    max_det,
+                )
+                if labels_ref.size == 0:
+                    labels_ref = labels_i
+                scores_by_iou[float(iou_thr)] = scores_i
 
-    if val_source.exists():
-        try:
-            import torch
+            if labels_ref.size and scores_by_iou:
+                for conf_thr in fix_list:
+                    thr_arr = np.array([float(conf_thr)], dtype=np.float32)
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        gc.collect()
-        eval_split("val", val_source)
-    if test_source and test_source.exists():
-        try:
-            import torch
+                    # curve points
+                    rec_curve = []
+                    fpr_curve = []
+                    for iou_thr in iou_curve_vals.tolist():
+                        scores_i = scores_by_iou.get(float(iou_thr))
+                        if scores_i is None or scores_i.size == 0:
+                            rec_curve.append(0.0)
+                            fpr_curve.append(0.0)
+                            continue
+                        rec_i, _, fpr_i = compute_threshold_metrics(labels_ref, scores_i, thr_arr)
+                        rec_curve.append(float(rec_i[0]))
+                        fpr_curve.append(float(fpr_i[0]))
+                    curve_recall.append((f"conf={float(conf_thr):.2f}", np.array(rec_curve, dtype=np.float32)))
+                    curve_fpr.append((f"conf={float(conf_thr):.2f}", np.array(fpr_curve, dtype=np.float32)))
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        gc.collect()
-        eval_split("test", test_source)
+                    # table points
+                    for iou_thr in iou_table_vals.tolist():
+                        scores_i = scores_by_iou.get(float(iou_thr))
+                        if scores_i is None or scores_i.size == 0:
+                            rec_v = 0.0
+                            fpr_v = 0.0
+                        else:
+                            rec_i, _, fpr_i = compute_threshold_metrics(labels_ref, scores_i, thr_arr)
+                            rec_v = float(rec_i[0])
+                            fpr_v = float(fpr_i[0])
+                        multi_rows.append(
+                            {
+                                "fixed_var": "conf",
+                                "fixed_value": float(conf_thr),
+                                "threshold": float(iou_thr),
+                                "recall": float(rec_v),
+                                "fpr": float(fpr_v),
+                            }
+                        )
+
+                save_multi_curve_grouped(
+                    metrics_dir,
+                    f"{tag}_recall_vs_iou",
+                    iou_curve_vals,
+                    curve_recall,
+                    xlabel="iou_match",
+                    ylabel="recall",
+                    title=f"{tag} Recall vs IoU (fixed conf)",
+                    group_size=group_size,
+                    group_label="confgroup",
+                )
+                save_multi_curve_grouped(
+                    metrics_dir,
+                    f"{tag}_fpr_vs_iou",
+                    iou_curve_vals,
+                    curve_fpr,
+                    xlabel="iou_match",
+                    ylabel="fpr",
+                    title=f"{tag} FPR vs IoU (fixed conf)",
+                    group_size=group_size,
+                    group_label="confgroup",
+                )
+
+        if multi_rows:
+            save_threshold_table_multi(metrics_dir, tag, multi_rows)
+        elif labels_base.size:
+            save_threshold_table(metrics_dir, tag, labels_base, scores_base, table_vals)
+
+    # 3) Save combined image-level report (split column keeps val/test separable)
+    if val_items or test_items:
+        meta = {
+            "conf_threshold": float(image_conf),
+            "iou_match": float(match_iou),
+            "nms_iou": float(nms_iou),
+            "max_det": int(max_det),
+            "metric_conf": float(metric_conf),
+            "eval_batch": int(eval_batch),
+            "eval_device": str(eval_device),
+        }
+        save_image_level_report(metrics_dir, "eval", val_items + test_items, meta)
 
     if mode in {"train_test", "finetune_test"}:
         model_dir = project_root / "models" / exp_name
