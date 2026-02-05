@@ -23,7 +23,7 @@ models/pretrained/*.onnx
 models/pretrained/*.engine
 
 models/defect/
-
+models
 #备份文件
 beifen/analysis
 
