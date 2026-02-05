@@ -25,7 +25,9 @@ _ensure_utf8_locale()
 import argparse
 import datetime as dt
 import gc
+import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -181,6 +183,8 @@ def main() -> None:
     yolo_version = cfg.get("yolo_version", "yolo11")
     exp_name = cfg.get("exp_name", "defect")
     project_root = Path(cfg.get("project_root", root)).resolve()
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
     exp_root = project_root / "experiments" / yolo_version / exp_name
     run_name = str(cfg.get("run_name", "")).strip()
     if run_name:
@@ -233,6 +237,42 @@ def main() -> None:
     match_iou = float(cfg.get("match_iou", 0.5))
     image_conf = float(cfg.get("image_conf", conf))
 
+    enhance241_cfg = cfg.get("enhance241", {}) or {}
+    if not isinstance(enhance241_cfg, dict):
+        raise ValueError("enhance241 must be a mapping when provided in config.")
+    enabled_switches = sorted([k for k, v in enhance241_cfg.items() if bool(v)])
+
+    # Persist a minimal, reproducible run meta for traceability.
+    try:
+        shutil.copy2(cfg_path, exp_dir / "config.yaml")
+    except Exception:
+        pass
+    try:
+        meta = {
+            "eval_standard": "P2.3.0",
+            "config_path": str(cfg_path),
+            "enhance241_enabled": enabled_switches,
+            "postprocess": {
+                "conf": conf,
+                "conf_threshold": image_conf,
+                "nms_iou": nms_iou,
+                "max_det": max_det,
+            },
+            "eval_iou": match_iou,
+            "match_iou": match_iou,
+        }
+        (exp_dir / "config_dump.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    # One-line evaluation standard log (IoU=交并比, NMS=非极大值抑制)
+    print(
+        f"[eval_std:P2.3.0] conf_threshold={image_conf:.2f} eval_iou={match_iou:.2f} (IoU=交并比) "
+        f"nms_iou={nms_iou:.2f} (NMS=非极大值抑制) max_det={max_det}"
+    )
+
     from ultralytics import YOLO
 
     mode = str(cfg.get("mode", "train_test")).lower()
@@ -257,6 +297,21 @@ def main() -> None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
     model = YOLO(init_weights)
+
+    # Optional enhance241 hooks (minimal, do not change training algorithm).
+    if enabled_switches:
+        unsupported = [k for k in enabled_switches if k not in {"b1"}]
+        if unsupported:
+            raise RuntimeError(f"Unsupported enhance241 switches enabled: {unsupported}. Only b1 is implemented.")
+        if bool(enhance241_cfg.get("b1", False)):
+            try:
+                from third_party.yolo11.enhance241.yolo11_241b1 import apply as apply_241b1
+            except Exception as exc:
+                raise RuntimeError(
+                    "enhance241.b1 is enabled but module import failed: "
+                    "third_party.yolo11.enhance241.yolo11_241b1"
+                ) from exc
+            model = apply_241b1(model, cfg)
     if mode in {"train_test", "finetune_test"}:
         try:
             model.train(

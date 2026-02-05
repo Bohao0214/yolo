@@ -1,0 +1,66 @@
+# 2.4.1 增强实验体系 enhance241（总配置）
+# ============================================================
+# 统一评估口径：P2.3.0（必须严格遵循；不要引入 near/strict 等概念）
+# 后处理链路：预测框(pred) -> conf 过滤 -> NMS(非极大值抑制) -> max_det 限制 -> 最终 pred 集合用于评估
+# 默认参数（允许扫参，但必须记录扫描方式与参数）：
+#   conf=0.30
+#   评估 IoU(交并比)=0.20（用于 gt↔pred 一对一匹配与 TP/FP/FN 判定）
+#   NMS IoU(非极大值抑制)=0.60
+#   max_det=20
+#
+# 结构改造包定义（未来可扩展开关分类；A/B/C/D 互不冲突，可串联）：
+#   A：特征提取增强（backbone→P3）
+#   B：语义融合增强（neck：P4→P3 融合点）
+#   C：抑噪/选择机制（neck→head 前）
+#   D：检测头稳定（head：P3 分支）
+#
+# 本次仅实现 b1（属于 B 类语义融合增强）：
+# - 功能来源：P2.3 小尺度问题以“无响应/低分”为主，后处理非主因，因此优先改 neck 的 P4→P3 融合点以提升小目标候选与分数稳定性。
+
+yolo_version: yolo11
+exp_name: defect241
+run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
+data: configs/data/defect.yaml
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
+model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
+epochs: 100
+imgsz: 640
+batch: 6  # 约束：batchsize < 8，显存 ≤24GB
+device: ""
+
+workers: 8
+
+# P2.3.0 评估/推理参数（写入配置，训练日志也会打印一次）
+conf: 0.30
+nms_iou: 0.60
+max_det: 20
+match_iou: 0.20
+
+mode: train_test  # test / train_test / finetune_test
+weights: ""  # mode=test 时必须提供；mode=train_test 默认从 model 加载预训练权重
+patience: 0        # 0 表示禁用早停；数值越大，在验证集无提升时停止得越晚
+lr0: 0.012          # 值越大 → 初期收敛更快但不稳定风险更高；值越小 → 更安全但收敛更慢
+lrf: 0.12           # 值越大 → 最终学习率更高；值越小 → 后期训练更保守
+warmup_epochs: 0.0  # 较长的 warmup 有助于稳定初期训练；0 表示关闭 warmup
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ""  # 设为 "cpu" 可避免评估指标时 GPU 显存溢出
+
+threshold_sweep:
+  fix: iou              # 固定变量：iou 或 conf
+  fix_list: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  curve: [0.01, 0.01, 1.00]   # start, step, end
+  table: [0.00, 0.05, 1.00]   # start, step, end
+
+# enhance241 开关（只实现 b1；其余预留占位，默认 false）
+enhance241:
+  a2: false
+  b1: false
+  b2: false
+  c1: false
+  d1: false
