@@ -1,6 +1,6 @@
 yolo_version: yolo11
 exp_name: defect
-run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
+run_name: "exp_base2"  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
@@ -10,12 +10,12 @@ batch: 10
 device: ""
 
 workers: 8
-conf: 0.20
+conf: 0.25
 nms_iou: 0.7  # 评估/可视化/推理使用的 NMS IoU（默认 0.7）
 max_det: 100  # NMS 后最多保留的检测框数量
 match_iou: 0.3  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值）
 
-mode: test #test # train_test
+mode: train_test #test # train_test
 weights: /home/ubuntu/project/deduibi/yolo/models/defect/exp_260202_base/best/best.pt
 patience: 0        # 0 表示禁用早停；数值越大，在验证集无提升时停止得越晚
 lr0: 0.012          # 值越大 → 初期收敛更快但不稳定风险更高；值越小 → 更安全但收敛更慢
