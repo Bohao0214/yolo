@@ -611,9 +611,11 @@ def apply(model: Any, cfg: Any) -> Any:
                 base = img.copy()
                 _draw(base, item.get("gt_xyxy"), (0, 255, 0), labels=None, thickness=2)  # GT green
                 _draw(base, item.get("fn_xyxy"), (0, 255, 255), labels=None, thickness=3)  # FN yellow
-                pred_xyxy = item.get("pred_xyxy") or []
-                pred_conf = item.get("pred_conf") or []
-                pred_labels = [f"{float(c):.2f}" for c in pred_conf] if pred_conf else None
+                pred_xyxy = item.get("pred_xyxy", [])
+                pred_conf = item.get("pred_conf", [])
+                if isinstance(pred_conf, np.ndarray):
+                    pred_conf = pred_conf.tolist()
+                pred_labels = [f"{float(c):.2f}" for c in pred_conf] if len(pred_conf) else None
                 _draw(base, pred_xyxy, (0, 0, 255), labels=pred_labels, thickness=2)  # Pred red
 
                 stem = Path(im_file).stem
