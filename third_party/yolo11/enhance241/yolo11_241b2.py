@@ -26,7 +26,7 @@ class P3ResidualFuseSafe(torch.nn.Module):
     Strategy:
       F3_new = F3_old + alpha * Delta(P4_up, F3_old)
 
-    - alpha starts small (default 0.10) and is learnable (bounded to (0, alpha_max]).
+    - alpha starts small (default 0.10) and is learnable.
     - Delta head last conv is zero-initialized => initial Delta == 0 => output equals baseline.
     - No BatchNorm (batch < 8 is a hard constraint).
     - Prints fused feature mean/var once (for hidden "near-zero output" issues).
@@ -48,33 +48,48 @@ class P3ResidualFuseSafe(torch.nn.Module):
         if self.alpha_max <= 0:
             raise ValueError(f"alpha_max must be positive, got: {alpha_max}")
 
-        alpha_init = float(alpha_init)
-        alpha_init = max(0.0, min(alpha_init, self.alpha_max))
-        # Use sigmoid(logit) * alpha_max to keep alpha positive and bounded.
-        init_ratio = (alpha_init / self.alpha_max) if self.alpha_max > 0 else 0.0
-        init_ratio = max(1e-6, min(init_ratio, 1 - 1e-6))
-        init_logit = float(torch.log(torch.tensor(init_ratio / (1 - init_ratio))))
-        self.alpha_logit = torch.nn.Parameter(torch.full((1, self.c, 1, 1), init_logit))
+        # Prefer a plain scalar nn.Parameter for alpha to make optimizer inclusion obvious.
+        alpha_init = max(0.0, min(float(alpha_init), self.alpha_max))
+        self.alpha = torch.nn.Parameter(torch.tensor(alpha_init, dtype=torch.float32))
 
+        # B2-1 (low risk): residual + gate (only enhance high-response regions on P3)
+        #   g = sigmoid(gate(P3))
+        #   delta = g * semantic(P4_up)
+        #   P3_new = P3 + alpha * delta
         hidden = max(8, self.c // 4)
-        self.delta = torch.nn.Sequential(
-            torch.nn.Conv2d(2 * self.c, hidden, kernel_size=1, stride=1, padding=0, bias=True),
+        self.semantic = torch.nn.Sequential(
+            torch.nn.Conv2d(self.c, hidden, kernel_size=1, stride=1, padding=0, bias=True),
             torch.nn.SiLU(inplace=True),
             torch.nn.Conv2d(hidden, hidden, kernel_size=3, stride=1, padding=1, groups=hidden, bias=True),
             torch.nn.SiLU(inplace=True),
             torch.nn.Conv2d(hidden, self.c, kernel_size=1, stride=1, padding=0, bias=True),
         )
-        # Baseline-safe: initial Delta == 0 regardless of other weights.
-        torch.nn.init.zeros_(self.delta[-1].weight)
-        torch.nn.init.zeros_(self.delta[-1].bias)
+        # Baseline-safe: initial semantic == 0 regardless of other weights => delta == 0.
+        torch.nn.init.zeros_(self.semantic[-1].weight)
+        torch.nn.init.zeros_(self.semantic[-1].bias)
 
+        # Gate from P3 only: starts slightly "off" to bias toward keeping baseline P3 details.
+        self.gate = torch.nn.Conv2d(self.c, 1, kernel_size=1, stride=1, padding=0, bias=True)
+        torch.nn.init.zeros_(self.gate.weight)
+        torch.nn.init.constant_(self.gate.bias, -2.0)  # sigmoid(-2)≈0.119
+
+        self._debug_printed: bool = False
         self._stats_printed: bool = False
 
     def reset_stats(self) -> None:
         self._stats_printed = False
 
     def _alpha(self) -> torch.Tensor:
-        return torch.sigmoid(self.alpha_logit) * self.alpha_max
+        # Backward compatibility: older checkpoints may have alpha_logit instead of alpha.
+        if hasattr(self, "alpha") and isinstance(getattr(self, "alpha"), torch.nn.Parameter):
+            a = torch.clamp(self.alpha, 0.0, self.alpha_max)
+            return a
+        if hasattr(self, "alpha_logit"):
+            a_logit = getattr(self, "alpha_logit")
+            if isinstance(a_logit, torch.Tensor):
+                return torch.sigmoid(a_logit) * self.alpha_max
+        # Fallback constant (should not happen for newly created modules)
+        return torch.tensor(0.0, device=next(self.parameters()).device, dtype=torch.float32)
 
     def forward(self, x: Any) -> torch.Tensor:
         if not isinstance(x, (list, tuple)) or len(x) != 2:
@@ -88,7 +103,37 @@ class P3ResidualFuseSafe(torch.nn.Module):
         if p4_up.shape[1] != self.c or p3.shape[1] != self.c:
             raise ValueError(f"Channel mismatch: p4_up={p4_up.shape} p3={p3.shape} expected C={self.c}")
 
-        delta = self.delta(torch.cat((p4_up, p3), dim=1))
+        if self.training and not self._debug_printed:
+            self._debug_printed = True
+            alpha_param = getattr(self, "alpha", None)
+            alpha_param_name = "alpha"
+            if alpha_param is None:
+                alpha_param = getattr(self, "alpha_logit", None)
+                alpha_param_name = "alpha_logit"
+
+            is_param = isinstance(alpha_param, torch.nn.Parameter)
+            req_grad = bool(getattr(alpha_param, "requires_grad", False))
+            params = list(self.parameters())
+            alpha_in_params = id(alpha_param) in {id(p) for p in params}
+            param_elems = sum(int(p.numel()) for p in params)
+            print(
+                f"[enhance241] b2 debug: {alpha_param_name} is nn.Parameter={is_param} requires_grad={req_grad}"
+            )
+            print(
+                f"[enhance241] b2 debug: {alpha_param_name}_in_module_params={alpha_in_params} "
+                f"{alpha_param_name}_id={id(alpha_param)} "
+                f"module_param_tensors={len(params)} module_param_elems={param_elems}"
+            )
+
+        # Prefer gated semantic injection (B2-1). Fallback to legacy 'delta' if loading older checkpoints.
+        if hasattr(self, "semantic") and hasattr(self, "gate"):
+            g = torch.sigmoid(self.gate(p3))  # [B,1,H,W]
+            delta = self.semantic(p4_up) * g  # [B,C,H,W]  broadcast
+        elif hasattr(self, "delta"):
+            delta = self.delta(torch.cat((p4_up, p3), dim=1))
+        else:
+            raise RuntimeError("P3ResidualFuseSafe has no semantic/gate or delta branch to compute residual.")
+
         p3_new = p3 + self._alpha() * delta
 
         if not self._stats_printed:
@@ -98,7 +143,7 @@ class P3ResidualFuseSafe(torch.nn.Module):
                 var = float(p3_new.var(unbiased=False).detach().cpu())
                 a = float(self._alpha().mean().detach().cpu())
             # Print only once per model instance.
-            print(f"[enhance241] b2 stats: fused_p3 mean={mu:.6f} var={var:.6f} alpha_mean={a:.4f}")
+            print(f"[enhance241] b2 stats: fused_p3 mean={mu:.6f} var={var:.6f} alpha_mean={a:.6f}")
 
         return torch.cat((p4_up, p3_new), dim=1)
 
@@ -175,4 +220,3 @@ def apply(model: Any, cfg: Any) -> Any:
         f"(Concat f={getattr(old, 'f', None)}) -> P3ResidualFuseSafe(C={c}, alpha_init=0.10)"
     )
     return yolo_obj
-
