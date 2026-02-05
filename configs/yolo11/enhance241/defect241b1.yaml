@@ -51,5 +51,10 @@ enhance241:
   a2: false
   b1: true
   b2: false
+  b1_version: "v3"
+  b1_alpha_init: 0.05
+  b1_weight_hidden: 64
+  b1_refine: "dw"
+  b1_upsample: "nearest"
   c1: false
   d1: false

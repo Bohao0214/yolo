@@ -16,15 +16,17 @@ Usage:
   bash tools/run_yolov11_241.sh [base_config.yaml] [switches...]
 
 Switches (implemented):
-  b1    Enable 2.4.1 b1 (P4->P3 fuse enhancement)
+  b1    Enable 2.4.1 b1 (ASFF-lite P4->P3 fuse)
   b2    Enable 2.4.1 b2-safe (residual P4->P3 fuse, baseline-safe init)
 
 Examples:
   bash tools/run_yolov11_241.sh
   bash tools/run_yolov11_241.sh b1
   bash tools/run_yolov11_241.sh b2
+  bash tools/run_yolov11_241.sh b1 b2
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b2
+  bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1 b2
 
 Env:
   PYTHON_BIN=/path/to/python
@@ -92,31 +94,28 @@ fi
 
 CONFIG_TO_RUN="${BASE_CONFIG}"
 
-if [[ "${ENABLE_B1}" == "true" && "${ENABLE_B2}" == "true" ]]; then
-  echo "[error] b1 and b2 are mutually exclusive. Enable only one." >&2
-  exit 5
-fi
-
 if [[ "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" ]]; then
-  if [[ ${#SWITCHES[@]} -ne 1 ]]; then
-    echo "[error] Only a single switch is supported for now. Got: ${SWITCHES[*]}" >&2
-    exit 6
-  fi
+  ENABLED_KEYS=()
+  [[ "${ENABLE_B1}" == "true" ]] && ENABLED_KEYS+=("b1")
+  [[ "${ENABLE_B2}" == "true" ]] && ENABLED_KEYS+=("b2")
 
-  if [[ "${ENABLE_B1}" == "true" ]]; then
+  if [[ ${#ENABLED_KEYS[@]} -eq 1 && "${ENABLED_KEYS[0]}" == "b1" ]]; then
     DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b1.yaml"
-    DERIVED_KEY="b1"
     DERIVED_SUFFIX="__b1"
-  else
+  elif [[ ${#ENABLED_KEYS[@]} -eq 1 && "${ENABLED_KEYS[0]}" == "b2" ]]; then
     DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b2.yaml"
-    DERIVED_KEY="b2"
     DERIVED_SUFFIX="__b2"
+  else
+    JOINED="$(IFS=; echo "${ENABLED_KEYS[*]}")"
+    JOINED="${JOINED//;/}"  # b1b2
+    DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241${JOINED}.yaml"
+    DERIVED_SUFFIX="__${ENABLED_KEYS[*]// /__}"
   fi
 
   if [[ ! -f "${DERIVED_CONFIG}" ]]; then
     export _E241_BASE="${BASE_CONFIG}"
     export _E241_OUT="${DERIVED_CONFIG}"
-    export _E241_KEY="${DERIVED_KEY}"
+    export _E241_KEYS="${ENABLED_KEYS[*]}"
     export _E241_SUFFIX="${DERIVED_SUFFIX}"
     "${PYTHON_BIN}" - <<'PY'
 import os
@@ -126,7 +125,7 @@ import yaml
 
 base = Path(os.environ["_E241_BASE"]).resolve()
 out = Path(os.environ["_E241_OUT"]).resolve()
-key = os.environ["_E241_KEY"]
+keys = os.environ["_E241_KEYS"].split()
 suffix = os.environ["_E241_SUFFIX"]
 
 with base.open("r", encoding="utf-8") as f:
@@ -139,7 +138,10 @@ if not isinstance(enh, dict):
     raise SystemExit("enhance241 must be a mapping in base config.")
 enh["b1"] = False
 enh["b2"] = False
-enh[key] = True
+for k in keys:
+    enh[k] = True
+if enh.get("b1"):
+    enh["b1_version"] = "v3"
 
 exp = str(cfg.get("exp_name", "defect241"))
 if not exp.endswith(suffix):

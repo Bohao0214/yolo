@@ -148,6 +148,23 @@ class P3ResidualFuseSafe(torch.nn.Module):
         return torch.cat((p4_up, p3_new), dim=1)
 
 
+class P3FuseChain(torch.nn.Module):
+    """Chain two P4->P3 fuse modules without changing downstream shape (keeps 2C cat output)."""
+
+    def __init__(self, first: torch.nn.Module, second: torch.nn.Module, channels_per_branch: int) -> None:
+        super().__init__()
+        self.first = first
+        self.second = second
+        self.c = int(channels_per_branch)
+
+    def forward(self, x: Any) -> torch.Tensor:
+        y = self.first(x)
+        if not isinstance(y, torch.Tensor) or y.shape[1] != self.c * 2:
+            raise ValueError(f"P3FuseChain expects concat tensor with 2C channels, got {getattr(y, 'shape', None)}")
+        p4_up, p3 = torch.split(y, self.c, dim=1)
+        return self.second([p4_up, p3])
+
+
 def _locate_p4_to_p3_fuse(seq: Any) -> Tuple[int, Any]:
     detect = None
     try:
@@ -190,6 +207,25 @@ def apply(model: Any, cfg: Any) -> Any:
     old = seq[fuse_idx]
     if isinstance(old, P3ResidualFuseSafe):
         old.reset_stats()
+        return yolo_obj
+
+    # If b1 already patched the fuse point, chain b2 after it.
+    try:
+        from third_party.yolo11.enhance241.yolo11_241b1 import P3ASFFLiteFuse  # type: ignore
+    except Exception:
+        P3ASFFLiteFuse = None  # type: ignore
+
+    if P3ASFFLiteFuse is not None and isinstance(old, P3ASFFLiteFuse):
+        c = int(getattr(old, "c", 0)) or None
+        if not c:
+            raise RuntimeError("Unable to infer channels from existing b1 fuse module.")
+        fuse = P3ResidualFuseSafe(channels_per_branch=c)
+        chain = P3FuseChain(old, fuse, c)
+        for attr in ("i", "f", "type"):
+            if hasattr(old, attr):
+                setattr(chain, attr, getattr(old, attr))
+        seq[fuse_idx] = chain
+        print(f"[enhance241] b2 enabled: chained after b1 at model.model[{fuse_idx}] -> P3FuseChain(C={c})")
         return yolo_obj
 
     if old.__class__.__name__ != "Concat":

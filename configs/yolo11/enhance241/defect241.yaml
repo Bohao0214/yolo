@@ -14,9 +14,10 @@
 #   C：抑噪/选择机制（neck→head 前）
 #   D：检测头稳定（head：P3 分支）
 #
-# 本次实现 b2（属于 B 类语义融合增强；b1 作为早期尝试保留）：
+# 本次实现 b1_v3 / b2（属于 B 类语义融合增强，可串联）：
 # - 功能来源：P2.3 小尺度问题以“无响应/低分”为主，后处理非主因，因此优先改 neck 的 P4→P3 融合点以提升小目标候选与分数稳定性。
-# - b2-safe（推荐）：残差式融合，默认等价 baseline，训练后逐步学到增益：
+# - b1_v3（ASFF-lite）：空间自适应融合，仅改 P4→P3 融合点，强化小目标候选。
+# - b2-safe（残差式融合）：默认等价 baseline，训练后逐步学到增益：
 #     F3_new = F3_old + α * Δ(P4_up, F3_old)
 #   其中 α 初始很小（约 0.10）且可学习；Δ 的最后一层卷积零初始化以保证初始 Δ≈0；避免新增 BN（batch<8 约束）。
 
@@ -65,5 +66,10 @@ enhance241:
   a2: false
   b1: false
   b2: false
+  b1_version: "v3"
+  b1_alpha_init: 0.05
+  b1_weight_hidden: 64
+  b1_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
+  b1_upsample: "nearest"
   c1: false
   d1: false

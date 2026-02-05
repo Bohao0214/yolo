@@ -243,8 +243,6 @@ def main() -> None:
     enabled_switches = sorted([k for k, v in enhance241_cfg.items() if bool(v)])
     enable_b1 = bool(enhance241_cfg.get("b1", False))
     enable_b2 = bool(enhance241_cfg.get("b2", False))
-    if enable_b1 and enable_b2:
-        raise ValueError("enhance241.b1 and enhance241.b2 are mutually exclusive. Enable only one.")
 
     # Persist a minimal, reproducible run meta for traceability.
     try:
@@ -285,15 +283,6 @@ def main() -> None:
         unsupported = [k for k in enabled_switches if k not in {"b1", "b2"}]
         if unsupported:
             raise RuntimeError(f"Unsupported enhance241 switches enabled: {unsupported}. Only b1/b2 are supported.")
-        if enable_b2:
-            try:
-                from third_party.yolo11.enhance241.yolo11_241b2 import apply as apply_241b2
-            except Exception as exc:
-                raise RuntimeError(
-                    "enhance241.b2 is enabled but module import failed: "
-                    "third_party.yolo11.enhance241.yolo11_241b2"
-                ) from exc
-            return apply_241b2(yolo_model, cfg)
         if enable_b1:
             try:
                 from third_party.yolo11.enhance241.yolo11_241b1 import apply as apply_241b1
@@ -302,7 +291,16 @@ def main() -> None:
                     "enhance241.b1 is enabled but module import failed: "
                     "third_party.yolo11.enhance241.yolo11_241b1"
                 ) from exc
-            return apply_241b1(yolo_model, cfg)
+            yolo_model = apply_241b1(yolo_model, cfg)
+        if enable_b2:
+            try:
+                from third_party.yolo11.enhance241.yolo11_241b2 import apply as apply_241b2
+            except Exception as exc:
+                raise RuntimeError(
+                    "enhance241.b2 is enabled but module import failed: "
+                    "third_party.yolo11.enhance241.yolo11_241b2"
+                ) from exc
+            yolo_model = apply_241b2(yolo_model, cfg)
         return yolo_model
 
     mode = str(cfg.get("mode", "train_test")).lower()
