@@ -20,85 +20,95 @@ def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
     return cur if cur is not None else default
 
 
-class _DSConv(torch.nn.Module):
+class _DWSeparableConv(torch.nn.Module):
+    """Depthwise-separable 3x3 + pointwise 1x1 (no BN; batch<8 friendly)."""
+
     def __init__(self, channels: int) -> None:
         super().__init__()
         self.dw = torch.nn.Conv2d(
-            channels,
-            channels,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            groups=channels,
-            bias=False,
+            channels, channels, kernel_size=3, stride=1, padding=1, groups=channels, bias=True
         )
-        self.bn1 = torch.nn.BatchNorm2d(channels, eps=1e-3, momentum=0.03)
         self.act1 = torch.nn.SiLU(inplace=True)
-        self.pw = torch.nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0, bias=False)
-        self.bn2 = torch.nn.BatchNorm2d(channels, eps=1e-3, momentum=0.03)
+        self.pw = torch.nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0, bias=True)
         self.act2 = torch.nn.SiLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.act1(self.bn1(self.dw(x)))
-        x = self.act2(self.bn2(self.pw(x)))
-        return x
+        return self.act2(self.pw(self.act1(self.dw(x))))
 
 
-class P3AlignedFuse(torch.nn.Module):
-    """P3AlignedFuse: lightweight P4->P3 fusion enhancer (2.4.1 b1).
+class P3BiFPNLiteFuse(torch.nn.Module):
+    """2.4.1 b1 (BiFPN-lite): normalized weighted sum + zero-init residual gate.
 
-    Inputs:
-      - [p4, p3] where p4 is higher-level feature (from P4 branch),
-        p3 is lateral feature (from P3 branch).
+    Only patches the neck P4->P3 fusion point.
 
-    Outputs:
-      - Tensor with channels = 2 * channels_per_branch (keeps original concat-compatible shape),
-        intended to replace the original Concat at the P4->P3 fusion point.
+    Core:
+      P3_fuse = (w3*P3 + w4*P4_up) / (w3+w4+eps)
+      P3_out  = P3 + g * Conv(P3_fuse)   (g is zero-init => baseline-equivalent at start)
+
+    Output keeps concat-compatible shape:
+      cat([P4_up, P3_out]) -> 2C channels (downstream neck unchanged).
     """
 
-    def __init__(self, channels_per_branch: int, upsample_mode: str = "bilinear") -> None:
+    def __init__(self, channels_per_branch: int, eps: float = 1e-4, log_every: int = 500) -> None:
         super().__init__()
         self.c = int(channels_per_branch)
         if self.c <= 0:
             raise ValueError(f"channels_per_branch must be positive, got: {channels_per_branch}")
-        self.upsample_mode = str(upsample_mode)
+        self.eps = float(eps)
+        self.log_every = int(log_every)
 
-        # (1) Alignment after upsample: local smoothing/align conv (depthwise, cheap)
-        self.p4_align = torch.nn.Sequential(
-            torch.nn.Conv2d(self.c, self.c, kernel_size=3, stride=1, padding=1, groups=self.c, bias=False),
-            torch.nn.BatchNorm2d(self.c, eps=1e-3, momentum=0.03),
-            torch.nn.SiLU(inplace=True),
-        )
+        # BiFPN normalized weights (per-channel, non-negative -> normalized)
+        self.w = torch.nn.Parameter(torch.ones(2, self.c, 1, 1))
 
-        # (2) Learnable fusion weights: per-channel softmax weights for (p3, p4)
-        self.fuse_w = torch.nn.Parameter(torch.zeros(2, self.c, 1, 1))
+        # Lightweight refinement on fused feature (depthwise-separable; no BN)
+        self.refine = _DWSeparableConv(self.c)
 
-        # (3) Lightweight refinement on fused feature: depthwise separable conv + residual
-        self.refine = _DSConv(self.c)
+        # Zero-init residual gate: start identical to baseline.
+        self.g = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+
+        self._step: int = 0
+
+    def _norm_w(self) -> torch.Tensor:
+        w_pos = torch.nn.functional.softplus(self.w)  # ensure non-negative, smooth gradients
+        denom = w_pos.sum(dim=0, keepdim=True) + self.eps
+        return w_pos / denom
 
     def forward(self, x: Any) -> torch.Tensor:
         if not isinstance(x, (list, tuple)) or len(x) != 2:
-            raise TypeError(f"P3AlignedFuse expects [p4, p3], got: {type(x)} len={getattr(x, '__len__', None)}")
-        p4, p3 = x  # expected order from original Concat(f=[-1, P3])
-        if p4.shape[1] != self.c or p3.shape[1] != self.c:
-            raise ValueError(f"Channel mismatch: p4={p4.shape} p3={p3.shape} expected C={self.c}")
-
-        if p4.shape[-2:] != p3.shape[-2:]:
-            p4 = torch.nn.functional.interpolate(
-                p4, size=p3.shape[-2:], mode=self.upsample_mode, align_corners=False if self.upsample_mode == "bilinear" else None
+            raise TypeError(
+                f"P3BiFPNLiteFuse expects [p4_up, p3], got: {type(x)} len={getattr(x, '__len__', None)}"
             )
+        p4_up, p3 = x  # expected order from original Concat(f=[-1, P3])
+        if p4_up.shape[-2:] != p3.shape[-2:]:
+            p4_up = torch.nn.functional.interpolate(p4_up, size=p3.shape[-2:], mode="nearest")
+        if p4_up.shape[1] != self.c or p3.shape[1] != self.c:
+            raise ValueError(f"Channel mismatch: p4_up={p4_up.shape} p3={p3.shape} expected C={self.c}")
 
-        p4_aligned = self.p4_align(p4)
+        w_norm = self._norm_w()
+        p3_fuse = w_norm[0] * p3 + w_norm[1] * p4_up
+        delta = self.refine(p3_fuse)
+        gate = torch.tanh(self.g)  # zero-init => baseline-equivalent; bounded for stability
+        p3_out = p3 + gate * delta
 
-        w = torch.softmax(self.fuse_w, dim=0)
-        fused = w[0] * p3 + w[1] * p4_aligned
-        fused = fused + self.refine(fused)
+        # Optional lightweight monitoring (avoid log spam).
+        if self.training and torch.is_grad_enabled() and self.log_every > 0 and (self._step % self.log_every == 0):
+            with torch.no_grad():
+                w3_m = float(w_norm[0].mean().detach().cpu())
+                w4_m = float(w_norm[1].mean().detach().cpu())
+                g_m = float(gate.detach().cpu())
+                diff = (p3_out - p3).detach()
+                diff_abs_mean = float(diff.abs().mean().cpu())
+                diff_var = float(diff.var(unbiased=False).cpu())
+            print(
+                f"[enhance241] b1 mon step={self._step} w3_mean={w3_m:.4f} w4_mean={w4_m:.4f} "
+                f"g={g_m:.4f} |diff|_mean={diff_abs_mean:.6f} diff_var={diff_var:.6f}"
+            )
+        self._step += 1
 
-        # Keep original concat-compatible shape (2C) so downstream neck stays unchanged.
-        return torch.cat((p4_aligned, fused), dim=1)
+        return torch.cat((p4_up, p3_out), dim=1)
 
 
-def _locate_p4_to_p3_fuse(seq: Any) -> Tuple[int, Optional[Any]]:
+def _locate_p4_to_p3_fuse(seq: Any) -> Tuple[int, Any]:
     """Return (fuse_idx, detect_layer) for the P4->P3 fusion point."""
     detect = None
     if isinstance(seq, (list, tuple)) and seq:
@@ -130,7 +140,7 @@ def apply(model: Any, cfg: Any) -> Any:
     """Apply 2.4.1 b1 enhancement (small-scale box recall) to YOLO11 model.
 
     - If cfg.enhance241.b1 is false: return model unchanged.
-    - If true: replace the neck P4->P3 fusion Concat with P3AlignedFuse.
+    - If true: replace the neck P4->P3 fusion Concat with P3BiFPNLiteFuse.
     """
 
     enable_b1 = bool(_deep_get(cfg, "enhance241", "b1", default=False))
@@ -152,8 +162,8 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError(f"Invalid fuse_idx={fuse_idx} for model length={len(seq)}")
 
     old = seq[fuse_idx]
-    if isinstance(old, P3AlignedFuse):
-        print(f"[enhance241] b1 enabled: already patched at model.model[{fuse_idx}] -> P3AlignedFuse(C={old.c})")
+    if isinstance(old, P3BiFPNLiteFuse):
+        print(f"[enhance241] b1 enabled: already patched at model.model[{fuse_idx}] -> P3BiFPNLiteFuse(C={old.c})")
         return yolo_obj
 
     if old.__class__.__name__ != "Concat":
@@ -171,7 +181,7 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError(f"Unable to infer concat channels from next layer at idx={fuse_idx+1}. c_in={c_in}")
 
     c = c_in // 2
-    fuse = P3AlignedFuse(channels_per_branch=c, upsample_mode="bilinear")
+    fuse = P3BiFPNLiteFuse(channels_per_branch=c, eps=1e-4, log_every=500)
 
     # Preserve Ultralytics layer meta attributes used by its forward graph.
     for attr in ("i", "f", "type"):
@@ -182,6 +192,6 @@ def apply(model: Any, cfg: Any) -> Any:
 
     print(
         f"[enhance241] b1 enabled: patched neck P4->P3 fuse at model.model[{fuse_idx}] "
-        f"(Concat f={getattr(old, 'f', None)}) -> P3AlignedFuse(C={c})"
+        f"(Concat f={getattr(old, 'f', None)}) -> P3BiFPNLiteFuse(C={c})"
     )
     return yolo_obj
