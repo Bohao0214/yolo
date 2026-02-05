@@ -397,9 +397,18 @@ def apply(model: Any, cfg: Any) -> Any:
             )
 
         def on_val_start(validator: Any) -> None:
+            save_dir = Path(getattr(validator, "save_dir", ""))
+            # Align postprocess params to project defaults when possible (keep enough boxes for recall).
+            try:
+                metric_conf = _safe_float(cfg.get("metric_conf", 0.01), 0.01)
+                validator.args.conf = float(metric_conf)  # keep candidates before conf_threshold filtering below
+                validator.args.iou = float(_safe_float(cfg.get("nms_iou", validator.args.iou), validator.args.iou))
+                validator.args.max_det = int(_safe_float(cfg.get("max_det", validator.args.max_det), validator.args.max_det))
+            except Exception:
+                pass
+
             if not _is_rank0():
                 return
-            save_dir = Path(getattr(validator, "save_dir", ""))
             if not save_dir:
                 return
 
@@ -410,15 +419,6 @@ def apply(model: Any, cfg: Any) -> Any:
                 "candidates": [],
             }
             setattr(validator, "_enhance241_b1_v2_state", val_state)
-
-            # Align postprocess params to project defaults when possible (keep enough boxes for recall).
-            try:
-                metric_conf = _safe_float(cfg.get("metric_conf", 0.01), 0.01)
-                validator.args.conf = float(metric_conf)  # keep candidates before conf_threshold filtering below
-                validator.args.iou = float(_safe_float(cfg.get("nms_iou", validator.args.iou), validator.args.iou))
-                validator.args.max_det = int(_safe_float(cfg.get("max_det", validator.args.max_det), validator.args.max_det))
-            except Exception:
-                pass
 
             if getattr(validator, "_enhance241_b1_v2_wrapped", False):
                 return
@@ -439,15 +439,20 @@ def apply(model: Any, cfg: Any) -> Any:
                 except Exception:
                     return orig_update(preds, batch)
 
+                # Use CPU tensors here to avoid extra GPU sync/stalls during validation.
                 imgsz = batch["img"].shape[2:]  # (h, w)
-                scale = torch.tensor(imgsz, device=batch["img"].device)[[1, 0, 1, 0]]
+                scale = torch.tensor([imgsz[1], imgsz[0], imgsz[1], imgsz[0]], device="cpu", dtype=torch.float32)
                 conf_keep = float(conf_thr)
                 iou_thr = float(iou_match)
 
+                batch_idx = batch["batch_idx"].detach().cpu()
+                batch_cls = batch["cls"].detach().cpu()
+                batch_bboxes = batch["bboxes"].detach().cpu()
+
                 for si, pred in enumerate(preds):
-                    idx = batch["batch_idx"] == si
-                    gt_cls = batch["cls"][idx].squeeze(-1)
-                    gt_b = batch["bboxes"][idx]
+                    idx = batch_idx == si
+                    gt_cls = batch_cls[idx].squeeze(-1)
+                    gt_b = batch_bboxes[idx]
                     if gt_cls.numel() == 0:
                         continue
                     gt_xyxy = ops.xywh2xyxy(gt_b) * scale
@@ -455,13 +460,13 @@ def apply(model: Any, cfg: Any) -> Any:
                     h = (gt_xyxy[:, 3] - gt_xyxy[:, 1]).clamp(min=0)
                     size = torch.minimum(w, h)
 
-                    pb = pred["bboxes"].to(gt_xyxy.device)
-                    pc = pred["conf"].to(gt_xyxy.device)
+                    pb = pred["bboxes"].detach().cpu()
+                    pc = pred["conf"].detach().cpu()
                     keep = pc >= conf_keep
                     pb = pb[keep]
                     pc = pc[keep]
 
-                    matched = torch.zeros((gt_xyxy.shape[0],), dtype=torch.bool, device=gt_xyxy.device)
+                    matched = torch.zeros((gt_xyxy.shape[0],), dtype=torch.bool, device="cpu")
                     if pb.numel():
                         iou = box_iou(gt_xyxy, pb)
                         best = iou.max(dim=1).values
@@ -484,8 +489,8 @@ def apply(model: Any, cfg: Any) -> Any:
                     small_fn = (~matched) & (size < 32)
                     if small_fn.any() and len(val_state["candidates"]) < max(200, topk * 20):
                         im_file = str(batch["im_file"][si])
-                        max_conf = float(pc.max().detach().cpu()) if pc.numel() else 0.0
-                        min_size = float(size[small_fn].min().detach().cpu())
+                        max_conf = float(pc.max()) if pc.numel() else 0.0
+                        min_size = float(size[small_fn].min())
                         # determine bucket label by min_size
                         bucket_label = "unknown"
                         for a, b in buckets:
@@ -497,19 +502,17 @@ def apply(model: Any, cfg: Any) -> Any:
                         try:
                             ori_shape = batch["ori_shape"][si]
                             ratio_pad = batch["ratio_pad"][si]
-                            gt_o = ops.scale_boxes(imgsz, gt_xyxy.clone(), ori_shape, ratio_pad).detach().cpu().numpy()
+                            gt_o = ops.scale_boxes(imgsz, gt_xyxy.clone(), ori_shape, ratio_pad).numpy()
                             fn_o = (
                                 ops.scale_boxes(imgsz, gt_xyxy[small_fn].clone(), ori_shape, ratio_pad)
-                                .detach()
-                                .cpu()
                                 .numpy()
                             )
                             pb_o = (
-                                ops.scale_boxes(imgsz, pb.clone(), ori_shape, ratio_pad).detach().cpu().numpy()
+                                ops.scale_boxes(imgsz, pb.clone(), ori_shape, ratio_pad).numpy()
                                 if pb.numel()
                                 else []
                             )
-                            pc_o = pc.detach().cpu().numpy().tolist() if pc.numel() else []
+                            pc_o = pc.numpy().tolist() if pc.numel() else []
                         except Exception:
                             gt_o, fn_o, pb_o, pc_o = [], [], [], []
 
