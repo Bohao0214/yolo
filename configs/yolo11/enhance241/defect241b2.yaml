@@ -1,0 +1,55 @@
+yolo_version: yolo11
+exp_name: defect241__b2
+run_name: ''
+data: configs/data/defect.yaml
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
+model: models/pretrained/yolo11m.pt
+epochs: 100
+imgsz: 640
+batch: 6
+device: ''
+workers: 8
+conf: 0.3
+nms_iou: 0.6
+max_det: 20
+match_iou: 0.2
+mode: train_test
+weights: ''
+patience: 0
+lr0: 0.012
+lrf: 0.12
+warmup_epochs: 0.0
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ''
+threshold_sweep:
+  fix: iou
+  fix_list:
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  curve:
+  - 0.01
+  - 0.01
+  - 1.0
+  table:
+  - 0.0
+  - 0.05
+  - 1.0
+enhance241:
+  a2: false
+  b1: false
+  b2: true
+  c1: false
+  d1: false

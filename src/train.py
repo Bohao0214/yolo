@@ -241,6 +241,10 @@ def main() -> None:
     if not isinstance(enhance241_cfg, dict):
         raise ValueError("enhance241 must be a mapping when provided in config.")
     enabled_switches = sorted([k for k, v in enhance241_cfg.items() if bool(v)])
+    enable_b1 = bool(enhance241_cfg.get("b1", False))
+    enable_b2 = bool(enhance241_cfg.get("b2", False))
+    if enable_b1 and enable_b2:
+        raise ValueError("enhance241.b1 and enhance241.b2 are mutually exclusive. Enable only one.")
 
     # Persist a minimal, reproducible run meta for traceability.
     try:
@@ -275,6 +279,32 @@ def main() -> None:
 
     from ultralytics import YOLO
 
+    def apply_enhance241(yolo_model: Any) -> Any:
+        if not enabled_switches:
+            return yolo_model
+        unsupported = [k for k in enabled_switches if k not in {"b1", "b2"}]
+        if unsupported:
+            raise RuntimeError(f"Unsupported enhance241 switches enabled: {unsupported}. Only b1/b2 are supported.")
+        if enable_b2:
+            try:
+                from third_party.yolo11.enhance241.yolo11_241b2 import apply as apply_241b2
+            except Exception as exc:
+                raise RuntimeError(
+                    "enhance241.b2 is enabled but module import failed: "
+                    "third_party.yolo11.enhance241.yolo11_241b2"
+                ) from exc
+            return apply_241b2(yolo_model, cfg)
+        if enable_b1:
+            try:
+                from third_party.yolo11.enhance241.yolo11_241b1 import apply as apply_241b1
+            except Exception as exc:
+                raise RuntimeError(
+                    "enhance241.b1 is enabled but module import failed: "
+                    "third_party.yolo11.enhance241.yolo11_241b1"
+                ) from exc
+            return apply_241b1(yolo_model, cfg)
+        return yolo_model
+
     mode = str(cfg.get("mode", "train_test")).lower()
     if mode == "test" and not weights_path:
         raise ValueError("mode=test requires weights in config.")
@@ -297,21 +327,7 @@ def main() -> None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
     model = YOLO(init_weights)
-
-    # Optional enhance241 hooks (minimal, do not change training algorithm).
-    if enabled_switches:
-        unsupported = [k for k in enabled_switches if k not in {"b1"}]
-        if unsupported:
-            raise RuntimeError(f"Unsupported enhance241 switches enabled: {unsupported}. Only b1 is implemented.")
-        if bool(enhance241_cfg.get("b1", False)):
-            try:
-                from third_party.yolo11.enhance241.yolo11_241b1 import apply as apply_241b1
-            except Exception as exc:
-                raise RuntimeError(
-                    "enhance241.b1 is enabled but module import failed: "
-                    "third_party.yolo11.enhance241.yolo11_241b1"
-                ) from exc
-            model = apply_241b1(model, cfg)
+    model = apply_enhance241(model)
     if mode in {"train_test", "finetune_test"}:
         try:
             model.train(
@@ -354,6 +370,7 @@ def main() -> None:
             pass
         gc.collect()
         model = YOLO(str(eval_weights))
+        model = apply_enhance241(model)
     elif mode == "test":
         test_weight = Path(weights_path)
         if test_weight.exists():
@@ -361,6 +378,7 @@ def main() -> None:
         else:
             cached = resolve_pretrained_weight(project_root, test_weight.name)
             model = YOLO(str(cached))
+        model = apply_enhance241(model)
 
     # Resolve split sources across one or multiple dataset roots.
     data_info_cfg = load_yaml(data_yaml)
