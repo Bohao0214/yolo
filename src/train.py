@@ -548,19 +548,32 @@ def main() -> None:
             return
         setattr(yolo_model, "_enhance241_audit_cb", True)
 
-        def on_pretrain_routine_start(trainer: Any) -> None:
+        def _maybe_patch(trainer: Any, stage: str, require_model: bool) -> None:
+            if not hasattr(trainer, "model"):
+                msg = f"{stage}: trainer.model unavailable"
+                if require_model:
+                    _audit_fail(msg)
+                _audit_append(msg)
+                return
+            if getattr(trainer, "_enhance241_patched", False):
+                return
             trainer.model = apply_enhance241(trainer.model)
+            setattr(trainer, "_enhance241_patched", True)
             seq = _get_model_seq(trainer.model)
             _audit_append(
-                f"trainer_patch: concat_candidates={_concat_candidates(seq)} patched={_patched_nodes(seq)}"
+                f"{stage}_patch: concat_candidates={_concat_candidates(seq)} patched={_patched_nodes(seq)}"
             )
             torch_model = _get_torch_model(trainer.model)
             if torch_model is None:
-                _audit_fail("trainer.model is not a torch module")
+                _audit_fail(f"{stage}: trainer.model is not a torch module")
             keys = list(torch_model.state_dict().keys())
-            _assert_keywords(keys, audit_keywords, "trainer.model after patch")
+            _assert_keywords(keys, audit_keywords, f"{stage} trainer.model after patch")
+
+        def on_pretrain_routine_start(trainer: Any) -> None:
+            _maybe_patch(trainer, "pretrain_start", require_model=False)
 
         def on_train_start(trainer: Any) -> None:
+            _maybe_patch(trainer, "train_start", require_model=True)
             opt = getattr(trainer, "optimizer", None)
             if opt is None:
                 _audit_fail("optimizer missing at train_start")
