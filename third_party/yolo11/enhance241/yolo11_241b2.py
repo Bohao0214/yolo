@@ -213,15 +213,16 @@ class P4P3GateAlignFuse(torch.nn.Module):
             else:
                 print(f"[enhance241] b2 v2 align: {self.align}")
 
-        # Run b2 path in fp32 to avoid AMP half/float bias mismatches.
+        # Run b2 path in the current module-parameter dtype (fp32/fp16) to stay valid
+        # across both training and validation precision modes.
         orig_dtype = p3.dtype
-        with torch.amp.autocast(device_type=p3.device.type, enabled=False):
-            p3_conv = p3.float()
-            p4_conv = p4_up.float()
-            p4_aligned = self._align(p4_conv, p3_conv)
-            fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3_conv), dim=1)))
-            gate = torch.sigmoid(self.enhance241_b2_gate.float())
-            p3_out = p3_conv + gate * fused
+        run_dtype = self.enhance241_b2_fuse.weight.dtype
+        p3_conv = p3 if p3.dtype == run_dtype else p3.to(run_dtype)
+        p4_conv = p4_up if p4_up.dtype == run_dtype else p4_up.to(run_dtype)
+        p4_aligned = self._align(p4_conv, p3_conv)
+        fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3_conv), dim=1)))
+        gate = torch.sigmoid(self.enhance241_b2_gate if self.enhance241_b2_gate.dtype == run_dtype else self.enhance241_b2_gate.to(run_dtype))
+        p3_out = p3_conv + gate * fused
 
         # Cast results back to original dtype for downstream layers.
         if p4_aligned.dtype != orig_dtype:
