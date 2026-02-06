@@ -153,10 +153,22 @@ class P4P3GateAlignFuse(torch.nn.Module):
 
     def _align(self, p4_up: torch.Tensor, p3: torch.Tensor) -> torch.Tensor:
         if self.align == "dcn" and self.enhance241_b2_dcn is not None and self.enhance241_b2_offset is not None:
-            offset = self.enhance241_b2_offset(torch.cat((p3, p4_up), dim=1))
-            return self.enhance241_b2_dcn(p4_up, offset)
+            # Keep dtype aligned with offset/DCN params under AMP.
+            offset_dtype = self.enhance241_b2_offset.weight.dtype
+            p3_off = p3 if p3.dtype == offset_dtype else p3.to(offset_dtype)
+            p4_off = p4_up if p4_up.dtype == offset_dtype else p4_up.to(offset_dtype)
+            offset = self.enhance241_b2_offset(torch.cat((p3_off, p4_off), dim=1))
+            dcn_dtype = self.enhance241_b2_dcn.weight.dtype
+            p4_dcn = p4_off if p4_off.dtype == dcn_dtype else p4_off.to(dcn_dtype)
+            offset_dcn = offset if offset.dtype == dcn_dtype else offset.to(dcn_dtype)
+            out = self.enhance241_b2_dcn(p4_dcn, offset_dcn)
+            return out if out.dtype == p4_up.dtype else out.to(p4_up.dtype)
         if self.align == "flow" and self.enhance241_b2_flow is not None:
-            flow = torch.tanh(self.enhance241_b2_flow(torch.cat((p3, p4_up), dim=1))) * self.flow_max
+            # Keep dtype aligned with flow conv params under AMP.
+            flow_dtype = self.enhance241_b2_flow.weight.dtype
+            p3_flow = p3 if p3.dtype == flow_dtype else p3.to(flow_dtype)
+            p4_flow = p4_up if p4_up.dtype == flow_dtype else p4_up.to(flow_dtype)
+            flow = torch.tanh(self.enhance241_b2_flow(torch.cat((p3_flow, p4_flow), dim=1))) * self.flow_max
             b, _, h, w = flow.shape
             grid_y, grid_x = torch.meshgrid(
                 torch.linspace(-1.0, 1.0, h, device=flow.device, dtype=flow.dtype),
@@ -175,9 +187,11 @@ class P4P3GateAlignFuse(torch.nn.Module):
             else:
                 flow_norm = torch.stack((flow[:, 0] * 0.0, flow[:, 1] * 0.0), dim=-1)
             grid = base + flow_norm
-            return torch.nn.functional.grid_sample(
-                p4_up, grid, mode="bilinear", padding_mode="border", align_corners=True
+            p4_gs = p4_flow if p4_flow.dtype == flow.dtype else p4_flow.to(flow.dtype)
+            out = torch.nn.functional.grid_sample(
+                p4_gs, grid, mode="bilinear", padding_mode="border", align_corners=True
             )
+            return out if out.dtype == p4_up.dtype else out.to(p4_up.dtype)
         return p4_up
 
     def forward(self, x: Any) -> torch.Tensor:
