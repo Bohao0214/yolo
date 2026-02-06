@@ -71,5 +71,10 @@ enhance241:
   b1_weight_hidden: 64
   b1_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
   b1_upsample: "nearest"
+  b2_align: "dcn"         # dcn | flow | off
+  b2_beta_init: 0.05
+  b2_flow_max: 2.0        # 像素级最大位移（flow 模式用）
+  b2_refine: "dw"         # dw=depthwise separable, conv=普通3x3
+  b2_upsample: "nearest"
   c1: false
   d1: false

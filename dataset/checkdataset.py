@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -138,6 +139,11 @@ class YoloReviewer:
         self.pending_patch: Optional[Rectangle] = None
         self.box_patches: List[Rectangle] = []
 
+        self.mapping_path = self.out_root / "mapping.csv"
+        self.mapping: Dict[Path, Path] = {}
+        self.next_id = 1
+        self._load_mapping()
+
         self.fig, self.ax = plt.subplots()
         self.fig.patch.set_facecolor("white")
         self.ax.set_facecolor("white")
@@ -172,6 +178,59 @@ class YoloReviewer:
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
 
         self.load_current()
+
+    def _load_mapping(self) -> None:
+        if not self.mapping_path.exists():
+            return
+        max_id = 0
+        with open(self.mapping_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                src_rel = row.get("src_rel") or ""
+                dst_rel_image = row.get("dst_rel_image") or ""
+                if not src_rel or not dst_rel_image:
+                    continue
+                src_path = Path(src_rel)
+                dst_path = Path(dst_rel_image)
+                self.mapping[src_path] = dst_path
+                stem = dst_path.stem
+                if stem.isdigit():
+                    max_id = max(max_id, int(stem))
+        if max_id > 0:
+            self.next_id = max_id + 1
+
+    def _ensure_mapping_file(self) -> None:
+        if self.mapping_path.exists():
+            return
+        self.mapping_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.mapping_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "src_rel", "dst_rel_image", "dst_rel_label"])
+
+    def _allocate_id(self) -> str:
+        current = self.next_id
+        self.next_id += 1
+        return f"{current:04d}"
+
+    def _output_rel_image(self, rel: Path, suffix: str) -> Path:
+        parent = rel.parent
+        new_name = f"{self._allocate_id()}{suffix}"
+        return parent / new_name
+
+    def _label_rel_from_image_rel(self, image_rel: Path) -> Path:
+        if image_rel.parts and image_rel.parts[0] == "images":
+            return Path("labels") / Path(*image_rel.parts[1:]).with_suffix(".txt")
+        return Path("labels") / image_rel.with_suffix(".txt")
+
+    def _get_output_paths(self, rel: Path) -> Tuple[Path, Path, Optional[str]]:
+        if rel in self.mapping:
+            dst_rel_image = self.mapping[rel]
+            dst_rel_label = self._label_rel_from_image_rel(dst_rel_image)
+            return dst_rel_image, dst_rel_label, None
+        dst_rel_image = self._output_rel_image(rel, rel.suffix)
+        dst_rel_label = self._label_rel_from_image_rel(dst_rel_image)
+        new_id = dst_rel_image.stem
+        return dst_rel_image, dst_rel_label, new_id
 
     def _init_selector(self) -> None:
         props = dict(edgecolor="yellow", linewidth=1.5, fill=False, linestyle="--")
@@ -227,9 +286,16 @@ class YoloReviewer:
         if path in self.boxes_cache:
             return self.boxes_cache[path]
 
-        out_label = label_path_for(path, self.root, self.out_root / "labels")
+        rel = rel_image_path(path, self.root)
+        out_label = None
+        if rel in self.mapping:
+            mapped_label_rel = self._label_rel_from_image_rel(self.mapping[rel])
+            out_label = self.out_root / mapped_label_rel
         src_label = label_path_for(path, self.root, self.root / "labels")
-        label_path = out_label if out_label.exists() else src_label
+        if out_label is not None and out_label.exists():
+            label_path = out_label
+        else:
+            label_path = src_label
         boxes = parse_yolo_labels(label_path)
         self.boxes_cache[path] = boxes
         return boxes
@@ -335,15 +401,22 @@ class YoloReviewer:
     def save_current(self) -> None:
         if self.current_path is None:
             return
-        try:
-            rel = self.current_path.relative_to(self.root / "images")
-        except ValueError:
-            rel = self.current_path.relative_to(self.root)
-        out_image = self.out_root / "images" / rel
-        out_label = self.out_root / "labels" / rel.with_suffix(".txt")
+        rel = rel_image_path(self.current_path, self.root)
+        dst_rel_image, dst_rel_label, new_id = self._get_output_paths(rel)
+        out_image = self.out_root / dst_rel_image
+        out_label = self.out_root / dst_rel_label
         out_image.parent.mkdir(parents=True, exist_ok=True)
+        out_label.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.current_path, out_image)
         save_yolo_labels(out_label, self.get_boxes(self.current_path))
+
+        if new_id is not None:
+            self.mapping[rel] = dst_rel_image
+            self._ensure_mapping_file()
+            with open(self.mapping_path, "a", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([new_id, rel.as_posix(), dst_rel_image.as_posix(), dst_rel_label.as_posix()])
+
         self.dirty.discard(self.current_path)
         self.update_overlay()
         self.fig.canvas.draw_idle()
@@ -403,14 +476,14 @@ def main() -> None:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("dataset/raw/dataset1"),
-        help="Input dataset root (default: dataset/raw/dataset1)",
+        default=Path("/home/ubuntu/hpproject/yolo/dataset/raw/dataset1"),
+        help="Input dataset root (default: /home/ubuntu/hpproject/yolo/dataset/raw/dataset1)",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("dataset/raw/dataset1c"),
-        help="Output dataset root (default: dataset/raw/dataset1c)",
+        default=Path("/home/ubuntu/hpproject/yolo/dataset/raw/dataset1c"),
+        help="Output dataset root (default: /home/ubuntu/hpproject/yolo/dataset/raw/dataset1c)",
     )
     args = parser.parse_args()
 
