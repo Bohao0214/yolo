@@ -27,10 +27,9 @@ import datetime as dt
 import gc
 import json
 import shutil
-import subprocess  # enhance241-audit
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -103,217 +102,6 @@ def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None
     merged["config_path"] = str(cfg_path)
     with open(args_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(merged, f, sort_keys=False, allow_unicode=True)
-
-
-AUDIT_PATH: Optional[Path] = None  # enhance241-audit
-
-
-def _set_audit_path(exp_dir: Path) -> None:
-    # enhance241-audit
-    global AUDIT_PATH
-    AUDIT_PATH = (exp_dir / "train" / "enhance_audit.md").resolve()
-
-
-def _audit_append(text: str) -> None:
-    """Append audit text block to enhance_audit.md."""
-    # enhance241-audit
-    if AUDIT_PATH is None:
-        raise RuntimeError("enhance241 audit path is not initialized")
-    AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(AUDIT_PATH, "a", encoding="utf-8") as f:
-        f.write(text.rstrip() + "\n")
-
-
-def _audit_fail(reason: str) -> None:
-    # enhance241-audit
-    _audit_append(f"FAIL: {reason}")
-    raise RuntimeError(reason)
-
-
-def _git_commit(project_root: Path) -> str:
-    # enhance241-audit
-    try:
-        out = subprocess.check_output(
-            ["git", "-C", str(project_root), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
-        )
-        return out.decode("utf-8", errors="ignore").strip()
-    except Exception:
-        return "unknown"
-
-
-def _get_model_seq(obj: Any) -> Optional[Any]:
-    # enhance241-audit
-    det = getattr(obj, "model", None)
-    if det is None:
-        return None
-    if hasattr(det, "model"):
-        return getattr(det, "model", None)
-    return det
-
-
-def _get_torch_model(obj: Any) -> Optional[Any]:
-    # enhance241-audit
-    det = getattr(obj, "model", None)
-    if det is not None and hasattr(det, "state_dict"):
-        return det
-    if hasattr(obj, "state_dict"):
-        return obj
-    return None
-
-
-def _concat_candidates(seq: Optional[Any]) -> List[str]:
-    # enhance241-audit
-    if seq is None:
-        return []
-    out: List[str] = []
-    for i, layer in enumerate(seq):
-        if layer.__class__.__name__ == "Concat":
-            out.append(f"{i}:{getattr(layer, 'f', None)}")
-    return out
-
-
-def _patched_nodes(seq: Optional[Any]) -> List[str]:
-    # enhance241-audit
-    if seq is None:
-        return []
-    targets = {"P3ASFFLiteFuse", "P4P3GateAlignFuse", "P3FuseChain"}
-    out: List[str] = []
-    for i, layer in enumerate(seq):
-        if layer.__class__.__name__ in targets:
-            out.append(f"{i}:{layer.__class__.__name__}")
-    return out
-
-
-def _state_dict_keys_from_ckpt(ckpt_path: Path) -> List[str]:
-    # enhance241-audit
-    import torch
-
-    try:
-        ckpt = torch.load(str(ckpt_path), map_location="cpu")
-    except Exception as exc:
-        # PyTorch 2.6+ defaults to weights_only=True, which can reject Ultralytics objects.
-        # For local training artifacts we trust, retry with weights_only=False.
-        if "Weights only load failed" not in str(exc):
-            raise
-        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-    keys: List[str] = []
-    if isinstance(ckpt, dict):
-        model_obj = ckpt.get("model")
-        if model_obj is None:
-            model_obj = ckpt.get("ema")
-        if model_obj is not None:
-            if hasattr(model_obj, "state_dict"):
-                keys = list(model_obj.state_dict().keys())
-            elif isinstance(model_obj, dict):
-                keys = list(model_obj.keys())
-        elif isinstance(ckpt.get("state_dict"), dict):
-            keys = list(ckpt["state_dict"].keys())
-        else:
-            keys = list(ckpt.keys())
-    elif hasattr(ckpt, "state_dict"):
-        keys = list(ckpt.state_dict().keys())
-    return keys
-
-
-def _has_keywords(keys: List[str], keywords: List[str]) -> bool:
-    # enhance241-audit
-    if not keywords:
-        return False
-    keyset = "\n".join(keys)
-    return any(k in keyset for k in keywords)
-
-
-def _assert_keywords(keys: List[str], keywords: List[str], context: str) -> None:
-    # enhance241-audit
-    if not keywords:
-        _audit_fail(f"{context}: audit keywords empty")
-    hit_keys = [k for k in keywords if any(k in state_key for state_key in keys)]
-    if not hit_keys:
-        _audit_fail(f"{context}: none of audit keywords matched {keywords}")
-    sample_hits: List[str] = []
-    for state_key in keys:
-        if any(k in state_key for k in hit_keys):
-            sample_hits.append(state_key)
-        if len(sample_hits) >= 5:
-            break
-    _audit_append(
-        f"{context}: keyword_hits={hit_keys} sample_keys={sample_hits}"
-    )
-
-
-def _trainable_param_stats(model: Any, keywords: List[str]) -> Dict[str, int]:
-    # enhance241-audit
-    torch_model = _get_torch_model(model)
-    if torch_model is None:
-        return {"matched": 0, "trainable": 0, "trainable_numel": 0, "total_numel": 0}
-    matched = []
-    for name, param in torch_model.named_parameters():
-        if any(k in name for k in keywords):
-            matched.append((name, param))
-    trainable = [(n, p) for n, p in matched if p.requires_grad]
-    return {
-        "matched": len(matched),
-        "trainable": len(trainable),
-        "trainable_numel": int(sum(p.numel() for _, p in trainable)),
-        "total_numel": int(sum(p.numel() for _, p in matched)),
-    }
-
-
-def _ensure_optimizer_contains_keywords(opt: Any, model: Any, keywords: List[str]) -> Dict[str, int]:
-    # enhance241-audit
-    torch_model = _get_torch_model(model)
-    if torch_model is None:
-        _audit_fail("optimizer check: no torch model available")
-    params = [p for n, p in torch_model.named_parameters() if any(k in n for k in keywords)]
-    if not params:
-        _audit_fail("optimizer check: no enhance241 params found in model.named_parameters()")
-    opt_params = {id(p) for g in opt.param_groups for p in g.get("params", [])}
-    missing = [p for p in params if id(p) not in opt_params]
-    if missing:
-        opt.add_param_group({"params": list(missing)})
-        opt_params = {id(p) for g in opt.param_groups for p in g.get("params", [])}
-    still_missing = [p for p in params if id(p) not in opt_params]
-    if still_missing:
-        _audit_fail(f"optimizer check: {len(still_missing)} enhance241 params still missing in optimizer")
-    return {"params": len(params), "added": len(missing)}
-
-
-def _summarize_csv_files(dir_path: Path) -> List[str]:
-    # enhance241-audit
-    if not dir_path.exists():
-        return []
-    out: List[str] = []
-    for p in sorted(dir_path.glob("*.csv")):
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                lines = sum(1 for _ in f)
-        except Exception:
-            lines = -1
-        try:
-            mtime = dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            mtime = "unknown"
-        out.append(f"{p.name} lines={lines} mtime={mtime}")
-    return out
-
-
-def _ckpt_context(path: Path) -> str:
-    # enhance241-audit
-    p = path.resolve()
-    parent = p.parent
-    grand_parent = parent.parent if parent.parent != parent else parent
-    return f"{p} (parent={parent.name}, grand_parent={grand_parent.name})"
-
-
-def _pick_existing_ckpt(primary: Path, fallback: Path) -> Optional[Path]:
-    # enhance241-audit
-    p1 = primary.resolve()
-    p2 = fallback.resolve()
-    if p1.exists():
-        return p1
-    if p2.exists():
-        return p2
-    return None
 
 
 def build_data_yaml(
@@ -405,21 +193,6 @@ def main() -> None:
         timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
         exp_dir = exp_root / f"exp_{timestamp}"
     exp_dir.mkdir(parents=True, exist_ok=True)
-    _set_audit_path(exp_dir)  # enhance241-audit
-    audit_ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cmdline = " ".join(sys.argv) if sys.argv else ""
-    _audit_append(
-        "\n".join(
-            [
-                "",
-                f"## Run {audit_ts}",
-                f"cmd: {cmdline or 'unknown'}",
-                f"git: {_git_commit(project_root)}",
-                f"exp_dir: {exp_dir}",
-                f"config: {cfg_path}",
-            ]
-        )
-    )  # enhance241-audit
 
     data_yaml = Path(cfg.get("data", project_root / "configs" / "data" / "defect.yaml")).resolve()
     data_root_cfg = cfg.get("data_root", "")
@@ -463,58 +236,6 @@ def main() -> None:
     max_det = int(cfg.get("max_det", 300))
     match_iou = float(cfg.get("match_iou", 0.5))
     image_conf = float(cfg.get("image_conf", conf))
-    _audit_append(
-        "\n".join(
-            [
-                f"data: {data_yaml}",
-                f"model: {model_path}",
-                f"weights: {weights_path or ''}",
-                f"epochs: {epochs} imgsz: {imgsz} batch: {batch}",
-                f"postprocess: conf={image_conf:.4f} nms_iou={nms_iou:.4f} max_det={max_det} match_iou={match_iou:.4f}",
-                f"metric_conf: {metric_conf:.4f} eval_batch: {eval_batch} eval_device: {eval_device or device}",
-            ]
-        )
-    )  # enhance241-audit
-
-    enhance241_cfg = cfg.get("enhance241", {}) or {}
-    if not isinstance(enhance241_cfg, dict):
-        raise ValueError("enhance241 must be a mapping when provided in config.")
-    known_flags = {"b1", "b2", "a2", "c1", "d1"}
-    enabled_switches = sorted([k for k in known_flags if bool(enhance241_cfg.get(k, False))])
-    enable_b1 = bool(enhance241_cfg.get("b1", False))
-    enable_b2 = bool(enhance241_cfg.get("b2", False))
-    audit_keywords: List[str] = []
-    audit_kw_cfg = enhance241_cfg.get("audit_keywords", [])
-    if isinstance(audit_kw_cfg, str):
-        audit_keywords.extend([k.strip() for k in audit_kw_cfg.split(",") if k.strip()])
-    elif isinstance(audit_kw_cfg, (list, tuple)):
-        audit_keywords.extend([str(k).strip() for k in audit_kw_cfg if str(k).strip()])
-    if enable_b1:
-        try:
-            from third_party.yolo11.enhance241.yolo11_241b1 import ENHANCE241_AUDIT_KEYS
-
-            audit_keywords.extend(list(ENHANCE241_AUDIT_KEYS))
-        except Exception:
-            pass
-    if enable_b2:
-        try:
-            from third_party.yolo11.enhance241.yolo11_241b2 import ENHANCE241_AUDIT_KEYS
-
-            audit_keywords.extend(list(ENHANCE241_AUDIT_KEYS))
-        except Exception:
-            pass
-    if (enable_b1 or enable_b2) and not audit_keywords:
-        audit_keywords = ["enhance241_b1", "enhance241_b2"]
-    audit_keywords = sorted({k for k in audit_keywords if k})
-    _audit_append(
-        "\n".join(
-            [
-                f"enhance241_enabled: {enabled_switches}",
-                f"enhance241_cfg: {json.dumps(enhance241_cfg, ensure_ascii=False)}",
-                f"audit_keywords: {audit_keywords}",
-            ]
-        )
-    )  # enhance241-audit
 
     # Persist a minimal, reproducible run meta for traceability.
     try:
@@ -525,7 +246,6 @@ def main() -> None:
         meta = {
             "eval_standard": "P2.3.0",
             "config_path": str(cfg_path),
-            "enhance241_enabled": enabled_switches,
             "postprocess": {
                 "conf": conf,
                 "conf_threshold": image_conf,
@@ -549,98 +269,7 @@ def main() -> None:
 
     from ultralytics import YOLO
 
-    def apply_enhance241(yolo_model: Any) -> Any:
-        if not enabled_switches:
-            return yolo_model
-        unsupported = [
-            k
-            for k, v in enhance241_cfg.items()
-            if k not in known_flags and isinstance(v, bool) and v
-        ]
-        if unsupported:
-            raise RuntimeError(f"Unsupported enhance241 switches enabled: {unsupported}. Only b1/b2 are supported.")
-        if enable_b1:
-            try:
-                from third_party.yolo11.enhance241.yolo11_241b1 import apply as apply_241b1
-            except Exception as exc:
-                raise RuntimeError(
-                    "enhance241.b1 is enabled but module import failed: "
-                    "third_party.yolo11.enhance241.yolo11_241b1"
-                ) from exc
-            yolo_model = apply_241b1(yolo_model, cfg)
-        if enable_b2:
-            try:
-                from third_party.yolo11.enhance241.yolo11_241b2 import apply as apply_241b2
-            except Exception as exc:
-                raise RuntimeError(
-                    "enhance241.b2 is enabled but module import failed: "
-                    "third_party.yolo11.enhance241.yolo11_241b2"
-                ) from exc
-            yolo_model = apply_241b2(yolo_model, cfg)
-        return yolo_model
-
-    def _attach_audit_callbacks(yolo_model: Any) -> None:
-        # enhance241-audit
-        if not (enable_b1 or enable_b2):
-            return
-        if not hasattr(yolo_model, "add_callback"):
-            _audit_fail("enhance241 audit requires YOLO.add_callback but it is unavailable.")
-        if getattr(yolo_model, "_enhance241_audit_cb", False):
-            return
-        setattr(yolo_model, "_enhance241_audit_cb", True)
-
-        def _maybe_patch(trainer: Any, stage: str, require_model: bool) -> None:
-            if not hasattr(trainer, "model"):
-                msg = f"{stage}: trainer.model unavailable"
-                if require_model:
-                    _audit_fail(msg)
-                _audit_append(msg)
-                return
-            if getattr(trainer, "_enhance241_patched", False):
-                return
-            trainer.model = apply_enhance241(trainer.model)
-            setattr(trainer, "_enhance241_patched", True)
-            seq = _get_model_seq(trainer.model)
-            _audit_append(
-                f"{stage}_patch: concat_candidates={_concat_candidates(seq)} patched={_patched_nodes(seq)}"
-            )
-            torch_model = _get_torch_model(trainer.model)
-            if torch_model is None:
-                _audit_fail(f"{stage}: trainer.model is not a torch module")
-            keys = list(torch_model.state_dict().keys())
-            _assert_keywords(keys, audit_keywords, f"{stage} trainer.model after patch")
-
-        def on_pretrain_routine_start(trainer: Any) -> None:
-            _maybe_patch(trainer, "pretrain_start", require_model=False)
-
-        def on_train_start(trainer: Any) -> None:
-            _maybe_patch(trainer, "train_start", require_model=True)
-            opt = getattr(trainer, "optimizer", None)
-            if opt is None:
-                _audit_fail("optimizer missing at train_start")
-            res = _ensure_optimizer_contains_keywords(opt, trainer.model, audit_keywords)
-            _audit_append(f"optimizer_check: params={res['params']} added={res['added']}")
-            # Keep EMA branch structurally aligned so best.pt also carries enhance params.
-            ema_obj = getattr(trainer, "ema", None)
-            ema_model = getattr(ema_obj, "ema", None) if ema_obj is not None else None
-            if ema_model is not None:
-                ema_model = apply_enhance241(ema_model)
-                setattr(ema_obj, "ema", ema_model)
-                try:
-                    ema_model.load_state_dict(trainer.model.state_dict(), strict=False)
-                except Exception as exc:
-                    _audit_fail(f"ema sync failed after enhance patch: {exc}")
-                ema_keys = list(ema_model.state_dict().keys())
-                _assert_keywords(ema_keys, audit_keywords, "train_start ema_model after patch")
-                _audit_append("ema_sync: patched and synced from trainer.model")
-            else:
-                _audit_append("ema_sync: skipped (trainer.ema.ema not available)")
-
-        yolo_model.add_callback("on_pretrain_routine_start", on_pretrain_routine_start)
-        yolo_model.add_callback("on_train_start", on_train_start)
-
     mode = str(cfg.get("mode", "train_test")).lower()
-    _audit_append(f"mode: {mode}")  # enhance241-audit
     if mode == "test" and not weights_path:
         raise ValueError("mode=test requires weights in config.")
 
@@ -661,28 +290,7 @@ def main() -> None:
             print(f"Downloading to: {cache_path}")
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
-    _audit_append(f"init_weights: {_ckpt_context(Path(init_weights).resolve())}")  # enhance241-audit
     model = YOLO(init_weights)
-    pre_seq = _get_model_seq(model)
-    _audit_append(
-        f"pre_patch: concat_candidates={_concat_candidates(pre_seq)} patched={_patched_nodes(pre_seq)}"
-    )  # enhance241-audit
-    model = apply_enhance241(model)
-    post_seq = _get_model_seq(model)
-    _audit_append(
-        f"post_patch: concat_candidates={_concat_candidates(post_seq)} patched={_patched_nodes(post_seq)}"
-    )  # enhance241-audit
-    if enable_b1 or enable_b2:
-        torch_model = _get_torch_model(model)
-        if torch_model is None:
-            _audit_fail("post_patch: model is not a torch module")
-        _assert_keywords(list(torch_model.state_dict().keys()), audit_keywords, "post_patch model")
-        stats = _trainable_param_stats(model, audit_keywords)
-        _audit_append(
-            f"trainable_params: matched={stats['matched']} trainable={stats['trainable']} "
-            f"trainable_numel={stats['trainable_numel']} total_numel={stats['total_numel']}"
-        )
-    _attach_audit_callbacks(model)  # enhance241-audit
     if mode in {"train_test", "finetune_test"}:
         try:
             model.train(
@@ -696,6 +304,16 @@ def main() -> None:
                 lr0=lr0,
                 lrf=lrf,
                 warmup_epochs=warmup_epochs,
+                conf=conf,
+                iou=nms_iou,
+                max_det=max_det,
+                optimizer=str(cfg.get("optimizer", "auto")),
+                seed=seed,
+                deterministic=bool(cfg.get("deterministic", True)),
+                pretrained=bool(cfg.get("pretrained", True)),
+                resume=bool(cfg.get("resume", False)),
+                amp=bool(cfg.get("amp", True)),
+                close_mosaic=int(cfg.get("close_mosaic", 10)),
                 project=str(exp_dir),
                 name="train",
                 exist_ok=True,
@@ -710,18 +328,7 @@ def main() -> None:
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
     if mode in {"train_test", "finetune_test"}:
-        last_weights = (exp_dir / "train" / "weights" / "last.pt")
-        eval_weights = _pick_existing_ckpt(best_weights, last_weights)
-        if eval_weights is None:
-            _audit_fail(
-                f"eval_weights missing: tried best={best_weights.resolve()} and last={last_weights.resolve()}"
-            )  # enhance241-audit
-        if not best_weights.exists():
-            _audit_append(f"path_note: best.pt missing, fallback_to={eval_weights}")  # enhance241-audit
-        _audit_append(f"eval_weights: {_ckpt_context(eval_weights)}")  # enhance241-audit
-        if enable_b1 or enable_b2:
-            ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
-            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {_ckpt_context(eval_weights)}")
+        eval_weights = best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")
         # Release training model before evaluation to reduce GPU memory pressure.
         try:
             del model
@@ -736,33 +343,14 @@ def main() -> None:
             pass
         gc.collect()
         model = YOLO(str(eval_weights))
-        model = apply_enhance241(model)
-        if enable_b1 or enable_b2:
-            torch_model = _get_torch_model(model)
-            if torch_model is None:
-                _audit_fail("eval model is not a torch module after reload")
-            _assert_keywords(list(torch_model.state_dict().keys()), audit_keywords, "eval model after patch")
     elif mode == "test":
-        test_weight = Path(weights_path).resolve()
-        cached = resolve_pretrained_weight(project_root, test_weight.name).resolve()
-        eval_weights = _pick_existing_ckpt(test_weight, cached)
-        if eval_weights is None:
-            _audit_fail(
-                f"eval_weights missing: tried primary={test_weight} and cached={cached}"
-            )  # enhance241-audit
-        if not test_weight.exists():
-            _audit_append(f"path_note: test weight missing, fallback_to={eval_weights}")  # enhance241-audit
-        _audit_append(f"eval_weights: {_ckpt_context(eval_weights)}")  # enhance241-audit
-        if enable_b1 or enable_b2:
-            ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
-            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {_ckpt_context(eval_weights)}")
+        test_weight = Path(weights_path)
+        if test_weight.exists():
+            eval_weights = test_weight
+        else:
+            cached = resolve_pretrained_weight(project_root, test_weight.name)
+            eval_weights = cached
         model = YOLO(str(eval_weights))
-        model = apply_enhance241(model)
-        if enable_b1 or enable_b2:
-            torch_model = _get_torch_model(model)
-            if torch_model is None:
-                _audit_fail("test model is not a torch module after patch")
-            _assert_keywords(list(torch_model.state_dict().keys()), audit_keywords, "test model after patch")
 
     # Resolve split sources across one or multiple dataset roots.
     data_info_cfg = load_yaml(data_yaml)
@@ -788,7 +376,6 @@ def main() -> None:
     fix_list = sweep_cfg.get("fix_list", [0.1, 0.2, 0.3, 0.4])
     curve_range = sweep_cfg.get("curve", [0.01, 0.01, 1.00])
     table_range = sweep_cfg.get("table", [0.00, 0.05, 1.00])
-    _audit_append(f"threshold_sweep: {json.dumps(sweep_cfg, ensure_ascii=False)}")  # enhance241-audit
 
     if not isinstance(fix_list, (list, tuple)):
         fix_list = [fix_list]
@@ -1115,13 +702,6 @@ def main() -> None:
             "eval_device": str(eval_device),
         }
         save_image_level_report(metrics_dir, "eval", val_items + test_items, meta)
-
-    csv_summary = _summarize_csv_files(metrics_dir)
-    if csv_summary:
-        _audit_append("eval_outputs:\n" + "\n".join(csv_summary))  # enhance241-audit
-    else:
-        _audit_append("eval_outputs: none")  # enhance241-audit
-    _audit_append("PASS")  # enhance241-audit
 
     if mode in {"train_test", "finetune_test"}:
         model_dir = project_root / "models" / exp_name
