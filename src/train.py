@@ -182,7 +182,14 @@ def _state_dict_keys_from_ckpt(ckpt_path: Path) -> List[str]:
     # enhance241-audit
     import torch
 
-    ckpt = torch.load(str(ckpt_path), map_location="cpu")
+    try:
+        ckpt = torch.load(str(ckpt_path), map_location="cpu")
+    except Exception as exc:
+        # PyTorch 2.6+ defaults to weights_only=True, which can reject Ultralytics objects.
+        # For local training artifacts we trust, retry with weights_only=False.
+        if "Weights only load failed" not in str(exc):
+            raise
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
     keys: List[str] = []
     if isinstance(ckpt, dict):
         model_obj = ckpt.get("model")
