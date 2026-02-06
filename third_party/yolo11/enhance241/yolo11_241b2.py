@@ -336,6 +336,12 @@ def apply(model: Any, cfg: Any) -> Any:
     if seq is None:
         raise RuntimeError("enhance241.b2 requires an ultralytics YOLO/DetectionModel-like object with a .model sequence.")
 
+    # If checkpoint already contains b2 patch, avoid re-patching and hard-fail on Concat lookup.
+    prepatched = [i for i, layer in enumerate(seq) if isinstance(layer, (P4P3GateAlignFuse, P3FuseChain))]
+    if prepatched:
+        print(f"[enhance241] b2 v2 enabled: already patched at model.model indices={prepatched}")
+        return yolo_obj
+
     fuse_idx, _ = _locate_p4_to_p3_fuse(seq)
     if fuse_idx < 0 or fuse_idx >= len(seq):
         raise RuntimeError(f"Invalid fuse_idx={fuse_idx} for model length={len(seq)}")
