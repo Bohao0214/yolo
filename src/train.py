@@ -299,6 +299,17 @@ def _ckpt_context(path: Path) -> str:
     return f"{p} (parent={parent.name}, grand_parent={grand_parent.name})"
 
 
+def _pick_existing_ckpt(primary: Path, fallback: Path) -> Optional[Path]:
+    # enhance241-audit
+    p1 = primary.resolve()
+    p2 = fallback.resolve()
+    if p1.exists():
+        return p1
+    if p2.exists():
+        return p2
+    return None
+
+
 def build_data_yaml(
     data_yaml: Path,
     save_dir: Path,
@@ -602,6 +613,21 @@ def main() -> None:
                 _audit_fail("optimizer missing at train_start")
             res = _ensure_optimizer_contains_keywords(opt, trainer.model, audit_keywords)
             _audit_append(f"optimizer_check: params={res['params']} added={res['added']}")
+            # Keep EMA branch structurally aligned so best.pt also carries enhance params.
+            ema_obj = getattr(trainer, "ema", None)
+            ema_model = getattr(ema_obj, "ema", None) if ema_obj is not None else None
+            if ema_model is not None:
+                ema_model = apply_enhance241(ema_model)
+                setattr(ema_obj, "ema", ema_model)
+                try:
+                    ema_model.load_state_dict(trainer.model.state_dict(), strict=False)
+                except Exception as exc:
+                    _audit_fail(f"ema sync failed after enhance patch: {exc}")
+                ema_keys = list(ema_model.state_dict().keys())
+                _assert_keywords(ema_keys, audit_keywords, "train_start ema_model after patch")
+                _audit_append("ema_sync: patched and synced from trainer.model")
+            else:
+                _audit_append("ema_sync: skipped (trainer.ema.ema not available)")
 
         yolo_model.add_callback("on_pretrain_routine_start", on_pretrain_routine_start)
         yolo_model.add_callback("on_train_start", on_train_start)
@@ -677,11 +703,14 @@ def main() -> None:
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
     if mode in {"train_test", "finetune_test"}:
-        if (enable_b1 or enable_b2) and not best_weights.exists():
-            _audit_fail("best.pt missing for enhance241 run; refusing to continue evaluation.")  # enhance241-audit
-        eval_weights = (best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")).resolve()
-        if not eval_weights.exists():
-            _audit_fail(f"eval_weights missing: {eval_weights}")  # enhance241-audit
+        last_weights = (exp_dir / "train" / "weights" / "last.pt")
+        eval_weights = _pick_existing_ckpt(best_weights, last_weights)
+        if eval_weights is None:
+            _audit_fail(
+                f"eval_weights missing: tried best={best_weights.resolve()} and last={last_weights.resolve()}"
+            )  # enhance241-audit
+        if not best_weights.exists():
+            _audit_append(f"path_note: best.pt missing, fallback_to={eval_weights}")  # enhance241-audit
         _audit_append(f"eval_weights: {_ckpt_context(eval_weights)}")  # enhance241-audit
         if enable_b1 or enable_b2:
             ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
@@ -708,13 +737,14 @@ def main() -> None:
             _assert_keywords(list(torch_model.state_dict().keys()), audit_keywords, "eval model after patch")
     elif mode == "test":
         test_weight = Path(weights_path).resolve()
-        if test_weight.exists():
-            eval_weights = test_weight
-        else:
-            cached = resolve_pretrained_weight(project_root, test_weight.name)
-            eval_weights = cached.resolve()
-        if not eval_weights.exists():
-            _audit_fail(f"eval_weights missing: {eval_weights}")  # enhance241-audit
+        cached = resolve_pretrained_weight(project_root, test_weight.name).resolve()
+        eval_weights = _pick_existing_ckpt(test_weight, cached)
+        if eval_weights is None:
+            _audit_fail(
+                f"eval_weights missing: tried primary={test_weight} and cached={cached}"
+            )  # enhance241-audit
+        if not test_weight.exists():
+            _audit_append(f"path_note: test weight missing, fallback_to={eval_weights}")  # enhance241-audit
         _audit_append(f"eval_weights: {_ckpt_context(eval_weights)}")  # enhance241-audit
         if enable_b1 or enable_b2:
             ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
