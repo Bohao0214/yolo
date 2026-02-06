@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
+ENHANCE241_AUDIT_KEYS = ["enhance241_b1"]  # enhance241-audit
+
 
 def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
     cur = mapping
@@ -97,7 +99,7 @@ class P3ASFFLiteFuse(torch.nn.Module):
         self.mon_every = int(mon_every)
 
         hidden = int(max(8, weight_hidden))
-        self.weight_net = torch.nn.Sequential(
+        self.enhance241_b1_weight_net = torch.nn.Sequential(  # enhance241-audit
             torch.nn.Conv2d(self.c * 2, hidden, kernel_size=1, stride=1, padding=0, bias=True),
             torch.nn.ReLU(inplace=True),
             torch.nn.Conv2d(hidden, 2, kernel_size=1, stride=1, padding=0, bias=True),
@@ -105,12 +107,14 @@ class P3ASFFLiteFuse(torch.nn.Module):
 
         refine = str(refine).lower()
         if refine == "conv":
-            self.refine = _Conv3x3(self.c)
+            self.enhance241_b1_refine = _Conv3x3(self.c)  # enhance241-audit
         else:
-            self.refine = _DWSeparableConv(self.c)
+            self.enhance241_b1_refine = _DWSeparableConv(self.c)  # enhance241-audit
 
         # Learnable alpha (scalar or per-channel). Here: scalar for stability.
-        self.alpha = torch.nn.Parameter(torch.tensor(float(alpha_init), dtype=torch.float32))
+        self.enhance241_b1_alpha = torch.nn.Parameter(  # enhance241-audit
+            torch.tensor(float(alpha_init), dtype=torch.float32)
+        )
 
         self._step: int = 0
         self._last_mon: Optional[Dict[str, float]] = None
@@ -143,11 +147,11 @@ class P3ASFFLiteFuse(torch.nn.Module):
         if p4_up.shape[1] != self.c or p3.shape[1] != self.c:
             raise ValueError(f"Channel mismatch: p4_up={p4_up.shape} p3={p3.shape} expected C={self.c}")
 
-        w_logits = self.weight_net(torch.cat((p3, p4_up), dim=1))
+        w_logits = self.enhance241_b1_weight_net(torch.cat((p3, p4_up), dim=1))
         w = torch.softmax(w_logits, dim=1)
         fused = w[:, 0:1] * p3 + w[:, 1:2] * p4_up
-        refined = self.refine(fused)
-        p3_out = p3 + self.alpha * refined
+        refined = self.enhance241_b1_refine(fused)
+        p3_out = p3 + self.enhance241_b1_alpha * refined
 
         # Lightweight monitoring: cache stats, flush by callbacks (no file I/O in forward).
         if self.training and torch.is_grad_enabled():
@@ -155,7 +159,7 @@ class P3ASFFLiteFuse(torch.nn.Module):
                 with torch.no_grad():
                     row = {
                         "step": float(self._step),
-                        "alpha_mean": float(self.alpha.mean().detach().cpu()),
+                        "alpha_mean": float(self.enhance241_b1_alpha.mean().detach().cpu()),
                         "w_mean": float(w.mean().detach().cpu()),
                         "w_var": float(w.var(unbiased=False).detach().cpu()),
                         "fused_mean": float(p3_out.mean().detach().cpu()),

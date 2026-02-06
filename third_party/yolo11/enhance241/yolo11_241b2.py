@@ -7,6 +7,8 @@ from typing import Any, List, Optional, Tuple
 
 import torch
 
+ENHANCE241_AUDIT_KEYS = ["enhance241_b2"]  # enhance241-audit
+
 
 def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
     cur = mapping
@@ -97,27 +99,37 @@ class P4P3GateAlignFuse(torch.nn.Module):
 
         refine = str(refine).lower()
         if refine == "conv":
-            self.refine = _Conv3x3(self.c)
+            self.enhance241_b2_refine = _Conv3x3(self.c)  # enhance241-audit
         else:
-            self.refine = _DWSeparableConv(self.c)
+            self.enhance241_b2_refine = _DWSeparableConv(self.c)  # enhance241-audit
 
-        self.fuse = torch.nn.Conv2d(self.c * 2, self.c, kernel_size=1, stride=1, padding=0, bias=True)
-        self.gate = torch.nn.Parameter(torch.full((1, self.c, 1, 1), _logit(float(gate_init)), dtype=torch.float32))
+        self.enhance241_b2_fuse = torch.nn.Conv2d(  # enhance241-audit
+            self.c * 2, self.c, kernel_size=1, stride=1, padding=0, bias=True
+        )
+        self.enhance241_b2_gate = torch.nn.Parameter(  # enhance241-audit
+            torch.full((1, self.c, 1, 1), _logit(float(gate_init)), dtype=torch.float32)
+        )
 
-        self._dcn = None
-        self._offset = None
-        self._flow = None
+        self.enhance241_b2_dcn = None
+        self.enhance241_b2_offset = None
+        self.enhance241_b2_flow = None
 
         if self.align == "dcn":
             try:
                 from torchvision.ops import DeformConv2d  # type: ignore
 
-                self._offset = torch.nn.Conv2d(self.c * 2, 18, kernel_size=3, stride=1, padding=1, bias=True)
-                self._dcn = DeformConv2d(self.c, self.c, kernel_size=3, stride=1, padding=1, bias=True)
+                self.enhance241_b2_offset = torch.nn.Conv2d(
+                    self.c * 2, 18, kernel_size=3, stride=1, padding=1, bias=True
+                )
+                self.enhance241_b2_dcn = DeformConv2d(
+                    self.c, self.c, kernel_size=3, stride=1, padding=1, bias=True
+                )
             except Exception as exc:
                 raise RuntimeError(f"enhance241.b2 align=dcn requested but DCN unavailable: {exc}") from exc
         elif self.align == "flow":
-            self._flow = torch.nn.Conv2d(self.c * 2, 2, kernel_size=3, stride=1, padding=1, bias=True)
+            self.enhance241_b2_flow = torch.nn.Conv2d(
+                self.c * 2, 2, kernel_size=3, stride=1, padding=1, bias=True
+            )
         elif self.align == "off":
             pass
         else:
@@ -140,11 +152,11 @@ class P4P3GateAlignFuse(torch.nn.Module):
         raise TypeError(f"P4P3GateAlignFuse expects [p4_up,p3] or concat tensor, got: {type(x)}")
 
     def _align(self, p4_up: torch.Tensor, p3: torch.Tensor) -> torch.Tensor:
-        if self.align == "dcn" and self._dcn is not None and self._offset is not None:
-            offset = self._offset(torch.cat((p3, p4_up), dim=1))
-            return self._dcn(p4_up, offset)
-        if self.align == "flow" and self._flow is not None:
-            flow = torch.tanh(self._flow(torch.cat((p3, p4_up), dim=1))) * self.flow_max
+        if self.align == "dcn" and self.enhance241_b2_dcn is not None and self.enhance241_b2_offset is not None:
+            offset = self.enhance241_b2_offset(torch.cat((p3, p4_up), dim=1))
+            return self.enhance241_b2_dcn(p4_up, offset)
+        if self.align == "flow" and self.enhance241_b2_flow is not None:
+            flow = torch.tanh(self.enhance241_b2_flow(torch.cat((p3, p4_up), dim=1))) * self.flow_max
             b, _, h, w = flow.shape
             grid_y, grid_x = torch.meshgrid(
                 torch.linspace(-1.0, 1.0, h, device=flow.device, dtype=flow.dtype),
@@ -188,8 +200,8 @@ class P4P3GateAlignFuse(torch.nn.Module):
                 print(f"[enhance241] b2 v2 align: {self.align}")
 
         p4_aligned = self._align(p4_up, p3)
-        fused = self.refine(self.fuse(torch.cat((p4_aligned, p3), dim=1)))
-        gate = torch.sigmoid(self.gate)
+        fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3), dim=1)))
+        gate = torch.sigmoid(self.enhance241_b2_gate)
         p3_out = p3 + gate * fused
 
         if self.debug_stats and not self._debug_printed:
@@ -270,11 +282,16 @@ def apply(model: Any, cfg: Any) -> Any:
     if not enable_b2:
         return model
 
+    # Support both ultralytics.YOLO and raw DetectionModel-like inputs.
     yolo_obj = model
-    det_model = getattr(model, "model", None) or model
-    seq = getattr(det_model, "model", None)
+    if hasattr(model, "model") and hasattr(getattr(model, "model"), "model"):
+        det_model = getattr(model, "model")
+        seq = getattr(det_model, "model", None)
+    else:
+        det_model = model
+        seq = getattr(det_model, "model", None)
     if seq is None:
-        raise RuntimeError("enhance241.b2 requires an ultralytics DetectionModel-like object with .model (Sequential).")
+        raise RuntimeError("enhance241.b2 requires an ultralytics YOLO/DetectionModel-like object with a .model sequence.")
 
     fuse_idx, _ = _locate_p4_to_p3_fuse(seq)
     if fuse_idx < 0 or fuse_idx >= len(seq):
@@ -378,8 +395,8 @@ def apply(model: Any, cfg: Any) -> Any:
     seq[fuse_idx] = fuse
 
     num_params = sum(int(p.numel()) for p in fuse.parameters())
-    gate_is_param = isinstance(fuse.gate, torch.nn.Parameter)
-    gate_req_grad = bool(getattr(fuse.gate, "requires_grad", False))
+    gate_is_param = isinstance(fuse.enhance241_b2_gate, torch.nn.Parameter)
+    gate_req_grad = bool(getattr(fuse.enhance241_b2_gate, "requires_grad", False))
     prev_layer = seq[fuse_idx - 1] if fuse_idx - 1 >= 0 else None
     next_layer = seq[fuse_idx + 1] if (fuse_idx + 1) < len(seq) else None
     prev_name = prev_layer.__class__.__name__ if prev_layer is not None else "None"
