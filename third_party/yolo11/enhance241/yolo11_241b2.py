@@ -199,10 +199,21 @@ class P4P3GateAlignFuse(torch.nn.Module):
             else:
                 print(f"[enhance241] b2 v2 align: {self.align}")
 
-        p4_aligned = self._align(p4_up, p3)
-        fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3), dim=1)))
+        # Ensure dtype consistency with conv weights to avoid half/float mismatch under AMP.
+        orig_dtype = p3.dtype
+        target_dtype = self.enhance241_b2_fuse.weight.dtype
+        p3_conv = p3 if p3.dtype == target_dtype else p3.to(target_dtype)
+        p4_conv = p4_up if p4_up.dtype == target_dtype else p4_up.to(target_dtype)
+
+        p4_aligned = self._align(p4_conv, p3_conv)
+        fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3_conv), dim=1)))
         gate = torch.sigmoid(self.enhance241_b2_gate)
-        p3_out = p3 + gate * fused
+        p3_out = p3_conv + gate * fused
+
+        if p4_aligned.dtype != orig_dtype:
+            p4_aligned = p4_aligned.to(orig_dtype)
+        if p3_out.dtype != orig_dtype:
+            p3_out = p3_out.to(orig_dtype)
 
         if self.debug_stats and not self._debug_printed:
             self._debug_printed = True
