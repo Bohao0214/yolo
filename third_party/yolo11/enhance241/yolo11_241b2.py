@@ -300,6 +300,23 @@ def _locate_p4_to_p3_fuse(seq: Any) -> Tuple[int, Any]:
     return candidates[0], detect
 
 
+def _infer_device_dtype(seq: Any, start_idx: int) -> Tuple[Optional[torch.device], Optional[torch.dtype]]:
+    """Infer target device/dtype from nearby parameterized layers."""
+    for step in range(0, 6):
+        for idx in (start_idx + step, start_idx - step):
+            if idx < 0 or idx >= len(seq):
+                continue
+            layer = seq[idx]
+            try:
+                p = next(layer.parameters())
+                return p.device, p.dtype
+            except StopIteration:
+                continue
+            except Exception:
+                continue
+    return None, None
+
+
 def apply(model: Any, cfg: Any) -> Any:
     """Apply enhance241 b2 v2 to YOLO11 neck P4->P3 fusion point."""
 
@@ -357,6 +374,14 @@ def apply(model: Any, cfg: Any) -> Any:
             debug_stats=debug_stats,
         )
 
+    def _place_module(mod: torch.nn.Module, ref_idx: int) -> torch.nn.Module:
+        device, dtype = _infer_device_dtype(seq, ref_idx)
+        if device is not None:
+            if dtype is not None:
+                return mod.to(device=device, dtype=dtype)
+            return mod.to(device=device)
+        return mod
+
     # Optimizer inclusion check (train start). If missing, add param group.
     def _register_optimizer_check(b2_module: torch.nn.Module) -> None:
         if not hasattr(yolo_obj, "add_callback") or getattr(yolo_obj, "_enhance241_b2_callbacks", False):
@@ -384,7 +409,7 @@ def apply(model: Any, cfg: Any) -> Any:
         c = int(getattr(old, "c", 0)) or None
         if not c:
             raise RuntimeError("Unable to infer channels from existing b1 fuse module.")
-        fuse = _build_fuse(c)
+        fuse = _place_module(_build_fuse(c), fuse_idx + 1)
         chain = P3FuseChain(old, fuse, c)
         for attr in ("i", "f", "type"):
             if hasattr(old, attr):
@@ -413,7 +438,7 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError(f"Unable to infer concat channels from next layer at idx={fuse_idx+1}. c_in={c_in}")
 
     c = c_in // 2
-    fuse = _build_fuse(c)
+    fuse = _place_module(_build_fuse(c), fuse_idx + 1)
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
             setattr(fuse, attr, getattr(old, attr))
