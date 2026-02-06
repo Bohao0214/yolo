@@ -93,6 +93,7 @@ class P4P3GateAlignFuse(torch.nn.Module):
         self.debug_stats = bool(debug_stats)
         self._debug_printed = False
         self._align_logged = False
+        self._shape_logged = False
 
         refine = str(refine).lower()
         if refine == "conv":
@@ -173,6 +174,12 @@ class P4P3GateAlignFuse(torch.nn.Module):
         if p4_up.shape[1] != self.c or p3.shape[1] != self.c:
             raise ValueError(f"Channel mismatch: p4_up={p4_up.shape} p3={p3.shape} expected C={self.c}")
 
+        if not self._shape_logged:
+            self._shape_logged = True
+            print(
+                f"[enhance241] b2 v2 concat input shapes: p4_up={tuple(p4_up.shape)} p3={tuple(p3.shape)}"
+            )
+
         if not self._align_logged:
             self._align_logged = True
             if self.align == "off":
@@ -181,7 +188,7 @@ class P4P3GateAlignFuse(torch.nn.Module):
                 print(f"[enhance241] b2 v2 align: {self.align}")
 
         p4_aligned = self._align(p4_up, p3)
-        fused = self.refine(self.fuse(torch.cat((p3, p4_aligned), dim=1)))
+        fused = self.refine(self.fuse(torch.cat((p4_aligned, p3), dim=1)))
         gate = torch.sigmoid(self.gate)
         p3_out = p3 + gate * fused
 
@@ -237,25 +244,23 @@ def _concat_candidates(seq: Any) -> List[str]:
 
 
 def _locate_p4_to_p3_fuse(seq: Any) -> Tuple[int, Any]:
+    # Unique assertion: exactly one Concat with f=[-1,4]
+    candidates = []
+    for i, layer in enumerate(seq):
+        if layer.__class__.__name__ == "Concat" and list(getattr(layer, "f", [])) == [-1, 4]:
+            candidates.append(i)
+    if len(candidates) != 1:
+        all_concat = _concat_candidates(seq)
+        raise RuntimeError(
+            f"Expected exactly one Concat with f=[-1,4], got {len(candidates)}. "
+            f"Concat candidates: {all_concat}"
+        )
     detect = None
     try:
         detect = seq[-1]
     except Exception:
         detect = None
-
-    detect_f = getattr(detect, "f", None)
-    if isinstance(detect_f, (list, tuple)) and detect_f:
-        try:
-            p3_out = int(detect_f[0])
-            return p3_out - 1, detect
-        except Exception:
-            pass
-
-    for i, layer in enumerate(seq):
-        if layer.__class__.__name__ == "Concat" and list(getattr(layer, "f", [])) == [-1, 4]:
-            return i, detect
-    candidates = _concat_candidates(seq)
-    raise RuntimeError(f"Unable to locate P4->P3 fusion point. Concat candidates: {candidates}")
+    return candidates[0], detect
 
 
 def apply(model: Any, cfg: Any) -> Any:
@@ -310,6 +315,29 @@ def apply(model: Any, cfg: Any) -> Any:
             debug_stats=debug_stats,
         )
 
+    # Optimizer inclusion check (train start). If missing, add param group.
+    def _register_optimizer_check(b2_module: torch.nn.Module) -> None:
+        if not hasattr(yolo_obj, "add_callback") or getattr(yolo_obj, "_enhance241_b2_callbacks", False):
+            return
+        setattr(yolo_obj, "_enhance241_b2_callbacks", True)
+
+        def on_train_start(trainer: Any) -> None:
+            opt = getattr(trainer, "optimizer", None)
+            if opt is None:
+                return
+            new_params = {id(p) for p in b2_module.parameters()}
+            opt_params = {id(p) for g in opt.param_groups for p in g.get("params", [])}
+            missing = [p for p in b2_module.parameters() if id(p) not in opt_params]
+            if missing:
+                opt.add_param_group({"params": list(missing)})
+                print(
+                    f"[enhance241] b2 v2 optimizer: added {len(missing)} params to optimizer param_groups"
+                )
+            else:
+                print("[enhance241] b2 v2 optimizer: all params already registered")
+
+        yolo_obj.add_callback("on_train_start", on_train_start)
+
     if P3ASFFLiteFuse is not None and isinstance(old, P3ASFFLiteFuse):
         c = int(getattr(old, "c", 0)) or None
         if not c:
@@ -324,6 +352,7 @@ def apply(model: Any, cfg: Any) -> Any:
             f"[enhance241] b2 v2 enabled: chained after b1 at model.model[{fuse_idx}] "
             f"-> P4P3GateAlignFuse(align={align}, mode={mode}, gate_init={gate_init:.3f})"
         )
+        _register_optimizer_check(fuse)
         return yolo_obj
 
     if old.__class__.__name__ != "Concat":
@@ -351,13 +380,23 @@ def apply(model: Any, cfg: Any) -> Any:
     num_params = sum(int(p.numel()) for p in fuse.parameters())
     gate_is_param = isinstance(fuse.gate, torch.nn.Parameter)
     gate_req_grad = bool(getattr(fuse.gate, "requires_grad", False))
+    prev_layer = seq[fuse_idx - 1] if fuse_idx - 1 >= 0 else None
+    next_layer = seq[fuse_idx + 1] if (fuse_idx + 1) < len(seq) else None
+    prev_name = prev_layer.__class__.__name__ if prev_layer is not None else "None"
+    next_name = next_layer.__class__.__name__ if next_layer is not None else "None"
     print(
         f"[enhance241] b2 v2 enabled: patched neck P4->P3 fuse at model.model[{fuse_idx}] "
         f"(orig={old.__class__.__name__}, f={getattr(old, 'f', None)}) -> "
         f"P4P3GateAlignFuse(align={align}, mode={mode}, gate_init={gate_init:.3f})"
     )
     print(
+        f"[enhance241] b2 v2 patch path: prev={prev_name} next={next_name} "
+        f"module=third_party.yolo11.enhance241.yolo11_241b2"
+    )
+    print(
         f"[enhance241] b2 v2 params={num_params} gate_is_param={gate_is_param} gate_requires_grad={gate_req_grad}"
     )
+
+    _register_optimizer_check(fuse)
 
     return yolo_obj
