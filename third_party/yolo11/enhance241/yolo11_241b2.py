@@ -205,11 +205,13 @@ class P4P3GateAlignFuse(torch.nn.Module):
         p3_conv = p3 if p3.dtype == target_dtype else p3.to(target_dtype)
         p4_conv = p4_up if p4_up.dtype == target_dtype else p4_up.to(target_dtype)
 
+        # Align and fuse using target dtype to keep parameters and activations consistent.
         p4_aligned = self._align(p4_conv, p3_conv)
         fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3_conv), dim=1)))
         gate = torch.sigmoid(self.enhance241_b2_gate)
         p3_out = p3_conv + gate * fused
 
+        # Cast results back to original dtype for downstream layers.
         if p4_aligned.dtype != orig_dtype:
             p4_aligned = p4_aligned.to(orig_dtype)
         if p3_out.dtype != orig_dtype:
