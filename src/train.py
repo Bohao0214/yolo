@@ -105,14 +105,20 @@ def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None
         yaml.safe_dump(merged, f, sort_keys=False, allow_unicode=True)
 
 
-AUDIT_PATH = Path(
-    "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect/exp_base2/train/enhance_audit.md"
-)  # enhance241-audit
+AUDIT_PATH: Optional[Path] = None  # enhance241-audit
+
+
+def _set_audit_path(exp_dir: Path) -> None:
+    # enhance241-audit
+    global AUDIT_PATH
+    AUDIT_PATH = (exp_dir / "train" / "enhance_audit.md").resolve()
 
 
 def _audit_append(text: str) -> None:
     """Append audit text block to enhance_audit.md."""
     # enhance241-audit
+    if AUDIT_PATH is None:
+        raise RuntimeError("enhance241 audit path is not initialized")
     AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(AUDIT_PATH, "a", encoding="utf-8") as f:
         f.write(text.rstrip() + "\n")
@@ -399,6 +405,7 @@ def main() -> None:
         timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
         exp_dir = exp_root / f"exp_{timestamp}"
     exp_dir.mkdir(parents=True, exist_ok=True)
+    _set_audit_path(exp_dir)  # enhance241-audit
     audit_ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cmdline = " ".join(sys.argv) if sys.argv else ""
     _audit_append(
