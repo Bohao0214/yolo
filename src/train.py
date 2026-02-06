@@ -828,8 +828,6 @@ def main() -> None:
 
         # Save sweep meta
         try:
-            import json
-
             sweep_meta = {"fix": fix_var, "fix_list": fix_list, "curve": curve_range, "table": table_range}
             (metrics_dir / f"{tag}_threshold_sweep.json").write_text(
                 json.dumps(sweep_meta, ensure_ascii=False, indent=2), encoding="utf-8"
