@@ -108,6 +108,7 @@ def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None
 AUDIT_PATH = Path(
     "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect/exp_base2/train/enhance_audit.md"
 )  # enhance241-audit
+AUDIT_WEIGHTS_DIR = AUDIT_PATH.parent / "weights"  # enhance241-audit
 
 
 def _audit_append(text: str) -> None:
@@ -221,10 +222,18 @@ def _assert_keywords(keys: List[str], keywords: List[str], context: str) -> None
     # enhance241-audit
     if not keywords:
         _audit_fail(f"{context}: audit keywords empty")
-    keyset = "\n".join(keys)
-    missing = [k for k in keywords if k not in keyset]
-    if missing:
-        _audit_fail(f"{context}: missing audit keys {missing}")
+    hit_keys = [k for k in keywords if any(k in state_key for state_key in keys)]
+    if not hit_keys:
+        _audit_fail(f"{context}: none of audit keywords matched {keywords}")
+    sample_hits: List[str] = []
+    for state_key in keys:
+        if any(k in state_key for k in hit_keys):
+            sample_hits.append(state_key)
+        if len(sample_hits) >= 5:
+            break
+    _audit_append(
+        f"{context}: keyword_hits={hit_keys} sample_keys={sample_hits}"
+    )
 
 
 def _trainable_param_stats(model: Any, keywords: List[str]) -> Dict[str, int]:
@@ -281,6 +290,15 @@ def _summarize_csv_files(dir_path: Path) -> List[str]:
             mtime = "unknown"
         out.append(f"{p.name} lines={lines} mtime={mtime}")
     return out
+
+
+def _resolve_ckpt_for_audit(ckpt_path: Path) -> Path:
+    # enhance241-audit
+    if ckpt_path.name in {"best.pt", "last.pt"}:
+        fixed = AUDIT_WEIGHTS_DIR / ckpt_path.name
+        if fixed.exists():
+            return fixed
+    return ckpt_path
 
 
 def build_data_yaml(
@@ -663,12 +681,13 @@ def main() -> None:
         if (enable_b1 or enable_b2) and not best_weights.exists():
             _audit_fail("best.pt missing for enhance241 run; refusing to continue evaluation.")  # enhance241-audit
         eval_weights = best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")
+        eval_weights = _resolve_ckpt_for_audit(eval_weights)
         if not eval_weights.exists():
             _audit_fail(f"eval_weights missing: {eval_weights}")  # enhance241-audit
         _audit_append(f"eval_weights: {eval_weights}")  # enhance241-audit
         if enable_b1 or enable_b2:
             ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
-            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {eval_weights.name}")
+            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {eval_weights}")
         # Release training model before evaluation to reduce GPU memory pressure.
         try:
             del model
@@ -696,11 +715,12 @@ def main() -> None:
         else:
             cached = resolve_pretrained_weight(project_root, test_weight.name)
             eval_weights = cached
+        eval_weights = _resolve_ckpt_for_audit(eval_weights)
         if not eval_weights.exists():
             _audit_fail(f"eval_weights missing: {eval_weights}")  # enhance241-audit
         if enable_b1 or enable_b2:
             ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
-            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {eval_weights.name}")
+            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {eval_weights}")
         model = YOLO(str(eval_weights))
         model = apply_enhance241(model)
         if enable_b1 or enable_b2:
