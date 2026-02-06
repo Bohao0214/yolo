@@ -51,10 +51,12 @@ enhance241:
   a2: false
   b1: false
   b2: true
-  b2_align: "dcn"
-  b2_beta_init: 0.05
+  b2_align: "flow"
+  b2_mode: "safe"
+  b2_gate_init: 0.0
   b2_flow_max: 2.0
   b2_refine: "dw"
   b2_upsample: "nearest"
+  debug_stats: false
   c1: false
   d1: false
