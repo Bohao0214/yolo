@@ -108,7 +108,6 @@ def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None
 AUDIT_PATH = Path(
     "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect/exp_base2/train/enhance_audit.md"
 )  # enhance241-audit
-AUDIT_WEIGHTS_DIR = AUDIT_PATH.parent / "weights"  # enhance241-audit
 
 
 def _audit_append(text: str) -> None:
@@ -292,13 +291,12 @@ def _summarize_csv_files(dir_path: Path) -> List[str]:
     return out
 
 
-def _resolve_ckpt_for_audit(ckpt_path: Path) -> Path:
+def _ckpt_context(path: Path) -> str:
     # enhance241-audit
-    if ckpt_path.name in {"best.pt", "last.pt"}:
-        fixed = AUDIT_WEIGHTS_DIR / ckpt_path.name
-        if fixed.exists():
-            return fixed
-    return ckpt_path
+    p = path.resolve()
+    parent = p.parent
+    grand_parent = parent.parent if parent.parent != parent else parent
+    return f"{p} (parent={parent.name}, grand_parent={grand_parent.name})"
 
 
 def build_data_yaml(
@@ -630,6 +628,7 @@ def main() -> None:
             print(f"Downloading to: {cache_path}")
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
+    _audit_append(f"init_weights: {_ckpt_context(Path(init_weights).resolve())}")  # enhance241-audit
     model = YOLO(init_weights)
     pre_seq = _get_model_seq(model)
     _audit_append(
@@ -680,14 +679,13 @@ def main() -> None:
     if mode in {"train_test", "finetune_test"}:
         if (enable_b1 or enable_b2) and not best_weights.exists():
             _audit_fail("best.pt missing for enhance241 run; refusing to continue evaluation.")  # enhance241-audit
-        eval_weights = best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")
-        eval_weights = _resolve_ckpt_for_audit(eval_weights)
+        eval_weights = (best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")).resolve()
         if not eval_weights.exists():
             _audit_fail(f"eval_weights missing: {eval_weights}")  # enhance241-audit
-        _audit_append(f"eval_weights: {eval_weights}")  # enhance241-audit
+        _audit_append(f"eval_weights: {_ckpt_context(eval_weights)}")  # enhance241-audit
         if enable_b1 or enable_b2:
             ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
-            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {eval_weights}")
+            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {_ckpt_context(eval_weights)}")
         # Release training model before evaluation to reduce GPU memory pressure.
         try:
             del model
@@ -709,18 +707,18 @@ def main() -> None:
                 _audit_fail("eval model is not a torch module after reload")
             _assert_keywords(list(torch_model.state_dict().keys()), audit_keywords, "eval model after patch")
     elif mode == "test":
-        test_weight = Path(weights_path)
+        test_weight = Path(weights_path).resolve()
         if test_weight.exists():
             eval_weights = test_weight
         else:
             cached = resolve_pretrained_weight(project_root, test_weight.name)
-            eval_weights = cached
-        eval_weights = _resolve_ckpt_for_audit(eval_weights)
+            eval_weights = cached.resolve()
         if not eval_weights.exists():
             _audit_fail(f"eval_weights missing: {eval_weights}")  # enhance241-audit
+        _audit_append(f"eval_weights: {_ckpt_context(eval_weights)}")  # enhance241-audit
         if enable_b1 or enable_b2:
             ckpt_keys = _state_dict_keys_from_ckpt(eval_weights)
-            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {eval_weights}")
+            _assert_keywords(ckpt_keys, audit_keywords, f"ckpt {_ckpt_context(eval_weights)}")
         model = YOLO(str(eval_weights))
         model = apply_enhance241(model)
         if enable_b1 or enable_b2:
