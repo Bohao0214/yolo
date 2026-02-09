@@ -1,5 +1,7 @@
 import locale
 import os
+import sys
+from pathlib import Path
 
 
 def _ensure_utf8_locale() -> None:
@@ -22,6 +24,11 @@ def _ensure_utf8_locale() -> None:
 
 _ensure_utf8_locale()
 
+# Ensure repo root is importable when running `python src/train.py`.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import argparse
 import atexit
 import datetime as dt
@@ -29,8 +36,6 @@ import gc
 import json
 import shutil
 import subprocess
-import sys
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
