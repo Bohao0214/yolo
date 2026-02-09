@@ -4,7 +4,7 @@ run_name: ''
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt
-epochs: 1
+epochs: 100
 imgsz: 640
 batch: 6
 device: ''
