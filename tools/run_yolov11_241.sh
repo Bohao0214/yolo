@@ -16,14 +16,21 @@ Usage:
   bash tools/run_yolov11_241.sh [base_config.yaml] [switches...]
 
 Switches (implemented):
+  a3    Enable 2.4.1 a3 (SPDConvDownsample P3 downsample)
   b1    Enable 2.4.1 b1 (ASFF-lite P4->P3 fuse)
   b2    Enable 2.4.1 b2-safe (residual P4->P3 fuse, baseline-safe init)
+  b3    Enable 2.4.1 b3 (NASFPNLite P5->P4 + P4->P3)
+  d1    Enable 2.4.1 d1 (Add P2 detect head)
 
 Examples:
   bash tools/run_yolov11_241.sh
+  bash tools/run_yolov11_241.sh a3
   bash tools/run_yolov11_241.sh b1
   bash tools/run_yolov11_241.sh b2
+  bash tools/run_yolov11_241.sh b3
+  bash tools/run_yolov11_241.sh d1
   bash tools/run_yolov11_241.sh b1 b2
+  bash tools/run_yolov11_241.sh a3 b3 d1
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b2
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1 b2
@@ -73,43 +80,68 @@ if [[ ${#SWITCHES[@]} -eq 1 ]]; then
     read -r -a SWITCHES <<<"${SWITCHES[0]}"
   fi
 fi
+ENABLE_A3="false"
 ENABLE_B1="false"
 ENABLE_B2="false"
+ENABLE_B3="false"
+ENABLE_D1="false"
 UNKNOWN=()
 
 for sw in "${SWITCHES[@]}"; do
   key="$(echo "${sw}" | tr '[:upper:]' '[:lower:]')"
   case "${key}" in
     "" ) ;;
+    a3 ) ENABLE_A3="true" ;;
     b1 ) ENABLE_B1="true" ;;
     b2 ) ENABLE_B2="true" ;;
+    b3 ) ENABLE_B3="true" ;;
+    d1 ) ENABLE_D1="true" ;;
     * ) UNKNOWN+=("${sw}") ;;
   esac
 done
 
 if [[ ${#UNKNOWN[@]} -gt 0 ]]; then
-  echo "[error] Unsupported switches (only b1/b2 are implemented): ${UNKNOWN[*]}" >&2
+  echo "[error] Unsupported switches (only a3/b1/b2/b3/d1 are implemented): ${UNKNOWN[*]}" >&2
   exit 4
 fi
 
 CONFIG_TO_RUN="${BASE_CONFIG}"
 
-if [[ "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" ]]; then
+if [[ "${ENABLE_A3}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_D1}" == "true" ]]; then
   ENABLED_KEYS=()
+  [[ "${ENABLE_A3}" == "true" ]] && ENABLED_KEYS+=("a3")
   [[ "${ENABLE_B1}" == "true" ]] && ENABLED_KEYS+=("b1")
   [[ "${ENABLE_B2}" == "true" ]] && ENABLED_KEYS+=("b2")
+  [[ "${ENABLE_B3}" == "true" ]] && ENABLED_KEYS+=("b3")
+  [[ "${ENABLE_D1}" == "true" ]] && ENABLED_KEYS+=("d1")
 
-  if [[ ${#ENABLED_KEYS[@]} -eq 1 && "${ENABLED_KEYS[0]}" == "b1" ]]; then
-    DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b1.yaml"
-    DERIVED_SUFFIX="__b1"
-  elif [[ ${#ENABLED_KEYS[@]} -eq 1 && "${ENABLED_KEYS[0]}" == "b2" ]]; then
-    DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b2.yaml"
-    DERIVED_SUFFIX="__b2"
+  if [[ ${#ENABLED_KEYS[@]} -eq 1 ]]; then
+    case "${ENABLED_KEYS[0]}" in
+      b1 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b1.yaml"
+        DERIVED_SUFFIX="__b1"
+        ;;
+      b2 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b2.yaml"
+        DERIVED_SUFFIX="__b2"
+        ;;
+      a3 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a3.yaml"
+        DERIVED_SUFFIX="__a3"
+        ;;
+      b3 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b3.yaml"
+        DERIVED_SUFFIX="__b3"
+        ;;
+      d1 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d1.yaml"
+        DERIVED_SUFFIX="__d1"
+        ;;
+    esac
   else
-    JOINED="$(IFS=; echo "${ENABLED_KEYS[*]}")"
-    JOINED="${JOINED//;/}"  # b1b2
+    JOINED="$(IFS=_; echo "${ENABLED_KEYS[*]}")"
     DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241${JOINED}.yaml"
-    DERIVED_SUFFIX="__${ENABLED_KEYS[*]// /__}"
+    DERIVED_SUFFIX="$(printf "__%s" "${ENABLED_KEYS[@]}")"
   fi
 
   if [[ ! -f "${DERIVED_CONFIG}" ]]; then
@@ -136,8 +168,11 @@ if not isinstance(cfg, dict):
 enh = cfg.setdefault("enhance241", {})
 if not isinstance(enh, dict):
     raise SystemExit("enhance241 must be a mapping in base config.")
+enh["a3"] = False
 enh["b1"] = False
 enh["b2"] = False
+enh["b3"] = False
+enh["d1"] = False
 for k in keys:
     enh[k] = True
 if enh.get("b1"):

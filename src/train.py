@@ -23,12 +23,15 @@ def _ensure_utf8_locale() -> None:
 _ensure_utf8_locale()
 
 import argparse
+import atexit
 import datetime as dt
 import gc
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -218,6 +221,279 @@ def copy_weights(exp_dir: Path, model_dir: Path) -> None:
         shutil.copy2(last, dst / "last.pt")
 
 
+def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
+    cur = mapping
+    for k in keys:
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(k)
+            continue
+        if hasattr(cur, k):
+            cur = getattr(cur, k)
+            continue
+        return default
+    return cur if cur is not None else default
+
+
+def _enhance241_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    enh = cfg.get("enhance241", {})
+    return enh if isinstance(enh, dict) else {}
+
+
+def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
+    enh = _enhance241_cfg(cfg)
+    keys = ["a3", "b1", "b2", "b3", "d1"]
+    return [k for k in keys if bool(enh.get(k, False))]
+
+
+def _extract_model_seq(model: Any) -> Tuple[Any, Any, Optional[Any]]:
+    yolo_obj = model
+    if hasattr(model, "model") and hasattr(getattr(model, "model"), "model"):
+        det_model = getattr(model, "model")
+        seq = getattr(det_model, "model", None)
+    else:
+        det_model = model
+        seq = getattr(det_model, "model", None)
+    return yolo_obj, det_model, seq
+
+
+def _collect_concat_candidates(seq: Any) -> List[str]:
+    out: List[str] = []
+    for i, layer in enumerate(seq or []):
+        if layer.__class__.__name__ == "Concat":
+            out.append(f"idx={i}, f={getattr(layer, 'f', None)}")
+    return out
+
+
+def _collect_patched(seq: Any) -> List[str]:
+    patched_names = {
+        "P3ASFFLiteFuse",
+        "P4P3GateAlignFuse",
+        "P3FuseChain",
+        "SPDConvDownsample",
+        "NASFPNLiteFuse",
+        "P2LiteFuse",
+    }
+    out: List[str] = []
+    for i, layer in enumerate(seq or []):
+        if layer.__class__.__name__ in patched_names:
+            out.append(f"idx={i}, type={layer.__class__.__name__}")
+    return out
+
+
+def _collect_keyword_hits(state_dict: Dict[str, Any], keyword: str = "enhance241", sample: int = 8) -> Dict[str, Any]:
+    keys = [k for k in state_dict.keys() if keyword in k]
+    return {"count": int(len(keys)), "sample_keys": keys[: int(sample)]}
+
+
+def _snapshot_model(model: Any) -> Dict[str, Any]:
+    _, det_model, seq = _extract_model_seq(model)
+    try:
+        state = det_model.state_dict() if hasattr(det_model, "state_dict") else model.state_dict()
+        keyword_hits = _collect_keyword_hits(state)
+    except Exception:
+        keyword_hits = {"count": 0, "sample_keys": []}
+    return {
+        "concat_candidates": _collect_concat_candidates(seq),
+        "patched": _collect_patched(seq),
+        "keyword_hits": keyword_hits,
+    }
+
+
+def _collect_trainable_params(model: Any) -> Dict[str, Any]:
+    named = list(model.named_parameters()) if hasattr(model, "named_parameters") else []
+    total_numel = sum(int(p.numel()) for _, p in named)
+    trainable = [(n, p) for n, p in named if bool(getattr(p, "requires_grad", False))]
+    trainable_numel = sum(int(p.numel()) for _, p in trainable)
+    matched = [(n, p) for n, p in named if "enhance241" in n]
+    return {
+        "matched": int(len(matched)),
+        "trainable": int(len(trainable)),
+        "trainable_numel": int(trainable_numel),
+        "total_numel": int(total_numel),
+    }
+
+
+def _collect_git_hash(project_root: Path) -> str:
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=project_root, stderr=subprocess.DEVNULL)
+        return out.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return "unknown"
+
+
+def _load_ckpt_keyword_hits(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None or not path.exists():
+        return {"count": 0, "sample_keys": [], "source": "missing"}
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return {"count": 0, "sample_keys": [], "source": "torch_unavailable"}
+    try:
+        ckpt = torch.load(path, map_location="cpu")
+    except Exception:
+        return {"count": 0, "sample_keys": [], "source": "load_failed"}
+    state = None
+    if isinstance(ckpt, dict):
+        if "model" in ckpt:
+            model_obj = ckpt["model"]
+            if hasattr(model_obj, "state_dict"):
+                state = model_obj.state_dict()
+            elif isinstance(model_obj, dict):
+                state = model_obj
+        elif "state_dict" in ckpt:
+            state = ckpt["state_dict"]
+        else:
+            if all(isinstance(k, str) for k in ckpt.keys()):
+                state = ckpt
+    if not isinstance(state, dict):
+        return {"count": 0, "sample_keys": [], "source": "state_dict_missing"}
+    hits = _collect_keyword_hits(state)
+    hits["source"] = "state_dict"
+    return hits
+
+
+def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
+    info: Dict[str, Any] = {}
+    for key, attr in (
+        ("a3", "_enhance241_a3_info"),
+        ("b3", "_enhance241_b3_info"),
+        ("d1", "_enhance241_d1_info"),
+    ):
+        val = getattr(model, attr, None)
+        if val is None and hasattr(model, "model"):
+            val = getattr(model.model, attr, None)
+        if val is not None:
+            info[key] = val
+    return info
+
+
+def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    enabled = set(audit_state.get("enhance241_enabled", []))
+    info = audit_state.get("eval_infos") or audit_state.get("train_infos") or {}
+    checks: List[Dict[str, Any]] = []
+
+    if "a3" in enabled:
+        a3 = info.get("a3", {}) if isinstance(info, dict) else {}
+        replaced = int(a3.get("replaced_count", 0)) + int(a3.get("existing_count", 0))
+        ok = replaced == 1
+        checks.append({"name": "a3_replace_count", "ok": ok, "detail": f"count={replaced}"})
+
+    if "b3" in enabled:
+        b3 = info.get("b3", {}) if isinstance(info, dict) else {}
+        patched = int(b3.get("patched_count", 0))
+        ok = patched == 2
+        checks.append({"name": "b3_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "d1" in enabled:
+        d1 = info.get("d1", {}) if isinstance(info, dict) else {}
+        heads_after = int(d1.get("detect_heads_after", 0))
+        ok = heads_after == 4
+        checks.append({"name": "d1_head_count", "ok": ok, "detail": f"heads_after={heads_after}"})
+
+    status = "PASS" if all(c.get("ok", False) for c in checks) else "FAIL"
+    return status, checks
+
+
+def _format_enhance241_audit(audit_state: Dict[str, Any]) -> str:
+    timestamp = audit_state.get("timestamp", dt.datetime.now().isoformat(timespec="seconds"))
+    status, checks = _evaluate_enhance241_checks(audit_state)
+    audit_state["status"] = status
+    audit_state["checks"] = checks
+
+    lines: List[str] = []
+    lines.append(f"\n## Run {timestamp}")
+    lines.append(f"- cmd: {audit_state.get('cmd', '')}")
+    lines.append(f"- git: {audit_state.get('git_hash', '')}")
+    lines.append(f"- exp_dir: {audit_state.get('exp_dir', '')}")
+    lines.append(f"- config: {audit_state.get('config_path', '')}")
+    lines.append(f"- data_yaml: {audit_state.get('data_yaml', '')}")
+    lines.append(f"- data_root: {audit_state.get('data_root', '')}")
+    lines.append(f"- enhance241_enabled: {audit_state.get('enhance241_enabled', [])}")
+    lines.append("- enhance241_cfg:")
+    lines.append("```json")
+    lines.append(json.dumps(audit_state.get("enhance241_cfg", {}), ensure_ascii=False, indent=2))
+    lines.append("```")
+
+    pre = audit_state.get("train_pre_patch", {})
+    post = audit_state.get("train_post_patch", {})
+    lines.append(f"- pre_patch: concat_candidates={pre.get('concat_candidates', [])}")
+    lines.append(f"- pre_patch: patched={pre.get('patched', [])}")
+    lines.append(f"- pre_patch: keyword_hits={pre.get('keyword_hits', {})}")
+    lines.append(f"- post_patch: concat_candidates={post.get('concat_candidates', [])}")
+    lines.append(f"- post_patch: patched={post.get('patched', [])}")
+    lines.append(f"- post_patch: keyword_hits={post.get('keyword_hits', {})}")
+
+    if audit_state.get("trainable_params") is not None:
+        lines.append(f"- trainable_params: {audit_state.get('trainable_params')}")
+
+    infos = audit_state.get("train_infos") or {}
+    if "a3" in infos:
+        lines.append(f"- a3_info: {infos.get('a3')}")
+    if "b3" in infos:
+        lines.append(f"- b3_info: {infos.get('b3')}")
+    if "d1" in infos:
+        lines.append(f"- d1_info: {infos.get('d1')}")
+
+    lines.append(f"- eval_weights: {audit_state.get('eval_weights', '')}")
+    lines.append(f"- ckpt_keyword_hits: {audit_state.get('ckpt_keyword_hits', {})}")
+    lines.append(f"- threshold_sweep: {audit_state.get('threshold_sweep', {})}")
+    lines.append(f"- checks: {checks}")
+    lines.append(f"- conclusion: {status}")
+    return "\n".join(lines) + "\n"
+
+
+def _append_enhance241_audit(audit_path: Path, audit_state: Dict[str, Any]) -> None:
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    block = _format_enhance241_audit(audit_state)
+    with open(audit_path, "a", encoding="utf-8") as f:
+        f.write(block)
+
+
+def _register_enhance241_audit(audit_path: Path, audit_state: Dict[str, Any]) -> None:
+    def _writer() -> None:
+        try:
+            eval_w = audit_state.get("eval_weights")
+            if eval_w:
+                audit_state["ckpt_keyword_hits"] = _load_ckpt_keyword_hits(Path(eval_w))
+            _append_enhance241_audit(audit_path, audit_state)
+        except Exception:
+            pass
+
+    atexit.register(_writer)
+
+
+def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit_state: Dict[str, Any]) -> Any:
+    pre = _snapshot_model(model)
+    if stage == "train":
+        audit_state["train_pre_patch"] = pre
+    else:
+        audit_state["eval_pre_patch"] = pre
+
+    enabled = _enhance241_enabled_keys(cfg)
+    if enabled:
+        if "b3" in enabled and ("b1" in enabled or "b2" in enabled):
+            raise RuntimeError("enhance241.b3 conflicts with b1/b2; enable only one B-class module.")
+        from third_party.yolo11.enhance241 import yolo11_241a3, yolo11_241b1, yolo11_241b2, yolo11_241b3, yolo11_241d1
+
+        model = yolo11_241a3.apply(model, cfg)
+        model = yolo11_241b1.apply(model, cfg)
+        model = yolo11_241b2.apply(model, cfg)
+        model = yolo11_241b3.apply(model, cfg)
+        model = yolo11_241d1.apply(model, cfg)
+
+    post = _snapshot_model(model)
+    if stage == "train":
+        audit_state["train_post_patch"] = post
+        audit_state["train_infos"] = _collect_enhance241_infos(model)
+        audit_state["trainable_params"] = _collect_trainable_params(model)
+    else:
+        audit_state["eval_post_patch"] = post
+        audit_state["eval_infos"] = _collect_enhance241_infos(model)
+    return model
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="YOLO training runner.")
     parser.add_argument(
@@ -254,6 +530,20 @@ def main() -> None:
         data_yaml, exp_dir, val_split, seed, data_root_override
     )
 
+    audit_state: Dict[str, Any] = {
+        "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
+        "cmd": " ".join(sys.argv),
+        "git_hash": _collect_git_hash(project_root),
+        "exp_dir": str(exp_dir),
+        "config_path": str(cfg_path),
+        "data_yaml": str(data_yaml),
+        "data_root": str(data_root),
+        "enhance241_enabled": _enhance241_enabled_keys(cfg),
+        "enhance241_cfg": _enhance241_cfg(cfg),
+        "threshold_sweep": cfg.get("threshold_sweep", {}),
+        "eval_weights": "",
+    }
+    _register_enhance241_audit(exp_dir / "train" / "enhance241_audit.md", audit_state)
 
     model_path = normalize_weight_ref(project_root, str(cfg.get("model", "yolo11n.pt")))
     weights_path = normalize_weight_ref(project_root, str(cfg.get("weights", "")))
@@ -333,6 +623,7 @@ def main() -> None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
     model = YOLO(init_weights)
+    model = _apply_enhance241_patches(model, cfg, stage="train", audit_state=audit_state)
     if mode in {"train_test", "finetune_test"}:
         model.train(
             data=str(run_data_yaml),
@@ -354,6 +645,7 @@ def main() -> None:
     best_weights = exp_dir / "train" / "weights" / "best.pt"
     if mode in {"train_test", "finetune_test"}:
         eval_weights = best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")
+        audit_state["eval_weights"] = str(eval_weights)
         # Release training model before evaluation to reduce GPU memory pressure.
         try:
             del model
@@ -368,6 +660,10 @@ def main() -> None:
             pass
         gc.collect()
         model = YOLO(str(eval_weights))
+        model = _apply_enhance241_patches(model, cfg, stage="eval", audit_state=audit_state)
+        status, checks = _evaluate_enhance241_checks(audit_state)
+        if status == "FAIL":
+            raise RuntimeError(f"enhance241 structure check failed: {checks}")
     elif mode == "test":
         test_weight = Path(weights_path)
         if test_weight.exists():
@@ -375,7 +671,12 @@ def main() -> None:
         else:
             cached = resolve_pretrained_weight(project_root, test_weight.name)
             eval_weights = cached
+        audit_state["eval_weights"] = str(eval_weights)
         model = YOLO(str(eval_weights))
+        model = _apply_enhance241_patches(model, cfg, stage="eval", audit_state=audit_state)
+        status, checks = _evaluate_enhance241_checks(audit_state)
+        if status == "FAIL":
+            raise RuntimeError(f"enhance241 structure check failed: {checks}")
 
     # Resolve split sources across one or multiple dataset roots.
     data_info_cfg = load_yaml(data_yaml)
@@ -412,6 +713,12 @@ def main() -> None:
     fix_list = sweep_cfg.get("fix_list", [0.1, 0.2, 0.3, 0.4])
     curve_range = sweep_cfg.get("curve", [0.01, 0.01, 1.00])
     table_range = sweep_cfg.get("table", [0.00, 0.05, 1.00])
+    audit_state["threshold_sweep"] = {
+        "fix": fix_var,
+        "fix_list": fix_list,
+        "curve": curve_range,
+        "table": table_range,
+    }
 
     if not isinstance(fix_list, (list, tuple)):
         fix_list = [fix_list]

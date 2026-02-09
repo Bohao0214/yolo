@@ -61,9 +61,12 @@ threshold_sweep:
   curve: [0.01, 0.01, 1.00]   # start, step, end
   table: [0.00, 0.05, 1.00]   # start, step, end
 
-# enhance241 开关（实现 b1/b2；其余预留占位，默认 false）
+# enhance241 开关（实现 a3/b1/b2/b3/d1；其余预留占位，默认 false）
 enhance241:
   a2: false
+  a3: false
+  a3_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
+  a3_pre_div: 4
   b1: false
   b2: false
   b1_version: "v3"
@@ -77,6 +80,15 @@ enhance241:
   b2_flow_max: 2.0        # 像素级最大位移（flow 模式用）
   b2_refine: "dw"         # dw=depthwise separable, conv=普通3x3
   b2_upsample: "nearest"
+  b3: false
+  b3_weight_init: 1.0
+  b3_refine: "dw"         # dw=depthwise separable, conv=普通3x3
+  b3_upsample: "nearest"
+  b3_eps: 0.0001
   debug_stats: false
   c1: false
   d1: false
+  d1_weight_init: 1.0
+  d1_refine: "dw"         # dw=depthwise separable, conv=普通3x3
+  d1_upsample: "nearest"
+  d1_eps: 0.0001

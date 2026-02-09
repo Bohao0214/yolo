@@ -1,0 +1,79 @@
+yolo_version: yolo11
+exp_name: defect241__a3__b3__d1
+run_name: ''
+data: configs/data/defect.yaml
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
+model: models/pretrained/yolo11m.pt
+epochs: 1
+imgsz: 640
+batch: 6
+device: ''
+workers: 4
+conf: 0.3
+nms_iou: 0.6
+max_det: 20
+match_iou: 0.2
+mode: train_test
+weights: ''
+patience: 0
+lr0: 0.012
+lrf: 0.12
+warmup_epochs: 0.0
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ''
+threshold_sweep:
+  fix: iou
+  fix_list:
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  curve:
+  - 0.01
+  - 0.01
+  - 1.0
+  table:
+  - 0.0
+  - 0.05
+  - 1.0
+enhance241:
+  a2: false
+  a3: true
+  a3_refine: dw
+  a3_pre_div: 4
+  b1: false
+  b2: false
+  b1_version: v3
+  b1_alpha_init: 0.05
+  b1_weight_hidden: 64
+  b1_refine: dw
+  b1_upsample: nearest
+  b2_align: flow
+  b2_mode: safe
+  b2_gate_init: 0.0
+  b2_flow_max: 2.0
+  b2_refine: dw
+  b2_upsample: nearest
+  b3: true
+  b3_weight_init: 1.0
+  b3_refine: dw
+  b3_upsample: nearest
+  b3_eps: 0.0001
+  debug_stats: false
+  c1: false
+  d1: true
+  d1_weight_init: 1.0
+  d1_refine: dw
+  d1_upsample: nearest
+  d1_eps: 0.0001
