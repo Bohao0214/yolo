@@ -27,6 +27,7 @@ import datetime as dt
 import gc
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -82,61 +83,6 @@ def resolve_data_entry(entry: str, data_root: Path) -> Path:
 
 def resolve_pretrained_weight(project_root: Path, weight_name: str) -> Path:
     return (project_root / "models" / "pretrained" / weight_name).resolve()
-
-
-def normalize_weight_ref(project_root: Path, weight_ref: str) -> str:
-    ref = str(weight_ref or "").strip()
-    if not ref:
-        return ref
-    path = Path(ref)
-    if path.is_absolute():
-        return str(path)
-    # Bare "*.pt" names are always mapped to unified pretrained cache dir.
-    if len(path.parts) == 1 and path.suffix.lower() == ".pt":
-        return str(resolve_pretrained_weight(project_root, path.name))
-    return str((project_root / path).resolve())
-
-
-def configure_ultralytics_weight_cache(project_root: Path) -> None:
-    """Route bare Ultralytics asset downloads (e.g. yolo26n.pt) to models/pretrained."""
-    try:
-        from ultralytics.utils import SETTINGS
-        from ultralytics.utils import downloads as ul_downloads
-    except Exception:
-        return
-
-    weights_dir = (project_root / "models" / "pretrained").resolve()
-    weights_dir.mkdir(parents=True, exist_ok=True)
-
-    legacy_amp_weight = (project_root / "yolo26n.pt").resolve()
-    target_amp_weight = (weights_dir / "yolo26n.pt").resolve()
-    if legacy_amp_weight.exists() and not target_amp_weight.exists():
-        try:
-            shutil.copy2(legacy_amp_weight, target_amp_weight)
-        except Exception:
-            pass
-
-    try:
-        SETTINGS.update({"weights_dir": str(weights_dir)})
-    except Exception:
-        try:
-            SETTINGS["weights_dir"] = str(weights_dir)
-        except Exception:
-            pass
-
-    if getattr(ul_downloads, "_weights_dir_patched", False):
-        return
-
-    original_attempt_download_asset = ul_downloads.attempt_download_asset
-
-    def _attempt_download_asset_patched(file, *args, **kwargs):
-        file_path = Path(str(file).strip().replace("'", ""))
-        if not file_path.is_absolute() and len(file_path.parts) == 1:
-            file = str(weights_dir / file_path.name)
-        return original_attempt_download_asset(file, *args, **kwargs)
-
-    ul_downloads.attempt_download_asset = _attempt_download_asset_patched
-    ul_downloads._weights_dir_patched = True
 
 
 def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None:
@@ -237,26 +183,39 @@ def main() -> None:
     yolo_version = cfg.get("yolo_version", "yolo11")
     exp_name = cfg.get("exp_name", "defect")
     project_root = Path(cfg.get("project_root", root)).resolve()
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
     exp_root = project_root / "experiments" / yolo_version / exp_name
     run_name = str(cfg.get("run_name", "")).strip()
-    timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
     if run_name:
-        exp_dir = exp_root / run_name / f"exp_{timestamp}"
+        exp_dir = exp_root / run_name
     else:
+        timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
         exp_dir = exp_root / f"exp_{timestamp}"
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     data_yaml = Path(cfg.get("data", project_root / "configs" / "data" / "defect.yaml")).resolve()
-    data_root_override = str(cfg.get("data_root", ""))
+    data_root_cfg = cfg.get("data_root", "")
+    data_roots: List[Path] = []
+    if isinstance(data_root_cfg, (list, tuple)):
+        data_roots = [Path(str(p)).resolve() for p in data_root_cfg if str(p).strip()]
+    else:
+        data_root_str = str(data_root_cfg or "").strip()
+        if data_root_str:
+            data_roots = [Path(data_root_str).resolve()]
+
+    data_root_override = str(data_roots[0]) if data_roots else str(data_root_cfg or "")
     val_split = float(cfg.get("val_split", 0.0))
     seed = int(cfg.get("seed", 42))
     run_data_yaml, data_root = build_data_yaml(
         data_yaml, exp_dir, val_split, seed, data_root_override
     )
+    if not data_roots:
+        data_roots = [data_root]
 
 
-    model_path = normalize_weight_ref(project_root, str(cfg.get("model", "yolo11n.pt")))
-    weights_path = normalize_weight_ref(project_root, str(cfg.get("weights", "")))
+    model_path = str(cfg.get("model", "yolo11n.pt"))
+    weights_path = str(cfg.get("weights", ""))
     epochs = int(cfg.get("epochs", 50))
     imgsz = int(cfg.get("imgsz", 640))
     batch = int(cfg.get("batch", 16))
@@ -309,7 +268,6 @@ def main() -> None:
     )
 
     from ultralytics import YOLO
-    configure_ultralytics_weight_cache(project_root)
 
     mode = str(cfg.get("mode", "train_test")).lower()
     if mode == "test" and not weights_path:
@@ -334,21 +292,38 @@ def main() -> None:
             init_weights = str(cache_path)
     model = YOLO(init_weights)
     if mode in {"train_test", "finetune_test"}:
-        model.train(
-            data=str(run_data_yaml),
-            epochs=epochs,
-            imgsz=imgsz,
-            batch=batch,
-            device=device,
-            workers=workers,
-            patience=patience,
-            lr0=lr0,
-            lrf=lrf,
-            warmup_epochs=warmup_epochs,
-            project=str(exp_dir),
-            name="train",
-            exist_ok=True,
-        )
+        try:
+            model.train(
+                data=str(run_data_yaml),
+                epochs=epochs,
+                imgsz=imgsz,
+                batch=batch,
+                device=device,
+                workers=workers,
+                patience=patience,
+                lr0=lr0,
+                lrf=lrf,
+                warmup_epochs=warmup_epochs,
+                conf=conf,
+                iou=nms_iou,
+                max_det=max_det,
+                optimizer=str(cfg.get("optimizer", "auto")),
+                seed=seed,
+                deterministic=bool(cfg.get("deterministic", True)),
+                pretrained=bool(cfg.get("pretrained", True)),
+                resume=bool(cfg.get("resume", False)),
+                amp=bool(cfg.get("amp", True)),
+                close_mosaic=int(cfg.get("close_mosaic", 10)),
+                project=str(exp_dir),
+                name="train",
+                exist_ok=True,
+            )
+        except UnicodeDecodeError as exc:
+            print(
+                "WARNING: Training hit UnicodeDecodeError during plotting (likely SciPy->NumPy lscpu decode). "
+                "Proceeding with whatever checkpoints were saved. "
+                f"Details: {exc}"
+            )
         update_args_yaml(exp_dir, cfg, cfg_path)
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
@@ -382,17 +357,6 @@ def main() -> None:
     train_entry = data_info_cfg.get("train", "images/train")
     val_entry = data_info_cfg.get("val", "images/val") or train_entry
     test_entry = data_info_cfg.get("test", "")
-
-    data_root_cfg = cfg.get("data_root", "")
-    data_roots: List[Path] = []
-    if isinstance(data_root_cfg, (list, tuple)):
-        data_roots = [Path(str(p)).resolve() for p in data_root_cfg if str(p).strip()]
-    else:
-        data_root_str = str(data_root_cfg or "").strip()
-        if data_root_str:
-            data_roots = [Path(data_root_str).resolve()]
-    if not data_roots:
-        data_roots = [data_root]
 
     val_sources: List[Path] = []
     test_sources: List[Path] = []
@@ -739,7 +703,9 @@ def main() -> None:
         }
         save_image_level_report(metrics_dir, "eval", val_items + test_items, meta)
 
-    # Keep weights only under exp_dir/train/weights for baseline workflow.
+    if mode in {"train_test", "finetune_test"}:
+        model_dir = project_root / "models" / exp_name
+        copy_weights(exp_dir, model_dir)
 
 
 if __name__ == "__main__":

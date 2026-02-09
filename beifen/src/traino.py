@@ -97,48 +97,6 @@ def normalize_weight_ref(project_root: Path, weight_ref: str) -> str:
     return str((project_root / path).resolve())
 
 
-def configure_ultralytics_weight_cache(project_root: Path) -> None:
-    """Route bare Ultralytics asset downloads (e.g. yolo26n.pt) to models/pretrained."""
-    try:
-        from ultralytics.utils import SETTINGS
-        from ultralytics.utils import downloads as ul_downloads
-    except Exception:
-        return
-
-    weights_dir = (project_root / "models" / "pretrained").resolve()
-    weights_dir.mkdir(parents=True, exist_ok=True)
-
-    legacy_amp_weight = (project_root / "yolo26n.pt").resolve()
-    target_amp_weight = (weights_dir / "yolo26n.pt").resolve()
-    if legacy_amp_weight.exists() and not target_amp_weight.exists():
-        try:
-            shutil.copy2(legacy_amp_weight, target_amp_weight)
-        except Exception:
-            pass
-
-    try:
-        SETTINGS.update({"weights_dir": str(weights_dir)})
-    except Exception:
-        try:
-            SETTINGS["weights_dir"] = str(weights_dir)
-        except Exception:
-            pass
-
-    if getattr(ul_downloads, "_weights_dir_patched", False):
-        return
-
-    original_attempt_download_asset = ul_downloads.attempt_download_asset
-
-    def _attempt_download_asset_patched(file, *args, **kwargs):
-        file_path = Path(str(file).strip().replace("'", ""))
-        if not file_path.is_absolute() and len(file_path.parts) == 1:
-            file = str(weights_dir / file_path.name)
-        return original_attempt_download_asset(file, *args, **kwargs)
-
-    ul_downloads.attempt_download_asset = _attempt_download_asset_patched
-    ul_downloads._weights_dir_patched = True
-
-
 def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None:
     args_path = exp_dir / "train" / "args.yaml"
     if not args_path.exists():
@@ -309,7 +267,6 @@ def main() -> None:
     )
 
     from ultralytics import YOLO
-    configure_ultralytics_weight_cache(project_root)
 
     mode = str(cfg.get("mode", "train_test")).lower()
     if mode == "test" and not weights_path:
