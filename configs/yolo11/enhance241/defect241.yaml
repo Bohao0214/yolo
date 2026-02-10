@@ -35,10 +35,10 @@ device: ""
 workers: 4
 
 # P2.3.0 评估/推理参数（写入配置，训练日志也会打印一次）
-conf: 0.30
-nms_iou: 0.60
-max_det: 20
-match_iou: 0.20
+conf: 0.25
+nms_iou: 0.7  # 评估/可视化/推理使用的 NMS IoU（默认 0.7）
+max_det: 100  # NMS 后最多保留的检测框数量
+match_iou: 0.3  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值）
 
 mode: train_test  # test / train_test / finetune_test
 weights: ""  # mode=test 时必须提供；mode=train_test 默认从 model 加载预训练权重
