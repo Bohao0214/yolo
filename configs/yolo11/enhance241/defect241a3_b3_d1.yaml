@@ -15,8 +15,8 @@ nms_iou: 0.7  # 评估/可视化/推理使用的 NMS IoU（默认 0.7）
 max_det: 100  # NMS 后最多保留的检测框数量
 match_iou: 0.3  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值）
 
-mode: train_test
-weights: ''
+mode: test # fine/test/train_test
+weights: '/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__b3__d1/exp_2602111914/train/weights/best.pt'
 patience: 0
 lr0: 0.012
 lrf: 0.12

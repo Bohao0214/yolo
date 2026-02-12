@@ -33,7 +33,6 @@ import argparse
 import atexit
 import datetime as dt
 import gc
-import hashlib
 import json
 import shutil
 import subprocess
@@ -41,8 +40,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.data.make_split import create_val_split
-from src.eval import (
+from data.make_split import create_val_split
+from eval import (
     compute_ap,
     compute_auc,
     compute_image_scores,
@@ -57,10 +56,6 @@ from src.eval import (
     save_multi_xy_curves_grouped,
     save_threshold_table,
     save_threshold_table_multi,
-)
-
-FIXED_AUDIT_PATH = Path(
-    "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect/exp_base2/train/audit_enhance241.md"
 )
 
 
@@ -108,84 +103,6 @@ def normalize_weight_ref(project_root: Path, weight_ref: str) -> str:
     if len(path.parts) == 1 and path.suffix.lower() == ".pt":
         return str(resolve_pretrained_weight(project_root, path.name))
     return str((project_root / path).resolve())
-
-
-def append_audit(md_path: Path, dict_or_text: Any) -> None:
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(dict_or_text, str):
-        payload = dict_or_text
-    else:
-        payload = json.dumps(dict_or_text, ensure_ascii=False, indent=2)
-    with open(md_path, "a", encoding="utf-8") as f:
-        f.write(payload)
-
-
-def _collect_env_probe() -> Dict[str, Any]:
-    probe: Dict[str, Any] = {}
-    probe["pwd"] = str(Path.cwd().resolve())
-    probe["python"] = sys.executable
-    probe["python_version"] = sys.version.splitlines()[0]
-    probe["sys_path_head"] = list(sys.path[:10])
-
-    try:
-        import ultralytics  # type: ignore
-
-        probe["ultralytics"] = str(getattr(ultralytics, "__version__", "unknown"))
-    except Exception as exc:
-        probe["ultralytics"] = f"import_failed: {exc}"
-
-    try:
-        import torch  # type: ignore
-
-        probe["torch"] = str(getattr(torch, "__version__", "unknown"))
-    except Exception as exc:
-        probe["torch"] = f"import_failed: {exc}"
-
-    try:
-        import src  # type: ignore
-
-        probe["import_src"] = str(getattr(src, "__file__", "unknown"))
-    except Exception as exc:
-        probe["import_src"] = f"failed: {exc}"
-
-    try:
-        import inspect
-        import src.train as src_train  # type: ignore
-
-        probe["import_src_train"] = str(inspect.getsourcefile(src_train) or getattr(src_train, "__file__", "unknown"))
-    except Exception as exc:
-        probe["import_src_train"] = f"failed: {exc}"
-
-    return probe
-
-
-def _sha1_file(path: Path) -> str:
-    h = hashlib.sha1()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _collect_file_hashes(project_root: Path) -> List[Dict[str, str]]:
-    targets = [
-        project_root / "src" / "train.py",
-        project_root / "tools" / "run_yolov11_241.sh",
-        project_root / "tools" / "run_yolov11.sh",
-        project_root / "configs" / "yolo11" / "enhance241" / "defect241.yaml",
-        project_root / "configs" / "yolo11" / "enhance241" / "defect241b2.yaml",
-        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a3.py",
-        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b2.py",
-        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b3.py",
-        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d1.py",
-    ]
-    out: List[Dict[str, str]] = []
-    for p in targets:
-        if p.exists():
-            out.append({"path": str(p), "sha1": _sha1_file(p)})
-        else:
-            out.append({"path": str(p), "sha1": "missing"})
-    return out
 
 
 def configure_ultralytics_weight_cache(project_root: Path) -> None:
@@ -390,8 +307,7 @@ def _snapshot_model(model: Any) -> Dict[str, Any]:
 
 
 def _collect_trainable_params(model: Any) -> Dict[str, Any]:
-    _, det_model, _ = _extract_model_seq(model)
-    named = list(det_model.named_parameters()) if hasattr(det_model, "named_parameters") else []
+    named = list(model.named_parameters()) if hasattr(model, "named_parameters") else []
     total_numel = sum(int(p.numel()) for _, p in named)
     trainable = [(n, p) for n, p in named if bool(getattr(p, "requires_grad", False))]
     trainable_numel = sum(int(p.numel()) for _, p in trainable)
@@ -420,14 +336,9 @@ def _load_ckpt_keyword_hits(path: Optional[Path]) -> Dict[str, Any]:
     except Exception:
         return {"count": 0, "sample_keys": [], "source": "torch_unavailable"}
     try:
-        ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    except TypeError:
-        try:
-            ckpt = torch.load(path, map_location="cpu")
-        except Exception as exc:
-            return {"count": 0, "sample_keys": [], "source": f"load_failed:{exc}"}
-    except Exception as exc:
-        return {"count": 0, "sample_keys": [], "source": f"load_failed:{exc}"}
+        ckpt = torch.load(path, map_location="cpu")
+    except Exception:
+        return {"count": 0, "sample_keys": [], "source": "load_failed"}
     state = None
     if isinstance(ckpt, dict):
         if "model" in ckpt:
@@ -452,8 +363,6 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
     info: Dict[str, Any] = {}
     for key, attr in (
         ("a3", "_enhance241_a3_info"),
-        ("b1", "_enhance241_b1_info"),
-        ("b2", "_enhance241_b2_info"),
         ("b3", "_enhance241_b3_info"),
         ("d1", "_enhance241_d1_info"),
     ):
@@ -467,12 +376,7 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
 
 def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
     enabled = set(audit_state.get("enhance241_enabled", []))
-    info = (
-        audit_state.get("train_runtime_infos")
-        or audit_state.get("eval_infos")
-        or audit_state.get("train_infos")
-        or {}
-    )
+    info = audit_state.get("eval_infos") or audit_state.get("train_infos") or {}
     checks: List[Dict[str, Any]] = []
 
     if "a3" in enabled:
@@ -487,20 +391,6 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         ok = patched == 2
         checks.append({"name": "b3_patch_count", "ok": ok, "detail": f"count={patched}"})
 
-    if "b2" in enabled:
-        pre = audit_state.get("train_runtime_pre_patch", {}) or {}
-        post = audit_state.get("train_runtime_post_patch", {}) or {}
-        pre_patched = len(pre.get("patched", [])) if isinstance(pre, dict) else 0
-        post_patched = len(post.get("patched", [])) if isinstance(post, dict) else 0
-        ok = post_patched > pre_patched
-        checks.append(
-            {
-                "name": "b2_runtime_patch_applied",
-                "ok": ok,
-                "detail": f"pre={pre_patched}, post={post_patched}",
-            }
-        )
-
     if "d1" in enabled:
         d1 = info.get("d1", {}) if isinstance(info, dict) else {}
         heads_after = int(d1.get("detect_heads_after", 0))
@@ -509,23 +399,6 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
 
     status = "PASS" if all(c.get("ok", False) for c in checks) else "FAIL"
     return status, checks
-
-
-def _append_stage_snapshot(lines: List[str], audit_state: Dict[str, Any], stage: str) -> None:
-    pre = audit_state.get(f"{stage}_pre_patch", {}) or {}
-    post = audit_state.get(f"{stage}_post_patch", {}) or {}
-    if not pre and not post:
-        return
-    lines.append(f"- {stage}.pre_patch.concat_candidates={pre.get('concat_candidates', [])}")
-    lines.append(f"- {stage}.pre_patch.patched={pre.get('patched', [])}")
-    lines.append(f"- {stage}.pre_patch.keyword_hits={pre.get('keyword_hits', {})}")
-    lines.append(f"- {stage}.post_patch.concat_candidates={post.get('concat_candidates', [])}")
-    lines.append(f"- {stage}.post_patch.patched={post.get('patched', [])}")
-    lines.append(f"- {stage}.post_patch.keyword_hits={post.get('keyword_hits', {})}")
-    if audit_state.get(f"{stage}_trainable_params") is not None:
-        lines.append(f"- {stage}.trainable_params={audit_state.get(f'{stage}_trainable_params')}")
-    if audit_state.get(f"{stage}_infos") is not None:
-        lines.append(f"- {stage}.infos={audit_state.get(f'{stage}_infos')}")
 
 
 def _format_enhance241_audit(audit_state: Dict[str, Any]) -> str:
@@ -548,38 +421,39 @@ def _format_enhance241_audit(audit_state: Dict[str, Any]) -> str:
     lines.append(json.dumps(audit_state.get("enhance241_cfg", {}), ensure_ascii=False, indent=2))
     lines.append("```")
 
-    lines.append("### A1 Environment And Import")
-    lines.append("```json")
-    lines.append(json.dumps(audit_state.get("env_probe", {}), ensure_ascii=False, indent=2))
-    lines.append("```")
+    pre = audit_state.get("train_pre_patch", {})
+    post = audit_state.get("train_post_patch", {})
+    lines.append(f"- pre_patch: concat_candidates={pre.get('concat_candidates', [])}")
+    lines.append(f"- pre_patch: patched={pre.get('patched', [])}")
+    lines.append(f"- pre_patch: keyword_hits={pre.get('keyword_hits', {})}")
+    lines.append(f"- post_patch: concat_candidates={post.get('concat_candidates', [])}")
+    lines.append(f"- post_patch: patched={post.get('patched', [])}")
+    lines.append(f"- post_patch: keyword_hits={post.get('keyword_hits', {})}")
 
-    lines.append("### A2 SHA1 Snapshot")
-    lines.append("```text")
-    for row in audit_state.get("file_hashes", []):
-        lines.append(f"{row.get('sha1', 'missing')}  {row.get('path', '')}")
-    lines.append("```")
+    if audit_state.get("trainable_params") is not None:
+        lines.append(f"- trainable_params: {audit_state.get('trainable_params')}")
 
-    lines.append("### A3 Patch Runtime")
-    for stage in ("train", "train_runtime", "eval"):
-        _append_stage_snapshot(lines, audit_state, stage)
+    infos = audit_state.get("train_infos") or {}
+    if "a3" in infos:
+        lines.append(f"- a3_info: {infos.get('a3')}")
+    if "b3" in infos:
+        lines.append(f"- b3_info: {infos.get('b3')}")
+    if "d1" in infos:
+        lines.append(f"- d1_info: {infos.get('d1')}")
 
     lines.append(f"- eval_weights: {audit_state.get('eval_weights', '')}")
     lines.append(f"- ckpt_keyword_hits: {audit_state.get('ckpt_keyword_hits', {})}")
     lines.append(f"- threshold_sweep: {audit_state.get('threshold_sweep', {})}")
-
-    lines.append("### A4 Score Diagnostics")
-    lines.append("```json")
-    lines.append(json.dumps(audit_state.get("a4_diag", {}), ensure_ascii=False, indent=2))
-    lines.append("```")
-
     lines.append(f"- checks: {checks}")
     lines.append(f"- conclusion: {status}")
     return "\n".join(lines) + "\n"
 
 
 def _append_enhance241_audit(audit_path: Path, audit_state: Dict[str, Any]) -> None:
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
     block = _format_enhance241_audit(audit_state)
-    append_audit(audit_path, block)
+    with open(audit_path, "a", encoding="utf-8") as f:
+        f.write(block)
 
 
 def _register_enhance241_audit(audit_path: Path, audit_state: Dict[str, Any]) -> None:
@@ -589,8 +463,6 @@ def _register_enhance241_audit(audit_path: Path, audit_state: Dict[str, Any]) ->
             if eval_w:
                 audit_state["ckpt_keyword_hits"] = _load_ckpt_keyword_hits(Path(eval_w))
             _append_enhance241_audit(audit_path, audit_state)
-            if FIXED_AUDIT_PATH.resolve() != audit_path.resolve():
-                _append_enhance241_audit(FIXED_AUDIT_PATH, audit_state)
         except Exception:
             pass
 
@@ -598,12 +470,10 @@ def _register_enhance241_audit(audit_path: Path, audit_state: Dict[str, Any]) ->
 
 
 def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit_state: Dict[str, Any]) -> Any:
-    stage_key = str(stage).strip().replace(" ", "_")
     pre = _snapshot_model(model)
-    audit_state[f"{stage_key}_pre_patch"] = pre
-    if stage_key == "train":
+    if stage == "train":
         audit_state["train_pre_patch"] = pre
-    elif stage_key == "eval":
+    else:
         audit_state["eval_pre_patch"] = pre
 
     enabled = _enhance241_enabled_keys(cfg)
@@ -619,40 +489,14 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
         model = yolo11_241d1.apply(model, cfg)
 
     post = _snapshot_model(model)
-    infos = _collect_enhance241_infos(model)
-    trainable = _collect_trainable_params(model)
-    audit_state[f"{stage_key}_post_patch"] = post
-    audit_state[f"{stage_key}_infos"] = infos
-    audit_state[f"{stage_key}_trainable_params"] = trainable
-
-    if stage_key == "train":
+    if stage == "train":
         audit_state["train_post_patch"] = post
-        audit_state["train_infos"] = infos
-        audit_state["trainable_params"] = trainable
-    elif stage_key == "train_runtime":
-        audit_state["train_runtime_post_patch"] = post
-        audit_state["train_runtime_infos"] = infos
-    elif stage_key == "eval":
+        audit_state["train_infos"] = _collect_enhance241_infos(model)
+        audit_state["trainable_params"] = _collect_trainable_params(model)
+    else:
         audit_state["eval_post_patch"] = post
-        audit_state["eval_infos"] = infos
+        audit_state["eval_infos"] = _collect_enhance241_infos(model)
     return model
-
-
-def _build_enhance241_trainer_cls(yolo_model: Any, cfg: Dict[str, Any], audit_state: Dict[str, Any]) -> Optional[Any]:
-    enabled = _enhance241_enabled_keys(cfg)
-    if not enabled:
-        return None
-
-    base_cls = yolo_model._smart_load("trainer")
-    cfg_dict = cfg
-
-    class Enhance241Trainer(base_cls):
-        def get_model(self, cfg: Any = None, weights: Any = None, verbose: bool = True) -> Any:
-            m = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
-            return _apply_enhance241_patches(m, cfg_dict, stage="train_runtime", audit_state=audit_state)
-
-    Enhance241Trainer.__name__ = f"Enhance241{base_cls.__name__}"
-    return Enhance241Trainer
 
 
 def parse_args() -> argparse.Namespace:
@@ -703,8 +547,6 @@ def main() -> None:
         "enhance241_cfg": _enhance241_cfg(cfg),
         "threshold_sweep": cfg.get("threshold_sweep", {}),
         "eval_weights": "",
-        "env_probe": _collect_env_probe(),
-        "file_hashes": _collect_file_hashes(project_root),
     }
     _register_enhance241_audit(exp_dir / "train" / "enhance241_audit.md", audit_state)
 
@@ -788,7 +630,7 @@ def main() -> None:
     model = YOLO(init_weights)
     model = _apply_enhance241_patches(model, cfg, stage="train", audit_state=audit_state)
     if mode in {"train_test", "finetune_test"}:
-        train_kwargs = dict(
+        model.train(
             data=str(run_data_yaml),
             epochs=epochs,
             imgsz=imgsz,
@@ -803,11 +645,6 @@ def main() -> None:
             name="train",
             exist_ok=True,
         )
-        trainer_cls = _build_enhance241_trainer_cls(model, cfg, audit_state)
-        if trainer_cls is not None:
-            model.train(trainer=trainer_cls, **train_kwargs)
-        else:
-            model.train(**train_kwargs)
         update_args_yaml(exp_dir, cfg, cfg_path)
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
@@ -1213,132 +1050,6 @@ def main() -> None:
             "eval_device": str(eval_device),
         }
         save_image_level_report(metrics_dir, "eval", val_items + test_items, meta)
-
-    # A4 diagnostics: fixed assertion point (iou=0.2, threshold=0.3)
-    a4_diag: Dict[str, Any] = {}
-    if all_sources:
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        gc.collect()
-
-        diag_iou = 0.2
-        diag_thr = 0.3
-        labels_diag, scores_diag = _compute_scores_all(
-            compute_image_scores_iou,
-            all_sources,
-            metric_conf,
-            float(diag_iou),
-            eval_batch,
-            eval_device,
-            nms_iou,
-            max_det,
-        )
-        diag_items: List[Dict[str, object]] = []
-        for src in all_sources:
-            try:
-                diag_items.extend(
-                    compute_image_level_results(
-                        model,
-                        src,
-                        conf_threshold=float(diag_thr),
-                        iou_match=float(diag_iou),
-                        metric_conf=metric_conf,
-                        batch=eval_batch,
-                        device=eval_device,
-                        nms_iou=nms_iou,
-                        max_det=max_det,
-                        split="diag",
-                        vis_root=None,
-                        save_visuals=False,
-                    )
-                )
-            except RuntimeError as exc:
-                if "out of memory" not in str(exc).lower():
-                    raise
-                try:
-                    import torch
-
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                gc.collect()
-                diag_items.extend(
-                    compute_image_level_results(
-                        model,
-                        src,
-                        conf_threshold=float(diag_thr),
-                        iou_match=float(diag_iou),
-                        metric_conf=metric_conf,
-                        batch=1,
-                        device="cpu",
-                        nms_iou=nms_iou,
-                        max_det=max_det,
-                        split="diag",
-                        vis_root=None,
-                        save_visuals=False,
-                    )
-                )
-
-        first10 = []
-        for item in diag_items[:10]:
-            first10.append(
-                {
-                    "image": str(Path(str(item.get("image", ""))).name),
-                    "has_gt": bool(item.get("has_gt", False)),
-                    "num_preds": int(item.get("num_preds", 0)),
-                    "max_score": float(item.get("max_conf", 0.0)),
-                    "final_score": float(item.get("max_conf", 0.0)),
-                }
-            )
-
-        labels_count = int(labels_diag.size)
-        positives = int(labels_diag.sum()) if labels_count else 0
-        pos_ratio = float(positives / labels_count) if labels_count else 0.0
-        if labels_count:
-            quantiles = np.quantile(scores_diag, [0.5, 0.9, 0.99]).tolist()
-        else:
-            quantiles = [0.0, 0.0, 0.0]
-
-        preds_diag = (scores_diag >= float(diag_thr)).astype(np.int32) if labels_count else np.array([], dtype=np.int32)
-        tp = int(((preds_diag == 1) & (labels_diag == 1)).sum()) if labels_count else 0
-        fp = int(((preds_diag == 1) & (labels_diag == 0)).sum()) if labels_count else 0
-        fn = int(((preds_diag == 0) & (labels_diag == 1)).sum()) if labels_count else 0
-        tn = int(((preds_diag == 0) & (labels_diag == 0)).sum()) if labels_count else 0
-
-        outcome_counts = {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
-        for item in diag_items:
-            outcome = str(item.get("outcome", ""))
-            if outcome in outcome_counts:
-                outcome_counts[outcome] += 1
-        confusion_consistent = (
-            outcome_counts["TP"] == tp
-            and outcome_counts["FP"] == fp
-            and outcome_counts["FN"] == fn
-            and outcome_counts["TN"] == tn
-        )
-
-        a4_diag = {
-            "assert_1_first10_samples": first10,
-            "assert_2_distribution": {
-                "num_samples": labels_count,
-                "positive_ratio": pos_ratio,
-                "score_quantiles_p50_p90_p99": [float(quantiles[0]), float(quantiles[1]), float(quantiles[2])],
-                "labels_all_constant": bool(labels_count > 0 and (labels_diag.max() == labels_diag.min())),
-                "scores_all_constant": bool(labels_count > 0 and float(scores_diag.max() - scores_diag.min()) < 1e-12),
-            },
-            "assert_3_confusion_at_iou0.2_thr0.3": {
-                "from_scores": {"TP": tp, "FP": fp, "FN": fn, "TN": tn},
-                "from_image_report": outcome_counts,
-                "consistent": bool(confusion_consistent),
-            },
-        }
-    audit_state["a4_diag"] = a4_diag
 
     # Keep weights only under exp_dir/train/weights for baseline workflow.
 
