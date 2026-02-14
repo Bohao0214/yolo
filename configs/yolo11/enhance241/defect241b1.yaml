@@ -6,7 +6,7 @@ data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt
 epochs: 100
 imgsz: 640
-batch: 6
+batch: 10
 device: ''
 workers: 4
 

@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
+from .yolo11_241a3 import _bind_module_debug, _get_module_recorder, get_check_recorder
+
 ENHANCE241_AUDIT_KEYS = ["enhance241_b3"]  # enhance241-audit
 
 
@@ -105,17 +107,43 @@ class NASFPNLiteFuse(torch.nn.Module):
         raise TypeError(f"NASFPNLiteFuse expects [hi,lo] or concat tensor, got: {type(x)}")
 
     def forward(self, x: Any) -> torch.Tensor:
+        recorder = _get_module_recorder(self)
+        prefix = str(getattr(self, "_enhance241_prefix", "b3"))
+        step = int(getattr(self, "_enhance241_fwd_step", 0))
+
         hi, lo = self._split_input(x)
         hi = self._maybe_align(hi, lo)
         if hi.shape[1] != self.c or lo.shape[1] != self.c:
             raise ValueError(f"Channel mismatch: hi={hi.shape} lo={lo.shape} expected C={self.c}")
 
+        if recorder is not None and step == 0:
+            recorder.capture_param_before(self, prefix)
+
         w = torch.relu(self.enhance241_b3_weight)
         w_sum = w.sum() + self.eps
         w = w / w_sum
+        if recorder is not None:
+            recorder.record_b3_weight(prefix, self.tag, w.detach().float(), step)
+
         fused = w[0] * lo + w[1] * hi
         refined = self.enhance241_b3_refine(fused)
-        return torch.cat((hi, refined), dim=1)
+        out = torch.cat((hi, refined), dim=1)
+
+        if recorder is not None:
+            if step == 0:
+                baseline = torch.cat((hi.detach(), lo.detach()), dim=1)
+                recorder.record_module_compare(f"{prefix}.fused", patched=out, baseline=baseline, input_tensor=lo)
+                recorder.record_b3_feature_relation(prefix, lo, refined)
+                if out.requires_grad:
+                    try:
+                        out.register_hook(lambda g, n=f"{prefix}.fused": recorder.record_output_grad(n, g))
+                    except Exception:
+                        pass
+            elif step == 1:
+                recorder.capture_param_delta(self, prefix)
+
+        setattr(self, "_enhance241_fwd_step", step + 1)
+        return out
 
 
 def _concat_candidates(seq: Any) -> List[str]:
@@ -245,6 +273,20 @@ def apply(model: Any, cfg: Any) -> Any:
             "note": "already_patched",
         }
         setattr(yolo_obj, "_enhance241_b3_info", info)
+
+        recorder = get_check_recorder("b3", cfg, patch_info=info)
+        if recorder is not None:
+            try:
+                for idx in prepatched:
+                    mod = seq[int(idx)]
+                    _bind_module_debug(mod, recorder, prefix=f"b3.idx{int(idx)}.existing")
+                    recorder.register_module_params(mod, f"b3.idx{int(idx)}.existing")
+                detect_idx, detect_layer = _locate_detect(seq)
+                recorder.attach_detect_hooks(detect_layer, detect_idx)
+                recorder.maybe_run_val_separability(yolo_obj, cfg)
+            except Exception as exc:
+                recorder.add_note(f"b3_prepatched_hook_failed:{exc}")
+
         if len(prepatched) >= 2:
             return yolo_obj
         raise RuntimeError(f"enhance241.b3 expects two NASFPNLiteFuse modules, got {len(prepatched)}")
@@ -262,6 +304,7 @@ def apply(model: Any, cfg: Any) -> Any:
 
     patched_indices: List[int] = []
     weights_info: List[Dict[str, Any]] = []
+    recorder = get_check_recorder("b3", cfg)
 
     def _patch_at(idx: int, tag: str) -> None:
         old = seq[idx]
@@ -304,6 +347,13 @@ def apply(model: Any, cfg: Any) -> Any:
             }
         )
 
+        if recorder is not None:
+            try:
+                _bind_module_debug(fuse, recorder, prefix=f"b3.idx{idx}.{tag}")
+                recorder.register_module_params(fuse, f"b3.idx{idx}.{tag}")
+            except Exception as exc:
+                recorder.add_note(f"b3_attach_debug_failed:{idx}:{exc}")
+
     _patch_at(p5_concat_idx, "p5p4")
     _patch_at(p3_concat_idx, "p4p3")
 
@@ -318,4 +368,17 @@ def apply(model: Any, cfg: Any) -> Any:
         "upsample": str(upsample_mode),
     }
     setattr(yolo_obj, "_enhance241_b3_info", info)
+
+    if recorder is not None:
+        recorder.set_patch_info(info)
+        try:
+            detect_idx, detect_layer = _locate_detect(seq)
+            recorder.attach_detect_hooks(detect_layer, detect_idx)
+        except Exception as exc:
+            recorder.add_note(f"b3_detect_hook_failed:{exc}")
+        try:
+            recorder.maybe_run_val_separability(yolo_obj, cfg)
+        except Exception as exc:
+            recorder.add_note(f"b3_val_check_failed:{exc}")
+
     return yolo_obj

@@ -9,6 +9,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/yolo11/enhance241/defect241.yaml"
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+E241_SAFE_BATCH="${E241_SAFE_BATCH:-6}"
+E241_SAFE_WORKERS="${E241_SAFE_WORKERS:-4}"
 
 usage() {
   cat <<'USAGE'
@@ -191,6 +193,61 @@ PY
 
   CONFIG_TO_RUN="${DERIVED_CONFIG}"
 fi
+
+# Safety guard for enhance runs on limited VRAM:
+# baseline (all enhance241 flags false) stays untouched.
+export _E241_RUN_CFG="${CONFIG_TO_RUN}"
+export _E241_ENABLE_D1="${ENABLE_D1}"
+export _E241_SAFE_BATCH="${E241_SAFE_BATCH}"
+export _E241_SAFE_WORKERS="${E241_SAFE_WORKERS}"
+"${PYTHON_BIN}" - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+cfg_path = Path(os.environ["_E241_RUN_CFG"]).resolve()
+enable_d1_arg = str(os.environ.get("_E241_ENABLE_D1", "false")).lower() == "true"
+safe_batch = int(os.environ.get("_E241_SAFE_BATCH", "6"))
+safe_workers = int(os.environ.get("_E241_SAFE_WORKERS", "4"))
+
+with cfg_path.open("r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f) or {}
+if not isinstance(cfg, dict):
+    raise SystemExit(f"Invalid yaml mapping: {cfg_path}")
+
+enh = cfg.get("enhance241", {}) or {}
+if not isinstance(enh, dict):
+    enh = {}
+
+enhance_enabled = any(bool(enh.get(k, False)) for k in ("a3", "b1", "b2", "b3", "d1"))
+if not enhance_enabled:
+    raise SystemExit(0)
+
+enable_d1 = enable_d1_arg or bool(enh.get("d1", False))
+changed = False
+
+try:
+    batch = int(cfg.get("batch", safe_batch))
+except Exception:
+    batch = safe_batch
+if batch >= 8:
+    cfg["batch"] = int(safe_batch)
+    changed = True
+
+if enable_d1:
+    try:
+        workers = int(cfg.get("workers", safe_workers))
+    except Exception:
+        workers = safe_workers
+    if workers > safe_workers:
+        cfg["workers"] = int(safe_workers)
+        changed = True
+
+if changed:
+    with cfg_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+PY
 
 echo "[run] config=${CONFIG_TO_RUN} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN}"
 "${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${CONFIG_TO_RUN}"
