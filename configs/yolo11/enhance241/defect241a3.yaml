@@ -8,7 +8,7 @@ epochs: 100
 imgsz: 640
 batch: 10
 device: ''
-workers: 8
+workers: 4
 conf: 0.25
 nms_iou: 0.7
 max_det: 100
