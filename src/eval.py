@@ -537,13 +537,67 @@ def save_metric_plots(
     recall: np.ndarray,
     precision: np.ndarray,
     fpr: np.ndarray,
+    plot_cfg: Optional[Dict[str, object]] = None,
 ) -> None:
+    def _apply_axis_cfg(axis_cfg: Optional[Dict[str, object]]) -> None:
+        if not isinstance(axis_cfg, dict):
+            return
+
+        def _float_pair(v: object) -> Optional[Tuple[float, float]]:
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                return None
+            try:
+                return float(v[0]), float(v[1])
+            except Exception:
+                return None
+
+        xlim_pair = _float_pair(axis_cfg.get("xlim"))
+        ylim_pair = _float_pair(axis_cfg.get("ylim"))
+        if xlim_pair is not None:
+            plt.xlim(*xlim_pair)
+        if ylim_pair is not None:
+            plt.ylim(*ylim_pair)
+
+        x_tick_step = axis_cfg.get("xtick_step")
+        y_tick_step = axis_cfg.get("ytick_step")
+        if x_tick_step is not None:
+            try:
+                step = float(x_tick_step)
+                if step > 0:
+                    start, end = xlim_pair if xlim_pair is not None else tuple(float(v) for v in plt.xlim())
+                    plt.xticks(np.round(np.arange(start, end + 1e-9, step), 4))
+            except Exception:
+                pass
+        if y_tick_step is not None:
+            try:
+                step = float(y_tick_step)
+                if step > 0:
+                    start, end = ylim_pair if ylim_pair is not None else tuple(float(v) for v in plt.ylim())
+                    plt.yticks(np.round(np.arange(start, end + 1e-9, step), 4))
+            except Exception:
+                pass
+
+    roc_axis_cfg = None
+    pr_axis_cfg = None
+    threshold_axis_cfg = None
+    if isinstance(plot_cfg, dict):
+        maybe_roc = plot_cfg.get("roc")
+        if isinstance(maybe_roc, dict):
+            roc_axis_cfg = maybe_roc
+        maybe_pr = plot_cfg.get("pr", plot_cfg.get("curve"))
+        if isinstance(maybe_pr, dict):
+            pr_axis_cfg = maybe_pr
+        maybe_thr = plot_cfg.get("threshold", plot_cfg.get("curve"))
+        if isinstance(maybe_thr, dict):
+            threshold_axis_cfg = maybe_thr
+
     out_dir.mkdir(parents=True, exist_ok=True)
     plt.figure()
     plt.plot(fpr, recall, color="tab:blue", linewidth=0.8)
     plt.xlabel("FPR")
     plt.ylabel("TPR/Recall")
     plt.title(f"{tag} ROC")
+    _apply_axis_cfg(roc_axis_cfg)
     plt.grid(True, alpha=0.3)
     plt.savefig(out_dir / f"{tag}_roc.png", dpi=150, bbox_inches="tight")
     plt.close()
@@ -553,6 +607,7 @@ def save_metric_plots(
     plt.xlabel("Recall")
     plt.ylabel("Precision")
     plt.title(f"{tag} PR")
+    _apply_axis_cfg(pr_axis_cfg)
     plt.grid(True, alpha=0.3)
     plt.savefig(out_dir / f"{tag}_pr.png", dpi=150, bbox_inches="tight")
     plt.close()
@@ -563,6 +618,7 @@ def save_metric_plots(
     plt.xlabel("Threshold")
     plt.ylabel("Score")
     plt.title(f"{tag} Recall/FPR vs Threshold")
+    _apply_axis_cfg(threshold_axis_cfg)
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.savefig(out_dir / f"{tag}_threshold_curve.png", dpi=150, bbox_inches="tight")
@@ -577,7 +633,46 @@ def save_multi_curve(
     xlabel: str,
     ylabel: str,
     title: str,
+    axis_cfg: Optional[Dict[str, object]] = None,
 ) -> None:
+    def _apply_axis_cfg(cfg: Optional[Dict[str, object]]) -> None:
+        if not isinstance(cfg, dict):
+            return
+
+        def _float_pair(v: object) -> Optional[Tuple[float, float]]:
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                return None
+            try:
+                return float(v[0]), float(v[1])
+            except Exception:
+                return None
+
+        xlim_pair = _float_pair(cfg.get("xlim"))
+        ylim_pair = _float_pair(cfg.get("ylim"))
+        if xlim_pair is not None:
+            plt.xlim(*xlim_pair)
+        if ylim_pair is not None:
+            plt.ylim(*ylim_pair)
+
+        x_tick_step = cfg.get("xtick_step")
+        y_tick_step = cfg.get("ytick_step")
+        if x_tick_step is not None:
+            try:
+                step = float(x_tick_step)
+                if step > 0:
+                    start, end = xlim_pair if xlim_pair is not None else tuple(float(v) for v in plt.xlim())
+                    plt.xticks(np.round(np.arange(start, end + 1e-9, step), 4))
+            except Exception:
+                pass
+        if y_tick_step is not None:
+            try:
+                step = float(y_tick_step)
+                if step > 0:
+                    start, end = ylim_pair if ylim_pair is not None else tuple(float(v) for v in plt.ylim())
+                    plt.yticks(np.round(np.arange(start, end + 1e-9, step), 4))
+            except Exception:
+                pass
+
     out_dir.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(10, 6))
     for label, y in curves:
@@ -585,6 +680,7 @@ def save_multi_curve(
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.title(title)
+    _apply_axis_cfg(axis_cfg)
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -599,7 +695,46 @@ def save_multi_xy_curves(
     xlabel: str,
     ylabel: str,
     title: str,
+    axis_cfg: Optional[Dict[str, object]] = None,
 ) -> None:
+    def _apply_axis_cfg(cfg: Optional[Dict[str, object]]) -> None:
+        if not isinstance(cfg, dict):
+            return
+
+        def _float_pair(v: object) -> Optional[Tuple[float, float]]:
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                return None
+            try:
+                return float(v[0]), float(v[1])
+            except Exception:
+                return None
+
+        xlim_pair = _float_pair(cfg.get("xlim"))
+        ylim_pair = _float_pair(cfg.get("ylim"))
+        if xlim_pair is not None:
+            plt.xlim(*xlim_pair)
+        if ylim_pair is not None:
+            plt.ylim(*ylim_pair)
+
+        x_tick_step = cfg.get("xtick_step")
+        y_tick_step = cfg.get("ytick_step")
+        if x_tick_step is not None:
+            try:
+                step = float(x_tick_step)
+                if step > 0:
+                    start, end = xlim_pair if xlim_pair is not None else tuple(float(v) for v in plt.xlim())
+                    plt.xticks(np.round(np.arange(start, end + 1e-9, step), 4))
+            except Exception:
+                pass
+        if y_tick_step is not None:
+            try:
+                step = float(y_tick_step)
+                if step > 0:
+                    start, end = ylim_pair if ylim_pair is not None else tuple(float(v) for v in plt.ylim())
+                    plt.yticks(np.round(np.arange(start, end + 1e-9, step), 4))
+            except Exception:
+                pass
+
     out_dir.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(10, 6))
     for label, x, y in curves:
@@ -607,6 +742,7 @@ def save_multi_xy_curves(
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.title(title)
+    _apply_axis_cfg(axis_cfg)
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -624,6 +760,7 @@ def save_multi_curve_grouped(
     title: str,
     group_size: int,
     group_label: str,
+    axis_cfg: Optional[Dict[str, object]] = None,
 ) -> None:
     for i in range(0, len(curves), group_size):
         group = curves[i : i + group_size]
@@ -631,7 +768,7 @@ def save_multi_curve_grouped(
             continue
         idx = i // group_size + 1
         filename = f"{base_filename}_{group_label}{idx}.png"
-        save_multi_curve(out_dir, filename, xvals, group, xlabel, ylabel, title)
+        save_multi_curve(out_dir, filename, xvals, group, xlabel, ylabel, title, axis_cfg=axis_cfg)
 
 
 def save_multi_xy_curves_grouped(
@@ -643,6 +780,7 @@ def save_multi_xy_curves_grouped(
     title: str,
     group_size: int,
     group_label: str,
+    axis_cfg: Optional[Dict[str, object]] = None,
 ) -> None:
     for i in range(0, len(curves), group_size):
         group = curves[i : i + group_size]
@@ -650,7 +788,7 @@ def save_multi_xy_curves_grouped(
             continue
         idx = i // group_size + 1
         filename = f"{base_filename}_{group_label}{idx}.png"
-        save_multi_xy_curves(out_dir, filename, group, xlabel, ylabel, title)
+        save_multi_xy_curves(out_dir, filename, group, xlabel, ylabel, title, axis_cfg=axis_cfg)
 
 
 def save_threshold_table_multi(out_dir: Path, tag: str, rows: List[dict]) -> None:

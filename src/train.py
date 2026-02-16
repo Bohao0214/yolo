@@ -175,9 +175,14 @@ def _collect_file_hashes(project_root: Path) -> List[Dict[str, str]]:
         project_root / "configs" / "yolo11" / "enhance241" / "defect241.yaml",
         project_root / "configs" / "yolo11" / "enhance241" / "defect241b2.yaml",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a3.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a5.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b2.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b3.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b5.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241c5.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d1.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d3.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d5.py",
     ]
     out: List[Dict[str, str]] = []
     for p in targets:
@@ -331,7 +336,7 @@ def _enhance241_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
     enh = _enhance241_cfg(cfg)
-    keys = ["a3", "b1", "b2", "b3", "d1"]
+    keys = ["a3", "a5", "b1", "b2", "b3", "b5", "c5", "d1", "d3", "d5"]
     return [k for k in keys if bool(enh.get(k, False))]
 
 
@@ -360,8 +365,13 @@ def _collect_patched(seq: Any) -> List[str]:
         "P4P3GateAlignFuse",
         "P3FuseChain",
         "SPDConvDownsample",
+        "A5P3Residual",
         "NASFPNLiteFuse",
+        "B5GFPNFuse",
+        "C5BRAInject",
         "P2LiteFuse",
+        "P3LogitTemperature",
+        "P6Downsample",
     }
     out: List[str] = []
     for i, layer in enumerate(seq or []):
@@ -452,10 +462,15 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
     info: Dict[str, Any] = {}
     for key, attr in (
         ("a3", "_enhance241_a3_info"),
+        ("a5", "_enhance241_a5_info"),
         ("b1", "_enhance241_b1_info"),
         ("b2", "_enhance241_b2_info"),
         ("b3", "_enhance241_b3_info"),
+        ("b5", "_enhance241_b5_info"),
+        ("c5", "_enhance241_c5_info"),
         ("d1", "_enhance241_d1_info"),
+        ("d3", "_enhance241_d3_info"),
+        ("d5", "_enhance241_d5_info"),
     ):
         val = getattr(model, attr, None)
         if val is None and hasattr(model, "model"):
@@ -481,11 +496,29 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         ok = replaced == 1
         checks.append({"name": "a3_replace_count", "ok": ok, "detail": f"count={replaced}"})
 
+    if "a5" in enabled:
+        a5 = info.get("a5", {}) if isinstance(info, dict) else {}
+        patched = int(a5.get("patched_count", 0)) + int(a5.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "a5_patch_count", "ok": ok, "detail": f"count={patched}"})
+
     if "b3" in enabled:
         b3 = info.get("b3", {}) if isinstance(info, dict) else {}
         patched = int(b3.get("patched_count", 0))
         ok = patched == 2
         checks.append({"name": "b3_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "b5" in enabled:
+        b5 = info.get("b5", {}) if isinstance(info, dict) else {}
+        patched = int(b5.get("patched_count", 0)) + int(b5.get("existing_count", 0))
+        ok = patched == 2
+        checks.append({"name": "b5_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "c5" in enabled:
+        c5 = info.get("c5", {}) if isinstance(info, dict) else {}
+        patched = int(c5.get("patched_count", 0)) + int(c5.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "c5_patch_count", "ok": ok, "detail": f"count={patched}"})
 
     if "b2" in enabled:
         pre = audit_state.get("train_runtime_pre_patch", {}) or {}
@@ -501,11 +534,32 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
             }
         )
 
-    if "d1" in enabled:
-        d1 = info.get("d1", {}) if isinstance(info, dict) else {}
-        heads_after = int(d1.get("detect_heads_after", 0))
-        ok = heads_after == 4
-        checks.append({"name": "d1_head_count", "ok": ok, "detail": f"heads_after={heads_after}"})
+    if "d1" in enabled or "d3" in enabled:
+        d3 = {}
+        if isinstance(info, dict):
+            d3 = info.get("d3", {}) or info.get("d1", {})
+        patched = int(d3.get("patched_count", 0)) + int(d3.get("existing_count", 0))
+        ok = patched == 1
+        checks.append(
+            {
+                "name": "d3_temperature_patch",
+                "ok": ok,
+                "detail": f"patched_or_existing={patched}",
+            }
+        )
+
+    if "d5" in enabled:
+        d5 = info.get("d5", {}) if isinstance(info, dict) else {}
+        heads_after = int(d5.get("detect_heads_after", 0))
+        patched = int(d5.get("patched_count", 0)) + int(d5.get("existing_count", 0))
+        ok = patched == 1 and heads_after == 4
+        checks.append(
+            {
+                "name": "d5_head_count",
+                "ok": ok,
+                "detail": f"patched_or_existing={patched}, heads_after={heads_after}",
+            }
+        )
 
     status = "PASS" if all(c.get("ok", False) for c in checks) else "FAIL"
     return status, checks
@@ -608,15 +662,30 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
 
     enabled = _enhance241_enabled_keys(cfg)
     if enabled:
-        if "b3" in enabled and ("b1" in enabled or "b2" in enabled):
-            raise RuntimeError("enhance241.b3 conflicts with b1/b2; enable only one B-class module.")
-        from third_party.yolo11.enhance241 import yolo11_241a3, yolo11_241b1, yolo11_241b2, yolo11_241b3, yolo11_241d1
+        b_enabled = [k for k in ("b1", "b2", "b3", "b5") if k in enabled]
+        if len(b_enabled) > 1:
+            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5.")
+        from third_party.yolo11.enhance241 import (
+            yolo11_241a3,
+            yolo11_241a5,
+            yolo11_241b1,
+            yolo11_241b2,
+            yolo11_241b3,
+            yolo11_241b5,
+            yolo11_241c5,
+            yolo11_241d3,
+            yolo11_241d5,
+        )
 
         model = yolo11_241a3.apply(model, cfg)
+        model = yolo11_241a5.apply(model, cfg)
         model = yolo11_241b1.apply(model, cfg)
         model = yolo11_241b2.apply(model, cfg)
         model = yolo11_241b3.apply(model, cfg)
-        model = yolo11_241d1.apply(model, cfg)
+        model = yolo11_241b5.apply(model, cfg)
+        model = yolo11_241c5.apply(model, cfg)
+        model = yolo11_241d5.apply(model, cfg)
+        model = yolo11_241d3.apply(model, cfg)
 
     post = _snapshot_model(model)
     infos = _collect_enhance241_infos(model)
@@ -881,11 +950,32 @@ def main() -> None:
     fix_list = sweep_cfg.get("fix_list", [0.1, 0.2, 0.3, 0.4])
     curve_range = sweep_cfg.get("curve", [0.01, 0.01, 1.00])
     table_range = sweep_cfg.get("table", [0.00, 0.05, 1.00])
+    default_plot_cfg = {
+        "roc": {
+            "xlim": [0.0, 1.0],
+            "ylim": [0.0, 1.0],
+            "xtick_step": 0.05,
+            "ytick_step": 0.05,
+        },
+        "curve": {
+            "xlim": [0.0, 1.0],
+            "ylim": [0.0, 1.0],
+            "xtick_step": 0.05,
+            "ytick_step": 0.05,
+        }
+    }
+    plot_cfg = sweep_cfg.get("plot_cfg", default_plot_cfg)
+    if not isinstance(plot_cfg, dict):
+        plot_cfg = default_plot_cfg
+    roc_axis_cfg = plot_cfg.get("roc", {}) if isinstance(plot_cfg.get("roc", {}), dict) else {}
+    curve_axis_cfg = plot_cfg.get("curve", {}) if isinstance(plot_cfg.get("curve", {}), dict) else {}
+    pr_axis_cfg = plot_cfg.get("pr", curve_axis_cfg) if isinstance(plot_cfg.get("pr", curve_axis_cfg), dict) else {}
     audit_state["threshold_sweep"] = {
         "fix": fix_var,
         "fix_list": fix_list,
         "curve": curve_range,
         "table": table_range,
+        "plot_cfg": plot_cfg,
     }
 
     if not isinstance(fix_list, (list, tuple)):
@@ -1001,7 +1091,13 @@ def main() -> None:
 
         # Save sweep meta
         try:
-            sweep_meta = {"fix": fix_var, "fix_list": fix_list, "curve": curve_range, "table": table_range}
+            sweep_meta = {
+                "fix": fix_var,
+                "fix_list": fix_list,
+                "curve": curve_range,
+                "table": table_range,
+                "plot_cfg": plot_cfg,
+            }
             (metrics_dir / f"{tag}_threshold_sweep.json").write_text(
                 json.dumps(sweep_meta, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -1016,7 +1112,7 @@ def main() -> None:
             recall, precision, fpr = compute_threshold_metrics(labels_base, scores_base, curve_vals)
             auroc = compute_auc(fpr, recall)
             ap = compute_ap(recall, precision)
-            save_metric_plots(metrics_dir, tag, curve_vals, recall, precision, fpr)
+            save_metric_plots(metrics_dir, tag, curve_vals, recall, precision, fpr, plot_cfg=plot_cfg)
             with open(metrics_dir / f"{tag}_summary.txt", "w", encoding="utf-8") as f:
                 f.write(f"image_auroc: {auroc:.6f}\n")
                 f.write(f"image_ap: {ap:.6f}\n")
@@ -1075,6 +1171,7 @@ def main() -> None:
                 title=f"{tag} Recall vs conf (fixed IoU)",
                 group_size=group_size,
                 group_label="iougroup",
+                axis_cfg=curve_axis_cfg,
             )
             save_multi_curve_grouped(
                 metrics_dir,
@@ -1086,6 +1183,7 @@ def main() -> None:
                 title=f"{tag} FPR vs conf (fixed IoU)",
                 group_size=group_size,
                 group_label="iougroup",
+                axis_cfg=curve_axis_cfg,
             )
             if roc_curves:
                 save_multi_xy_curves_grouped(
@@ -1097,6 +1195,7 @@ def main() -> None:
                     title=f"{tag} ROC (fixed IoU)",
                     group_size=group_size,
                     group_label="iougroup",
+                    axis_cfg=roc_axis_cfg,
                 )
             if pr_curves:
                 save_multi_xy_curves_grouped(
@@ -1108,6 +1207,7 @@ def main() -> None:
                     title=f"{tag} PR (fixed IoU)",
                     group_size=group_size,
                     group_label="iougroup",
+                    axis_cfg=pr_axis_cfg,
                 )
 
         elif fix_var == "conf":
@@ -1183,6 +1283,7 @@ def main() -> None:
                     title=f"{tag} Recall vs IoU (fixed conf)",
                     group_size=group_size,
                     group_label="confgroup",
+                    axis_cfg=curve_axis_cfg,
                 )
                 save_multi_curve_grouped(
                     metrics_dir,
@@ -1194,6 +1295,7 @@ def main() -> None:
                     title=f"{tag} FPR vs IoU (fixed conf)",
                     group_size=group_size,
                     group_label="confgroup",
+                    axis_cfg=curve_axis_cfg,
                 )
 
         if multi_rows:

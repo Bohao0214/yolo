@@ -19,19 +19,30 @@ Usage:
 
 Switches (implemented):
   a3    Enable 2.4.1 a3 (SPDConvDownsample P3 downsample)
+  a5    Enable 2.4.1 a5 (P3-side residual-safe lightweight enhancement)
   b1    Enable 2.4.1 b1 (ASFF-lite P4->P3 fuse)
   b2    Enable 2.4.1 b2-safe (residual P4->P3 fuse, baseline-safe init)
   b3    Enable 2.4.1 b3 (NASFPNLite P5->P4 + P4->P3)
-  d1    Enable 2.4.1 d1 (Add P2 detect head)
+  b5    Enable 2.4.1 b5 (GFPN-like CSPStage fusion refinement)
+  c5    Enable 2.4.1 c5 (BRA residual-safe semantic enhancer)
+  d5    Enable 2.4.1 d5 (Add P6 stride=64 detect head)
+  d3    Enable 2.4.1 d3 (P3 logit temperature; minimal score-shaping)
+  d1    Legacy alias of d3 (kept for backward compatibility)
 
 Examples:
   bash tools/run_yolov11_241.sh
   bash tools/run_yolov11_241.sh a3
+  bash tools/run_yolov11_241.sh a5
   bash tools/run_yolov11_241.sh b1
   bash tools/run_yolov11_241.sh b2
   bash tools/run_yolov11_241.sh b3
+  bash tools/run_yolov11_241.sh b5
+  bash tools/run_yolov11_241.sh c5
+  bash tools/run_yolov11_241.sh d5
+  bash tools/run_yolov11_241.sh d3
   bash tools/run_yolov11_241.sh d1
   bash tools/run_yolov11_241.sh b1 b2
+  bash tools/run_yolov11_241.sh a3 b3 d3
   bash tools/run_yolov11_241.sh a3 b3 d1
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b2
@@ -83,10 +94,15 @@ if [[ ${#SWITCHES[@]} -eq 1 ]]; then
   fi
 fi
 ENABLE_A3="false"
+ENABLE_A5="false"
 ENABLE_B1="false"
 ENABLE_B2="false"
 ENABLE_B3="false"
-ENABLE_D1="false"
+ENABLE_B5="false"
+ENABLE_C5="false"
+ENABLE_D3="false"
+ENABLE_D5="false"
+ENABLE_D1_ALIAS="false"
 UNKNOWN=()
 
 for sw in "${SWITCHES[@]}"; do
@@ -94,28 +110,41 @@ for sw in "${SWITCHES[@]}"; do
   case "${key}" in
     "" ) ;;
     a3 ) ENABLE_A3="true" ;;
+    a5 ) ENABLE_A5="true" ;;
     b1 ) ENABLE_B1="true" ;;
     b2 ) ENABLE_B2="true" ;;
     b3 ) ENABLE_B3="true" ;;
-    d1 ) ENABLE_D1="true" ;;
+    b5 ) ENABLE_B5="true" ;;
+    c5 ) ENABLE_C5="true" ;;
+    d5 ) ENABLE_D5="true" ;;
+    d3 ) ENABLE_D3="true" ;;
+    d1 ) ENABLE_D3="true"; ENABLE_D1_ALIAS="true" ;;
     * ) UNKNOWN+=("${sw}") ;;
   esac
 done
 
 if [[ ${#UNKNOWN[@]} -gt 0 ]]; then
-  echo "[error] Unsupported switches (only a3/b1/b2/b3/d1 are implemented): ${UNKNOWN[*]}" >&2
+  echo "[error] Unsupported switches (a3/a5/b1/b2/b3/b5/c5/d5/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
   exit 4
 fi
 
 CONFIG_TO_RUN="${BASE_CONFIG}"
 
-if [[ "${ENABLE_A3}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_D1}" == "true" ]]; then
+if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_B5}" == "true" || "${ENABLE_C5}" == "true" || "${ENABLE_D5}" == "true" || "${ENABLE_D3}" == "true" ]]; then
   ENABLED_KEYS=()
   [[ "${ENABLE_A3}" == "true" ]] && ENABLED_KEYS+=("a3")
+  [[ "${ENABLE_A5}" == "true" ]] && ENABLED_KEYS+=("a5")
   [[ "${ENABLE_B1}" == "true" ]] && ENABLED_KEYS+=("b1")
   [[ "${ENABLE_B2}" == "true" ]] && ENABLED_KEYS+=("b2")
   [[ "${ENABLE_B3}" == "true" ]] && ENABLED_KEYS+=("b3")
-  [[ "${ENABLE_D1}" == "true" ]] && ENABLED_KEYS+=("d1")
+  [[ "${ENABLE_B5}" == "true" ]] && ENABLED_KEYS+=("b5")
+  [[ "${ENABLE_C5}" == "true" ]] && ENABLED_KEYS+=("c5")
+  [[ "${ENABLE_D5}" == "true" ]] && ENABLED_KEYS+=("d5")
+  if [[ "${ENABLE_D1_ALIAS}" == "true" ]]; then
+    ENABLED_KEYS+=("d1")
+  elif [[ "${ENABLE_D3}" == "true" ]]; then
+    ENABLED_KEYS+=("d3")
+  fi
 
   if [[ ${#ENABLED_KEYS[@]} -eq 1 ]]; then
     case "${ENABLED_KEYS[0]}" in
@@ -131,13 +160,33 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == 
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a3.yaml"
         DERIVED_SUFFIX="__a3"
         ;;
+      a5 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a5.yaml"
+        DERIVED_SUFFIX="__a5"
+        ;;
       b3 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b3.yaml"
         DERIVED_SUFFIX="__b3"
         ;;
+      b5 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b5.yaml"
+        DERIVED_SUFFIX="__b5"
+        ;;
+      c5 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c5.yaml"
+        DERIVED_SUFFIX="__c5"
+        ;;
+      d5 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d5.yaml"
+        DERIVED_SUFFIX="__d5"
+        ;;
       d1 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d1.yaml"
         DERIVED_SUFFIX="__d1"
+        ;;
+      d3 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d3.yaml"
+        DERIVED_SUFFIX="__d3"
         ;;
     esac
   else
@@ -171,12 +220,23 @@ enh = cfg.setdefault("enhance241", {})
 if not isinstance(enh, dict):
     raise SystemExit("enhance241 must be a mapping in base config.")
 enh["a3"] = False
+enh["a5"] = False
 enh["b1"] = False
 enh["b2"] = False
 enh["b3"] = False
+enh["b5"] = False
+enh["c5"] = False
 enh["d1"] = False
+enh["d3"] = False
+enh["d5"] = False
 for k in keys:
-    enh[k] = True
+    if k == "d1":
+        enh["d1"] = True
+        enh["d3"] = True
+    elif k == "d3":
+        enh["d3"] = True
+    else:
+        enh[k] = True
 if enh.get("b1"):
     enh["b1_version"] = "v3"
 
@@ -197,7 +257,8 @@ fi
 # Safety guard for enhance runs on limited VRAM:
 # baseline (all enhance241 flags false) stays untouched.
 export _E241_RUN_CFG="${CONFIG_TO_RUN}"
-export _E241_ENABLE_D1="${ENABLE_D1}"
+export _E241_ENABLE_D3="${ENABLE_D3}"
+export _E241_ENABLE_D5="${ENABLE_D5}"
 export _E241_SAFE_BATCH="${E241_SAFE_BATCH}"
 export _E241_SAFE_WORKERS="${E241_SAFE_WORKERS}"
 "${PYTHON_BIN}" - <<'PY'
@@ -207,7 +268,8 @@ from pathlib import Path
 import yaml
 
 cfg_path = Path(os.environ["_E241_RUN_CFG"]).resolve()
-enable_d1_arg = str(os.environ.get("_E241_ENABLE_D1", "false")).lower() == "true"
+enable_d3_arg = str(os.environ.get("_E241_ENABLE_D3", "false")).lower() == "true"
+enable_d5_arg = str(os.environ.get("_E241_ENABLE_D5", "false")).lower() == "true"
 safe_batch = int(os.environ.get("_E241_SAFE_BATCH", "6"))
 safe_workers = int(os.environ.get("_E241_SAFE_WORKERS", "4"))
 
@@ -220,11 +282,12 @@ enh = cfg.get("enhance241", {}) or {}
 if not isinstance(enh, dict):
     enh = {}
 
-enhance_enabled = any(bool(enh.get(k, False)) for k in ("a3", "b1", "b2", "b3", "d1"))
+enhance_enabled = any(bool(enh.get(k, False)) for k in ("a3", "a5", "b1", "b2", "b3", "b5", "c5", "d1", "d3", "d5"))
 if not enhance_enabled:
     raise SystemExit(0)
 
-enable_d1 = enable_d1_arg or bool(enh.get("d1", False))
+enable_d3 = enable_d3_arg or bool(enh.get("d3", False)) or bool(enh.get("d1", False))
+enable_d5 = enable_d5_arg or bool(enh.get("d5", False))
 changed = False
 
 try:
@@ -235,7 +298,7 @@ if batch >= 8:
     cfg["batch"] = int(safe_batch)
     changed = True
 
-if enable_d1:
+if enable_d3 or enable_d5:
     try:
         workers = int(cfg.get("workers", safe_workers))
     except Exception:

@@ -702,23 +702,9 @@ class Enhance241CheckRecorder:
         if not isinstance(p3, torch.Tensor):
             return
 
-        all_stats: List[Dict[str, Any]] = []
-        head_hw: List[List[int]] = []
-        for idx, feat in enumerate(feats):
-            if not isinstance(feat, torch.Tensor):
-                continue
-            st = _tensor_stats(feat)
-            all_stats.append({"head_index": int(idx), **st})
-            try:
-                head_hw.append([int(feat.shape[-2]), int(feat.shape[-1])])
-            except Exception:
-                pass
-
         data: Dict[str, Any] = {
             "detect_input_p3": _tensor_stats(p3),
             "head_shapes": [list(x.shape) for x in feats if isinstance(x, torch.Tensor)],
-            "head_hw": head_hw,
-            "detect_input_all": all_stats,
             "head_strides": _f_as_list(getattr(mod, "stride", [])),
             "head_nl": int(getattr(mod, "nl", len(feats))),
         }
