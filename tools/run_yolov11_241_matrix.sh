@@ -119,7 +119,7 @@ fi
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
 
 # 默认组合：原有 S2 主线 + 新增模块单开
-DEFAULT_COMBOS="baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,b5,c5,d5"
+DEFAULT_COMBOS="baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,b5,c5,d5,b5+c5,c5+d5,b5+d5,b5+c5+d5"
 if [[ -z "${COMBOS_RAW}" ]]; then
   COMBOS_RAW="${DEFAULT_COMBOS}"
 fi
