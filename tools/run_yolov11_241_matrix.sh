@@ -20,7 +20,7 @@ COMBOS_RAW="${COMBOS_RAW:-}"
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241_matrix.sh [base_config.yaml] [--epochs N] [--combos LIST] [--tag NAME] [--dry-run]
+  bash tools/run_yolov11_241_matrix.sh [base_config.yaml] [--epochs N] [--batch N] [--combos LIST] [--tag NAME] [--dry-run]
 
 Runs S2 quick A/B matrix with identical seed/data/epochs:
   baseline, a3, b3, d3, a3+b3, a3+d3, b3+d3, a3+b3+d3
@@ -36,6 +36,9 @@ Behavior:
 Options:
   --epoch N    Override epochs for all cases (same as --epochs)
   --epochs N   Override epochs for all cases (default from EPOCHS_OVERRIDE, default 10)
+  --batch N    Override batch size for all cases (same as --batch-size; default from BATCH_OVERRIDE, default 6)
+  --batch-size N
+               Override batch size for all cases
   --combos L   Comma-separated cases, e.g.:
                baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,b5,c5,d5
                Supports aliases a3_b3 / a3_b3_d1 and raw '+' expressions
@@ -64,6 +67,11 @@ while [[ $# -gt 0 ]]; do
     --combos)
       [[ $# -ge 2 ]] || { echo "[error] --combos requires a value" >&2; exit 2; }
       COMBOS_RAW="$2"
+      shift 2
+      ;;
+    --batch|--batch-size)
+      [[ $# -ge 2 ]] || { echo "[error] --batch requires a value" >&2; exit 2; }
+      BATCH_OVERRIDE="$2"
       shift 2
       ;;
     --tag)
@@ -401,19 +409,58 @@ echo "[matrix] summary=${SUMMARY_TSV}"
 column -s $'\t' -t "${SUMMARY_TSV}" || cat "${SUMMARY_TSV}"
 
 exit 0
+
+: <<'EXAMPLES'
  
 
-# 默认8组，10 epoch
-# bash tools/run_yolov11_241_matrix.sh
+# 默认矩阵（含新模块），10 epoch，默认 batch=6
+bash tools/run_yolov11_241_matrix.sh
 
-# 指定epoch
-# bash tools/run_yolov11_241_matrix.sh --epoch 12
+# 指定 epoch
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 12
 
-# 只跑你选的组合
-# bash tools/run_yolov11_241_matrix.sh --epochs 8 --combos baseline,a3+b3,d1
+# 指定 batchsize（新增）
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 12 \
+  --batch 8
 
-# 组合也支持下划线别名
-# bash tools/run_yolov11_241_matrix.sh --epochs 8 --combos baseline,a3_b3,a3_b3_d1
+# 只跑你选的组合（+ 表示组合）
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 8 \
+  --batch 6 \
+  --combos baseline,a3+b3,d1
 
-# 换基础配置
-# bash tools/run_yolov11_241_matrix.sh configs/yolo11/enhance241/defect241.yaml --epochs 6 --combos a3,b3,d1
+# 组合支持下划线别名
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 8 \
+  --combos baseline,a3_b3,a3_b3_d1
+
+# 指定基础配置（例如走 defect.yaml 做公平 baseline 对比）
+bash tools/run_yolov11_241_matrix.sh \
+  configs/yolo11/defect.yaml \
+  --epochs 100 \
+  --batch 10 \
+  --combos baseline
+
+# 只跑新模块单开
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 10 \
+  --batch 6 \
+  --combos a5,b5,c5,d5
+
+# 干跑检查（不训练，只生成配置+命令）
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 10 \
+  --batch 6 \
+  --combos baseline,b5+c5 \
+  --dry-run
+
+# 自定义标签，方便区分日志目录
+bash tools/run_yolov11_241_matrix.sh \
+  --tag ablation_$(date +%m%d_%H%M) \
+  --epochs 20 \
+  --batch 6 \
+  --combos baseline,a3,b3,d3,a3+b3+d3
+EXAMPLES
+
