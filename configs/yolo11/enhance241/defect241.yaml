@@ -67,6 +67,8 @@ enhance241:
   a3: false
   a3_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
   a3_pre_div: 4
+  a3_alpha_init: 0.05
+  a3_alpha_cap: 0.5
   a5: false
   a5_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
   a5_depth: 1
@@ -101,10 +103,13 @@ enhance241:
   c5_num_heads: 4
   c5_kv_downsample_mode: "avg"  # avg | max | identity
   c5_soft_routing: true
+  c5_alpha_init: 0.05
+  c5_alpha_cap: 0.5
   d3: false
   d3_temp_init: 1.0
   d3_temp_min: 0.5
   d3_temp_max: 4.0
   d5: false
-  d5_downsample: "dw"     # dw=depthwise separable stride2, conv=普通3x3 stride2
+  d5_downsample: "dw"     # d5(P2 head) 融合 refine 类型：dw=depthwise separable, conv=普通3x3
+  d5_upsample: "nearest"  # P3 -> P2 对齐插值：nearest | bilinear
   d1: false               # legacy alias of d3

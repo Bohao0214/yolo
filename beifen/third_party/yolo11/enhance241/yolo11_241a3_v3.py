@@ -877,18 +877,13 @@ class Enhance241CheckRecorder:
         if structure:
             if self.module_key == "a3":
                 reasons.append(
-                    "Next action: use gradient-safe residual a3 (baseline_downsample + alpha*spd_branch, "
-                    "alpha small non-zero init with bounded tanh, last conv zero-init), then rerun >=10 epochs."
+                    "Next action: use residual-safe a3 (baseline_downsample + alpha*spd_branch, alpha init 0, "
+                    "last conv zero-init), then rerun >=10 epochs."
                 )
             elif self.module_key == "b3":
                 reasons.append(
                     "Next action: use residual-safe b3 (lo + alpha*refine(weighted-hi/lo - lo), alpha init 0, "
                     "refine last conv zero-init), then rerun >=10 epochs."
-                )
-            elif self.module_key == "c5":
-                reasons.append(
-                    "Next action: use gradient-safe c5 (out=x+alpha*BRA(x), alpha small non-zero init, "
-                    "BRA proj zero-init), then rerun >=10 epochs."
                 )
             return "结构问题", reasons
 
@@ -1075,15 +1070,12 @@ class SPDConvDownsample(torch.nn.Module):
         out_ch: int,
         pre_div: int = 4,
         refine: str = "dw",
-        alpha_init: float = 0.05,
-        alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
         self.enhance241_a3_base = base_downsample
         self.in_ch = int(in_ch)
         self.out_ch = int(out_ch)
         self.pre_div = int(max(1, pre_div))
-        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         refine = str(refine).lower()
 
         if self.out_ch > 0 and self.out_ch % self.pre_div == 0:
@@ -1107,11 +1099,7 @@ class SPDConvDownsample(torch.nn.Module):
         if self.enhance241_a3_post.bias is not None:
             torch.nn.init.zeros_(self.enhance241_a3_post.bias)
 
-        # Use bounded alpha = alpha_cap * tanh(alpha_raw): keeps residual stable while allowing non-zero init.
-        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
-        alpha_ratio = alpha_init / self.alpha_cap
-        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
-        self.enhance241_a3_alpha = torch.nn.Parameter(alpha_raw)
+        self.enhance241_a3_alpha = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -1130,8 +1118,7 @@ class SPDConvDownsample(torch.nn.Module):
         if y_spd.shape[-2:] != y_base.shape[-2:]:
             y_spd = torch.nn.functional.interpolate(y_spd, size=y_base.shape[-2:], mode="nearest")
 
-        alpha_raw = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
-        alpha = torch.tanh(alpha_raw) * self.alpha_cap
+        alpha = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
         delta = alpha * y_spd
         out = y_base + delta
 
@@ -1150,9 +1137,7 @@ class SPDConvDownsample(torch.nn.Module):
                 recorder.record_a1_payload(
                     f"{prefix}.residual_safe",
                     {
-                        "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
-                        "alpha_cap": _to_float(self.alpha_cap),
                         "var_ratio_alpha_spd_vs_base": v_delta / (v_base + 1e-12),
                         "target_var_ratio": [0.01, 0.3],
                         "y_base": _tensor_stats(y_base),
@@ -1161,7 +1146,6 @@ class SPDConvDownsample(torch.nn.Module):
                         "out_vs_base_cosine": cos,
                     },
                 )
-                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
                 if out.requires_grad:
                     try:
@@ -1169,7 +1153,6 @@ class SPDConvDownsample(torch.nn.Module):
                     except Exception:
                         pass
             elif step <= 30:
-                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
             if step == 1:
                 recorder.capture_param_delta(self, prefix)
@@ -1247,18 +1230,8 @@ def apply(model: Any, cfg: Any) -> Any:
     out_ch = int(conv.out_channels)
     pre_div = _safe_int(_deep_get(cfg, "enhance241", "a3_pre_div", default=4), 4)
     refine = str(_deep_get(cfg, "enhance241", "a3_refine", default="dw"))
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_init", default=0.05), 0.05)
-    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_cap", default=0.5), 0.5)
 
-    fuse = SPDConvDownsample(
-        base_downsample=old,
-        in_ch=in_ch,
-        out_ch=out_ch,
-        pre_div=pre_div,
-        refine=refine,
-        alpha_init=alpha_init,
-        alpha_cap=alpha_cap,
-    )
+    fuse = SPDConvDownsample(base_downsample=old, in_ch=in_ch, out_ch=out_ch, pre_div=pre_div, refine=refine)
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
             setattr(fuse, attr, getattr(old, attr))
@@ -1289,8 +1262,7 @@ def apply(model: Any, cfg: Any) -> Any:
         "pre_div": int(pre_div),
         "refine": str(refine),
         "mode": "residual_safe",
-        "alpha_init": _to_float(alpha_init),
-        "alpha_cap": _to_float(alpha_cap),
+        "alpha_init": 0.0,
     }
     setattr(yolo_obj, "_enhance241_a3_info", info)
 

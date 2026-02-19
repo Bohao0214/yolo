@@ -25,7 +25,7 @@ Switches (implemented):
   b3    Enable 2.4.1 b3 (NASFPNLite P5->P4 + P4->P3)
   b5    Enable 2.4.1 b5 (GFPN-like CSPStage fusion refinement)
   c5    Enable 2.4.1 c5 (BRA residual-safe semantic enhancer)
-  d5    Enable 2.4.1 d5 (Add P6 stride=64 detect head)
+  d5    Enable 2.4.1 d5 (Add P2 stride=4/160x160 detect head)
   d3    Enable 2.4.1 d3 (P3 logit temperature; minimal score-shaping)
   d1    Legacy alias of d3 (kept for backward compatibility)
 

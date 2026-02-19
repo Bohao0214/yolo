@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 # Path: third_party/yolo11/enhance241/yolo11_241d5.py
-# Purpose: enhance241 d5 patch (add P6 stride=64 head to Detect).
+# Purpose: enhance241 d5 patch (paper-aligned P2 160x160 fourth head).
 
 import copy
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from .yolo11_241a3 import (
     _bind_module_debug,
+    _f_as_list,
     _infer_device_dtype,
     _locate_detect,
     get_check_recorder,
@@ -33,28 +35,56 @@ def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
     return cur if cur is not None else default
 
 
-class P6Downsample(torch.nn.Module):
-    """Lightweight P5->P6 downsample block (stride=2)."""
+class P2LiteFuse(torch.nn.Module):
+    """Fuse shallow P2 and upsampled P3 into a new P2 detect input."""
 
-    def __init__(self, channels: int, mode: str = "dw") -> None:
+    def __init__(
+        self,
+        p2_channels: int,
+        p3_channels: int,
+        out_channels: int,
+        mode: str = "dw",
+        upsample: str = "nearest",
+    ) -> None:
         super().__init__()
-        c = int(channels)
-        mode = str(mode).lower()
-        if mode == "conv":
-            self.conv = torch.nn.Conv2d(c, c, kernel_size=3, stride=2, padding=1, bias=True)
-            self.act = torch.nn.SiLU(inplace=True)
-            self.dw = None
-            self.pw = None
-        else:
-            self.dw = torch.nn.Conv2d(c, c, kernel_size=3, stride=2, padding=1, groups=c, bias=True)
-            self.act = torch.nn.SiLU(inplace=True)
-            self.pw = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
-            self.conv = None
+        c2 = int(p2_channels)
+        c3 = int(p3_channels)
+        co = int(out_channels)
+        self.upsample = str(upsample).lower()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.conv is not None:
-            return self.act(self.conv(x))
-        return self.act(self.pw(self.act(self.dw(x))))
+        self.p2_proj = torch.nn.Identity() if c2 == co else torch.nn.Conv2d(c2, co, kernel_size=1, stride=1, padding=0, bias=True)
+        self.p3_proj = torch.nn.Identity() if c3 == co else torch.nn.Conv2d(c3, co, kernel_size=1, stride=1, padding=0, bias=True)
+
+        self.mix = torch.nn.Conv2d(2 * co, co, kernel_size=1, stride=1, padding=0, bias=True)
+        if str(mode).lower() == "conv":
+            self.refine = torch.nn.Conv2d(co, co, kernel_size=3, stride=1, padding=1, bias=True)
+        else:
+            self.refine = torch.nn.Sequential(
+                torch.nn.Conv2d(co, co, kernel_size=3, stride=1, padding=1, groups=co, bias=True),
+                torch.nn.SiLU(inplace=True),
+                torch.nn.Conv2d(co, co, kernel_size=1, stride=1, padding=0, bias=True),
+            )
+        self.act = torch.nn.SiLU(inplace=True)
+
+    def forward(self, x: Any) -> torch.Tensor:
+        if not isinstance(x, (list, tuple)) or len(x) != 2:
+            raise TypeError(f"P2LiteFuse expects [p3, p2], got {type(x)}")
+        p3, p2 = x
+        if not isinstance(p3, torch.Tensor) or not isinstance(p2, torch.Tensor):
+            raise TypeError("P2LiteFuse inputs must be tensors")
+
+        if p3.shape[-2:] != p2.shape[-2:]:
+            if self.upsample == "bilinear":
+                p3 = F.interpolate(p3, size=p2.shape[-2:], mode="bilinear", align_corners=False)
+            else:
+                p3 = F.interpolate(p3, size=p2.shape[-2:], mode="nearest")
+
+        p2p = self.p2_proj(p2)
+        p3p = self.p3_proj(p3)
+        y = torch.cat((p3p, p2p), dim=1)
+        y = self.act(self.mix(y))
+        y = self.act(self.refine(y))
+        return y
 
 
 def _extract_model_seq(model: Any) -> Tuple[Any, Any, Optional[Any]]:
@@ -68,30 +98,99 @@ def _extract_model_seq(model: Any) -> Tuple[Any, Any, Optional[Any]]:
     return yolo_obj, det_model, seq
 
 
-def _infer_p5_channels(detect: Any) -> int:
+def _infer_head_in_channels(detect: Any, head_idx: int = 0) -> int:
     try:
-        return int(detect.cv2[-1][0].conv.in_channels)  # type: ignore[index]
+        return int(detect.cv2[head_idx][0].conv.in_channels)  # type: ignore[index]
     except Exception:
         pass
     try:
-        last = detect.cv3[-1]  # type: ignore[index]
-        for m in last.modules():
+        branch = detect.cv2[head_idx]  # type: ignore[index]
+        for m in branch.modules():
             if isinstance(m, torch.nn.Conv2d):
                 return int(m.in_channels)
     except Exception:
         pass
-    raise RuntimeError("Unable to infer P5 channels for d5.")
+    raise RuntimeError("Unable to infer head input channels for d5.")
 
 
-def _stride_with_p6(old_stride: Any) -> torch.Tensor:
+def _infer_layer_out_channels(layer: Any) -> int:
+    # Ultralytics blocks (e.g. C3k2/C2f) usually expose the final projection as cv2.conv.
+    try:
+        cv2 = getattr(layer, "cv2", None)
+        if cv2 is not None and hasattr(cv2, "conv") and hasattr(cv2.conv, "out_channels"):
+            return int(cv2.conv.out_channels)
+    except Exception:
+        pass
+    try:
+        conv = getattr(layer, "conv", None)
+        if conv is not None and hasattr(conv, "out_channels"):
+            return int(conv.out_channels)
+    except Exception:
+        pass
+    if hasattr(layer, "c2"):
+        try:
+            return int(getattr(layer, "c2"))
+        except Exception:
+            pass
+    if hasattr(layer, "out_channels"):
+        try:
+            return int(getattr(layer, "out_channels"))
+        except Exception:
+            pass
+    out_c = None
+    try:
+        for m in layer.modules():
+            if isinstance(m, torch.nn.Conv2d):
+                out_c = int(m.out_channels)
+    except Exception:
+        out_c = None
+    if out_c is None:
+        raise RuntimeError(f"Unable to infer output channels from layer type={layer.__class__.__name__}")
+    return int(out_c)
+
+
+def _locate_p2_source(seq: Any, p3_idx: int, detect_idx: int) -> int:
+    # Prefer: infer from the concat that feeds current P3 head path.
+    p3_concat_idx = int(p3_idx) - 1
+    if 0 <= p3_concat_idx < len(seq):
+        layer = seq[p3_concat_idx]
+        if layer.__class__.__name__ == "Concat":
+            f = _f_as_list(getattr(layer, "f", []))
+            non_neg = [int(v) for v in f if int(v) >= 0]
+            if non_neg:
+                p3_backbone_idx = int(non_neg[-1])
+                candidate = p3_backbone_idx - 2  # YOLO11 topology: e.g. 4 -> 2
+                if 0 <= candidate < detect_idx:
+                    return int(candidate)
+
+    # Stable fallback for YOLO11 family.
+    if 0 <= 2 < detect_idx:
+        return 2
+
+    # Last fallback: earliest valid backbone index.
+    for idx in range(detect_idx):
+        if idx != p3_idx:
+            return int(idx)
+    raise RuntimeError("Unable to locate P2 source index for d5.")
+
+
+def _stride_with_p2(old_stride: Any) -> torch.Tensor:
     if isinstance(old_stride, torch.Tensor) and old_stride.numel() > 0:
         s = old_stride.detach().float().cpu()
-        return torch.cat([s, s[-1:].clone() * 2.0], dim=0)
+        return torch.cat([s[:1] / 2.0, s], dim=0)
     if isinstance(old_stride, (list, tuple)) and len(old_stride) > 0:
         vals = [float(x) for x in old_stride]
-        vals.append(vals[-1] * 2.0)
-        return torch.tensor(vals, dtype=torch.float32)
-    return torch.tensor([8.0, 16.0, 32.0, 64.0], dtype=torch.float32)
+        return torch.tensor([vals[0] / 2.0] + vals, dtype=torch.float32)
+    return torch.tensor([4.0, 8.0, 16.0, 32.0], dtype=torch.float32)
+
+
+def _prepend_branch(module_list: Any) -> Any:
+    first = copy.deepcopy(module_list[0])
+    try:
+        module_list.insert(0, first)
+        return module_list
+    except Exception:
+        return torch.nn.ModuleList([first] + list(module_list))
 
 
 def apply(model: Any, cfg: Any) -> Any:
@@ -104,22 +203,31 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError("enhance241.d5 requires YOLO/DetectionModel-like object with .model sequence.")
 
     detect_idx, detect = _locate_detect(seq)
-    old_f_raw = getattr(detect, "f", [])
-    old_f = [int(x) for x in (old_f_raw if isinstance(old_f_raw, (list, tuple)) else [old_f_raw])]
+    old_f = _f_as_list(getattr(detect, "f", []))
+    heads_before = int(getattr(detect, "nl", len(old_f)))
 
-    prepatched = bool(len(old_f) >= 4 and getattr(detect, "nl", len(old_f)) >= 4)
-    if prepatched:
+    has_p2_fuse = any(getattr(layer, "__class__", type(layer)).__name__ == "P2LiteFuse" for layer in seq[:detect_idx])
+    has_legacy_p6 = any(getattr(layer, "__class__", type(layer)).__name__ == "P6Downsample" for layer in seq[:detect_idx])
+
+    if len(old_f) >= 4 or heads_before >= 4:
+        if has_legacy_p6 and not has_p2_fuse:
+            raise RuntimeError(
+                "enhance241.d5 detected legacy P6-style 4-head weights. "
+                "Please retrain with corrected d5 (P2 head) to keep experiment semantics consistent."
+            )
+
         info = {
             "enabled": True,
             "patched_count": 0,
             "existing_count": 1,
             "detect_idx": int(detect_idx),
-            "detect_heads_before": int(getattr(detect, "nl", len(old_f))),
+            "detect_heads_before": int(heads_before),
             "detect_heads_after": int(getattr(detect, "nl", len(old_f))),
-            "detect_f_before": old_f,
-            "detect_f_after": old_f,
+            "detect_f_before": [int(x) for x in old_f],
+            "detect_f_after": [int(x) for x in old_f],
             "stride_after": [float(x) for x in getattr(detect, "stride", [])] if hasattr(detect, "stride") else [],
             "note": "already_patched",
+            "head_type": "p2",
         }
         setattr(yolo_obj, "_enhance241_d5_info", info)
         recorder = get_check_recorder("d5", cfg, patch_info=info)
@@ -134,60 +242,69 @@ def apply(model: Any, cfg: Any) -> Any:
     if len(old_f) < 3:
         raise RuntimeError(f"enhance241.d5 expects Detect with >=3 heads, got f={old_f}")
 
-    p5_idx = int(old_f[-1])
-    if not (0 <= p5_idx < detect_idx):
-        raise RuntimeError(f"enhance241.d5 invalid P5 source index {p5_idx} for detect_idx={detect_idx}")
+    p3_idx = int(old_f[0])
+    if not (0 <= p3_idx < detect_idx):
+        raise RuntimeError(f"enhance241.d5 invalid P3 source index {p3_idx} for detect_idx={detect_idx}")
 
-    d5_mode = str(_deep_get(cfg, "enhance241", "d5_downsample", default="dw"))
-    channels = _infer_p5_channels(detect)
-    p6_down = P6Downsample(channels=channels, mode=d5_mode)
-    p6_down.f = p5_idx
-    p6_down.i = detect_idx
-    p6_down.type = p6_down.__class__.__name__
+    p2_idx = _locate_p2_source(seq, p3_idx=p3_idx, detect_idx=detect_idx)
+    if not (0 <= p2_idx < detect_idx):
+        raise RuntimeError(f"enhance241.d5 invalid inferred P2 index {p2_idx} for detect_idx={detect_idx}")
+
+    head_channels = _infer_head_in_channels(detect, head_idx=0)
+    p2_channels = _infer_layer_out_channels(seq[p2_idx])
+
+    d5_mode = str(_deep_get(cfg, "enhance241", "d5_downsample", default="dw")).lower()
+    d5_upsample = str(_deep_get(cfg, "enhance241", "d5_upsample", default="nearest")).lower()
+
+    p2_fuse = P2LiteFuse(
+        p2_channels=p2_channels,
+        p3_channels=head_channels,
+        out_channels=head_channels,
+        mode=d5_mode,
+        upsample=d5_upsample,
+    )
+    p2_fuse.f = [p3_idx, p2_idx]
+    p2_fuse.i = int(detect_idx)
+    p2_fuse.type = p2_fuse.__class__.__name__
 
     device, dtype = _infer_device_dtype(seq, detect_idx - 1)
     if device is not None:
         if dtype is not None:
-            p6_down = p6_down.to(device=device, dtype=dtype)
+            p2_fuse = p2_fuse.to(device=device, dtype=dtype)
         else:
-            p6_down = p6_down.to(device=device)
+            p2_fuse = p2_fuse.to(device=device)
 
-    # Insert P6 producer before Detect.
-    seq.insert(detect_idx, p6_down)
+    seq.insert(detect_idx, p2_fuse)
 
-    # Refresh detect handle after insert.
     detect = seq[detect_idx + 1]
-    if hasattr(detect, "i"):
-        detect.i = int(detect_idx + 1)
-    new_p6_idx = detect_idx
-    detect_f_after = [int(x) for x in (list(getattr(detect, "f", old_f)) + [new_p6_idx])]
+    detect.i = int(detect_idx + 1)
+    new_p2_idx = int(detect_idx)
+
+    detect_f_after = [new_p2_idx] + [int(x) for x in old_f]
     detect.f = detect_f_after
 
-    # Ensure new P6 feature is retained in y[] for Detect.f lookup.
     if hasattr(det_model, "save"):
         try:
             save = [int(x) for x in list(getattr(det_model, "save", []))]
-            if new_p6_idx not in save:
-                save.append(int(new_p6_idx))
+            for idx in detect_f_after + [p2_idx, p3_idx]:
+                if idx not in save:
+                    save.append(int(idx))
             det_model.save = sorted(set(save))
         except Exception:
             pass
 
-    # Extend Detect branches by cloning P5 branch template.
-    detect.cv2.append(copy.deepcopy(detect.cv2[-1]))
-    detect.cv3.append(copy.deepcopy(detect.cv3[-1]))
-    if hasattr(detect, "one2one_cv2") and isinstance(detect.one2one_cv2, torch.nn.ModuleList):
-        detect.one2one_cv2.append(copy.deepcopy(detect.one2one_cv2[-1]))
-    if hasattr(detect, "one2one_cv3") and isinstance(detect.one2one_cv3, torch.nn.ModuleList):
-        detect.one2one_cv3.append(copy.deepcopy(detect.one2one_cv3[-1]))
+    detect.cv2 = _prepend_branch(detect.cv2)
+    detect.cv3 = _prepend_branch(detect.cv3)
+    if hasattr(detect, "one2one_cv2") and isinstance(detect.one2one_cv2, torch.nn.ModuleList) and len(detect.one2one_cv2):
+        detect.one2one_cv2 = _prepend_branch(detect.one2one_cv2)
+    if hasattr(detect, "one2one_cv3") and isinstance(detect.one2one_cv3, torch.nn.ModuleList) and len(detect.one2one_cv3):
+        detect.one2one_cv3 = _prepend_branch(detect.one2one_cv3)
 
-    heads_before = int(getattr(detect, "nl", 3))
     detect.nl = int(len(detect_f_after))
     stride_before = getattr(detect, "stride", torch.tensor([8.0, 16.0, 32.0], dtype=torch.float32))
-    detect.stride = _stride_with_p6(stride_before).to(dtype=torch.float32)
+    detect.stride = _stride_with_p2(stride_before).to(dtype=torch.float32)
 
     try:
-        # Re-init only after structural head count change.
         detect.bias_init()
     except Exception:
         pass
@@ -196,26 +313,30 @@ def apply(model: Any, cfg: Any) -> Any:
         "enabled": True,
         "patched_count": 1,
         "existing_count": 0,
+        "head_type": "p2",
         "detect_idx_before": int(detect_idx),
         "detect_idx_after": int(detect_idx + 1),
-        "p5_source_idx": int(p5_idx),
-        "p6_module_idx": int(new_p6_idx),
+        "p2_source_idx": int(p2_idx),
+        "p3_source_idx": int(p3_idx),
+        "p2_fuse_idx": int(new_p2_idx),
         "detect_heads_before": int(heads_before),
         "detect_heads_after": int(getattr(detect, "nl", len(detect_f_after))),
-        "detect_f_before": old_f,
-        "detect_f_after": detect_f_after,
+        "detect_f_before": [int(x) for x in old_f],
+        "detect_f_after": [int(x) for x in detect_f_after],
         "stride_before": [float(x) for x in (stride_before.tolist() if isinstance(stride_before, torch.Tensor) else stride_before)],
         "stride_after": [float(x) for x in detect.stride.tolist()],
-        "p6_channels": int(channels),
-        "downsample_mode": d5_mode,
+        "p2_channels": int(p2_channels),
+        "head_channels": int(head_channels),
+        "fuse_mode": d5_mode,
+        "upsample_mode": d5_upsample,
     }
     setattr(yolo_obj, "_enhance241_d5_info", info)
 
     recorder = get_check_recorder("d5", cfg, patch_info=info)
     if recorder is not None:
         try:
-            _bind_module_debug(p6_down, recorder, prefix=f"d5.p6.idx{new_p6_idx}")
-            recorder.register_module_params(p6_down, f"d5.p6.idx{new_p6_idx}")
+            _bind_module_debug(p2_fuse, recorder, prefix=f"d5.p2.idx{new_p2_idx}")
+            recorder.register_module_params(p2_fuse, f"d5.p2.idx{new_p2_idx}")
         except Exception as exc:
             recorder.add_note(f"d5_module_debug_failed:{exc}")
         try:
