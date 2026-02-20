@@ -336,7 +336,7 @@ def _enhance241_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
     enh = _enhance241_cfg(cfg)
-    keys = ["a3", "a5", "b1", "b2", "b3", "b5", "c5", "d1", "d3", "d5"]
+    keys = ["a3", "a5", "a7", "b1", "b2", "b3", "b5", "b7", "c5", "c7", "d1", "d3", "d5", "d7"]
     return [k for k in keys if bool(enh.get(k, False))]
 
 
@@ -366,9 +366,12 @@ def _collect_patched(seq: Any) -> List[str]:
         "P3FuseChain",
         "SPDConvDownsample",
         "A5P3Residual",
+        "C3HBHorNetSafe",
         "NASFPNLiteFuse",
         "B5GFPNFuse",
+        "CARAFEUpsampleSafe",
         "C5BRAInject",
+        "C7MCBAMInject",
         "P2LiteFuse",
         "P3LogitTemperature",
         "P6Downsample",
@@ -463,14 +466,18 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
     for key, attr in (
         ("a3", "_enhance241_a3_info"),
         ("a5", "_enhance241_a5_info"),
+        ("a7", "_enhance241_a7_info"),
         ("b1", "_enhance241_b1_info"),
         ("b2", "_enhance241_b2_info"),
         ("b3", "_enhance241_b3_info"),
         ("b5", "_enhance241_b5_info"),
+        ("b7", "_enhance241_b7_info"),
         ("c5", "_enhance241_c5_info"),
+        ("c7", "_enhance241_c7_info"),
         ("d1", "_enhance241_d1_info"),
         ("d3", "_enhance241_d3_info"),
         ("d5", "_enhance241_d5_info"),
+        ("d7", "_enhance241_d7_info"),
     ):
         val = getattr(model, attr, None)
         if val is None and hasattr(model, "model"):
@@ -502,6 +509,12 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         ok = patched == 1
         checks.append({"name": "a5_patch_count", "ok": ok, "detail": f"count={patched}"})
 
+    if "a7" in enabled:
+        a7 = info.get("a7", {}) if isinstance(info, dict) else {}
+        patched = int(a7.get("patched_count", 0)) + int(a7.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "a7_patch_count", "ok": ok, "detail": f"count={patched}"})
+
     if "b3" in enabled:
         b3 = info.get("b3", {}) if isinstance(info, dict) else {}
         patched = int(b3.get("patched_count", 0))
@@ -514,11 +527,23 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         ok = patched == 2
         checks.append({"name": "b5_patch_count", "ok": ok, "detail": f"count={patched}"})
 
+    if "b7" in enabled:
+        b7 = info.get("b7", {}) if isinstance(info, dict) else {}
+        patched = int(b7.get("patched_count", 0)) + int(b7.get("existing_count", 0))
+        ok = patched >= 1
+        checks.append({"name": "b7_patch_count", "ok": ok, "detail": f"count={patched}"})
+
     if "c5" in enabled:
         c5 = info.get("c5", {}) if isinstance(info, dict) else {}
         patched = int(c5.get("patched_count", 0)) + int(c5.get("existing_count", 0))
         ok = patched == 1
         checks.append({"name": "c5_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "c7" in enabled:
+        c7 = info.get("c7", {}) if isinstance(info, dict) else {}
+        patched = int(c7.get("patched_count", 0)) + int(c7.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "c7_patch_count", "ok": ok, "detail": f"count={patched}"})
 
     if "b2" in enabled:
         pre = audit_state.get("train_runtime_pre_patch", {}) or {}
@@ -556,6 +581,19 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         checks.append(
             {
                 "name": "d5_head_count",
+                "ok": ok,
+                "detail": f"patched_or_existing={patched}, heads_after={heads_after}",
+            }
+        )
+
+    if "d7" in enabled:
+        d7 = info.get("d7", {}) if isinstance(info, dict) else {}
+        heads_after = int(d7.get("detect_heads_after", 0))
+        patched = int(d7.get("patched_count", 0)) + int(d7.get("existing_count", 0))
+        ok = patched == 1 and heads_after == 1
+        checks.append(
+            {
+                "name": "d7_small_head_only",
                 "ok": ok,
                 "detail": f"patched_or_existing={patched}, heads_after={heads_after}",
             }
@@ -662,29 +700,49 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
 
     enabled = _enhance241_enabled_keys(cfg)
     if enabled:
-        b_enabled = [k for k in ("b1", "b2", "b3", "b5") if k in enabled]
+        a_enabled = [k for k in ("a3", "a5", "a7") if k in enabled]
+        if len(a_enabled) > 1:
+            raise RuntimeError(f"enhance241 A-class conflict: {a_enabled}; enable only one of a3/a5/a7.")
+
+        b_enabled = [k for k in ("b1", "b2", "b3", "b5", "b7") if k in enabled]
         if len(b_enabled) > 1:
-            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5.")
+            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5/b7.")
+
+        c_enabled = [k for k in ("c5", "c7") if k in enabled]
+        if len(c_enabled) > 1:
+            raise RuntimeError(f"enhance241 C-class conflict: {c_enabled}; enable only one of c5/c7.")
+
+        d_struct_enabled = [k for k in ("d5", "d7") if k in enabled]
+        if len(d_struct_enabled) > 1:
+            raise RuntimeError(f"enhance241 D-struct conflict: {d_struct_enabled}; enable only one of d5/d7.")
         from third_party.yolo11.enhance241 import (
             yolo11_241a3,
             yolo11_241a5,
+            yolo11_241a7,
             yolo11_241b1,
             yolo11_241b2,
             yolo11_241b3,
             yolo11_241b5,
+            yolo11_241b7,
             yolo11_241c5,
+            yolo11_241c7,
             yolo11_241d3,
             yolo11_241d5,
+            yolo11_241d7,
         )
 
         model = yolo11_241a3.apply(model, cfg)
         model = yolo11_241a5.apply(model, cfg)
+        model = yolo11_241a7.apply(model, cfg)
         model = yolo11_241b1.apply(model, cfg)
         model = yolo11_241b2.apply(model, cfg)
         model = yolo11_241b3.apply(model, cfg)
         model = yolo11_241b5.apply(model, cfg)
+        model = yolo11_241b7.apply(model, cfg)
         model = yolo11_241c5.apply(model, cfg)
+        model = yolo11_241c7.apply(model, cfg)
         model = yolo11_241d5.apply(model, cfg)
+        model = yolo11_241d7.apply(model, cfg)
         model = yolo11_241d3.apply(model, cfg)
 
     post = _snapshot_model(model)

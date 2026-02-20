@@ -24,7 +24,7 @@ Usage:
 
 Runs S2 quick A/B matrix with identical seed/data/epochs:
   baseline, a3, b3, d3, a3+b3, a3+d3, b3+d3, a3+b3+d3
-  plus newly added singles: a5, b5, c5, d5
+  plus added singles: a5, a7, b5, b7, c5, c7, d5, d7
   (d1 is legacy alias of d3)
 
 Behavior:
@@ -40,7 +40,7 @@ Options:
   --batch-size N
                Override batch size for all cases
   --combos L   Comma-separated cases, e.g.:
-               baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,b5,c5,d5
+               baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,a7,b5,b7,c5,c7,d5,d7
                Supports aliases a3_b3 / a3_b3_d1 and raw '+' expressions
   --tag NAME   Matrix tag (used for temp config/log folders)
   --dry-run    Generate configs and print commands only (no training)
@@ -127,7 +127,7 @@ fi
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
 
 # 默认组合：原有 S2 主线 + 新增模块单开
-DEFAULT_COMBOS="baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,b5,c5,d5,b5+c5,c5+d5,b5+d5,b5+c5+d5"
+DEFAULT_COMBOS="baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,a7,b5,b7,c5,c7,d5,d7,b5+c5,c5+d5,b5+d5,b5+c5+d5"
 if [[ -z "${COMBOS_RAW}" ]]; then
   COMBOS_RAW="${DEFAULT_COMBOS}"
 fi
@@ -164,7 +164,7 @@ normalize_and_add_case() {
       add_case "baseline" ""
       return
       ;;
-    a3|a5|b1|b2|b3|b5|c5|d1|d3|d5)
+    a3|a5|a7|b1|b2|b3|b5|b7|c5|c7|d1|d3|d5|d7)
       add_case "${token}" "${token}"
       return
       ;;
@@ -197,9 +197,9 @@ normalize_and_add_case() {
     [[ -z "${part}" ]] && continue
     case "${part}" in
       baseline|base|none) continue ;;
-      a3|a5|b1|b2|b3|b5|c5|d1|d3|d5) ;;
+      a3|a5|a7|b1|b2|b3|b5|b7|c5|c7|d1|d3|d5|d7) ;;
       *)
-        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,a3,a5,b1,b2,b3,b5,c5,d1,d3,d5)" >&2
+        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,a3,a5,a7,b1,b2,b3,b5,b7,c5,c7,d1,d3,d5,d7)" >&2
         exit 2
         ;;
     esac
@@ -274,10 +274,10 @@ enh = cfg.setdefault("enhance241", {})
 if not isinstance(enh, dict):
     raise SystemExit("enhance241 must be a mapping in base config.")
 
-for key in ("a3", "a5", "b1", "b2", "b3", "b5", "c5", "d1", "d3", "d5"):
+for key in ("a3", "a5", "a7", "b1", "b2", "b3", "b5", "b7", "c5", "c7", "d1", "d3", "d5", "d7"):
     enh[key] = False
 for key in switches:
-    if key not in {"a3", "a5", "b1", "b2", "b3", "b5", "c5", "d1", "d3", "d5"}:
+    if key not in {"a3", "a5", "a7", "b1", "b2", "b3", "b5", "b7", "c5", "c7", "d1", "d3", "d5", "d7"}:
         raise SystemExit(f"Unsupported matrix switch: {key}")
     if key == "d1":
         enh["d1"] = True
@@ -302,7 +302,7 @@ if seed_override:
     cfg["seed"] = int(seed_override)
 if batch_override:
     cfg["batch"] = int(batch_override)
-if ("d1" in switches or "d3" in switches or "d5" in switches) and d1_workers_override:
+if ("d1" in switches or "d3" in switches or "d5" in switches or "d7" in switches) and d1_workers_override:
     cfg["workers"] = int(d1_workers_override)
 
 out_cfg.parent.mkdir(parents=True, exist_ok=True)
@@ -447,7 +447,7 @@ bash tools/run_yolov11_241_matrix.sh \
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 10 \
   --batch 6 \
-  --combos a5,b5,c5,d5
+  --combos a5,a7,b5,b7,c5,c7,d5,d7
 
 # 干跑检查（不训练，只生成配置+命令）
 bash tools/run_yolov11_241_matrix.sh \
@@ -463,4 +463,3 @@ bash tools/run_yolov11_241_matrix.sh \
   --batch 6 \
   --combos baseline,a3,b3,d3,a3+b3+d3
 EXAMPLES
-
