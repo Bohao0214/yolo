@@ -100,6 +100,14 @@ def _infer_concat_channels(seq: Any, fuse_idx: int) -> int:
         c_in = int(next_layer.cv1.conv.in_channels)  # type: ignore[attr-defined]
     except Exception:
         c_in = None
+    if not c_in and next_layer is not None:
+        try:
+            for m in next_layer.modules():
+                if isinstance(m, torch.nn.Conv2d):
+                    c_in = int(m.in_channels)
+                    break
+        except Exception:
+            c_in = None
     if not c_in or c_in % 2 != 0:
         raise RuntimeError(f"Unable to infer concat channels from next layer idx={fuse_idx + 1}; c_in={c_in}")
     return c_in // 2
@@ -118,7 +126,14 @@ def _infer_scale_factor(module: Any) -> int:
 class CARAFECore(torch.nn.Module):
     """CARAFE two-stage upsampler: kernel prediction + feature reassembly."""
 
-    def __init__(self, channels: int, scale: int = 2, kernel_size: int = 5, compress: int = 64) -> None:
+    def __init__(
+        self,
+        channels: int,
+        scale: int = 2,
+        kernel_size: int = 5,
+        compress: int = 64,
+        chunk_channels: int = 64,
+    ) -> None:
         super().__init__()
         c = int(channels)
         s = max(2, int(scale))
@@ -131,6 +146,7 @@ class CARAFECore(torch.nn.Module):
         self.scale = s
         self.kernel_size = k
         self.compress = cm
+        self.chunk_channels = max(8, int(chunk_channels))
 
         self.comp = torch.nn.Conv2d(c, cm, kernel_size=1, stride=1, padding=0, bias=True)
         self.encoder = torch.nn.Conv2d(cm, (k * k) * (s * s), kernel_size=3, stride=1, padding=1, bias=True)
@@ -154,11 +170,20 @@ class CARAFECore(torch.nn.Module):
         kernel = torch.softmax(kernel, dim=1).to(dtype=x.dtype)
 
         x_up = F.interpolate(x, size=(hs, ws), mode="nearest")
-        patches = F.unfold(x_up, kernel_size=k, dilation=1, padding=k // 2, stride=1)
-        patches = patches.view(b, c, k * k, hs * ws)
         kflat = kernel.view(b, k * k, hs * ws).unsqueeze(1)
-        y = (patches * kflat).sum(dim=2).view(b, c, hs, ws)
-        return self.out_proj(y)
+
+        # Memory-safe feature reassembly: process channels in chunks to cap unfold peak memory.
+        out = x_up.new_zeros((b, c, hs, ws))
+        step = int(self.chunk_channels)
+        for c0 in range(0, c, step):
+            c1 = min(c, c0 + step)
+            part = x_up[:, c0:c1, :, :]
+            patches = F.unfold(part, kernel_size=k, dilation=1, padding=k // 2, stride=1)
+            patches = patches.view(b, c1 - c0, k * k, hs * ws)
+            y_part = (patches * kflat).sum(dim=2).view(b, c1 - c0, hs, ws)
+            out[:, c0:c1, :, :] = y_part
+
+        return self.out_proj(out)
 
 
 class CARAFEUpsampleSafe(torch.nn.Module):
@@ -171,6 +196,7 @@ class CARAFEUpsampleSafe(torch.nn.Module):
         scale: int = 2,
         kernel_size: int = 5,
         compress: int = 64,
+        chunk_channels: int = 64,
         alpha_init: float = 0.0,
         alpha_cap: float = 0.5,
         tag: str = "",
@@ -182,6 +208,7 @@ class CARAFEUpsampleSafe(torch.nn.Module):
             scale=int(scale),
             kernel_size=int(kernel_size),
             compress=int(compress),
+            chunk_channels=int(chunk_channels),
         )
         self.tag = str(tag)
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
@@ -308,6 +335,7 @@ def apply(model: Any, cfg: Any) -> Any:
 
     kernel_size = _safe_int(_deep_get(cfg, "enhance241", "b7_kernel_size", default=5), 5)
     compress = _safe_int(_deep_get(cfg, "enhance241", "b7_compress", default=64), 64)
+    chunk_channels = _safe_int(_deep_get(cfg, "enhance241", "b7_chunk_channels", default=64), 64)
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_init", default=0.0), 0.0)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_cap", default=0.5), 0.5)
 
@@ -333,6 +361,7 @@ def apply(model: Any, cfg: Any) -> Any:
             scale=scale,
             kernel_size=kernel_size,
             compress=compress,
+            chunk_channels=chunk_channels,
             alpha_init=alpha_init,
             alpha_cap=alpha_cap,
             tag=tag,
@@ -368,6 +397,7 @@ def apply(model: Any, cfg: Any) -> Any:
         "concat_candidates": _concat_candidates(seq),
         "kernel_size": int(kernel_size),
         "compress": int(compress),
+        "chunk_channels": int(chunk_channels),
         "alpha_init": _to_float(alpha_init),
         "alpha_cap": _to_float(alpha_cap),
         "mode": "carafe_residual_safe",

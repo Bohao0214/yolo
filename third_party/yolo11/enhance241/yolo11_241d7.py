@@ -62,11 +62,15 @@ def _head_stride_list(stride: Any) -> List[float]:
         return []
 
 
-def _first_stride_tensor(stride: Any) -> torch.Tensor:
+def _d7_stride_tensor_for_loss_compat(stride: Any) -> torch.Tensor:
+    """Keep at least 2 stride values for TAL compatibility (tal.py uses stride[1])."""
+
     vals = _head_stride_list(stride)
-    if vals:
-        return torch.tensor([vals[0]], dtype=torch.float32)
-    return torch.tensor([8.0], dtype=torch.float32)
+    if len(vals) >= 2:
+        return torch.tensor([vals[0], vals[1]], dtype=torch.float32)
+    if len(vals) == 1:
+        return torch.tensor([vals[0], vals[0] * 2.0], dtype=torch.float32)
+    return torch.tensor([8.0, 16.0], dtype=torch.float32)
 
 
 def apply(model: Any, cfg: Any) -> Any:
@@ -88,6 +92,8 @@ def apply(model: Any, cfg: Any) -> Any:
 
     already_small_only = heads_before == 1 and len(f_before) == 1
     if already_small_only:
+        stride_after = _d7_stride_tensor_for_loss_compat(getattr(detect, "stride", []))
+        detect.stride = stride_after
         info = {
             "enabled": True,
             "patched_count": 0,
@@ -98,9 +104,10 @@ def apply(model: Any, cfg: Any) -> Any:
             "detect_f_before": [int(x) for x in f_before],
             "detect_f_after": [int(x) for x in f_before],
             "stride_before": stride_before,
-            "stride_after": stride_before,
+            "stride_after": _head_stride_list(stride_after),
             "head_keep": "p3_only",
             "note": "already_patched",
+            "tal_compat_stride_len": int(len(_head_stride_list(stride_after))),
         }
         setattr(yolo_obj, "_enhance241_d7_info", info)
         recorder = get_check_recorder("d7", cfg, patch_info=info)
@@ -133,7 +140,7 @@ def apply(model: Any, cfg: Any) -> Any:
         detect.one2one_cv3 = torch.nn.ModuleList([one2one_cv3[0]])
 
     detect.nl = 1
-    detect.stride = _first_stride_tensor(getattr(detect, "stride", []))
+    detect.stride = _d7_stride_tensor_for_loss_compat(getattr(detect, "stride", []))
 
     try:
         detect.bias_init()
@@ -155,6 +162,7 @@ def apply(model: Any, cfg: Any) -> Any:
         "head_keep": "p3_only",
         "dropped_heads": max(0, int(heads_before) - 1),
         "loss_scope": "only_p3_branch",
+        "tal_compat_stride_len": int(len(_head_stride_list(getattr(detect, "stride", [])))),
     }
     setattr(yolo_obj, "_enhance241_d7_info", info)
 

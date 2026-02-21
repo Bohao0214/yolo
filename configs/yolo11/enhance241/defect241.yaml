@@ -103,6 +103,7 @@ enhance241:
   b7: false
   b7_kernel_size: 5
   b7_compress: 64
+  b7_chunk_channels: 64   # CARAFE 重组分块通道数，减小显存峰值
   b7_alpha_init: 0.0
   b7_alpha_cap: 0.5
   debug_stats: false
