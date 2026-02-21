@@ -336,12 +336,7 @@ def apply(model: Any, cfg: Any) -> Any:
     kernel_size = _safe_int(_deep_get(cfg, "enhance241", "b7_kernel_size", default=5), 5)
     compress = _safe_int(_deep_get(cfg, "enhance241", "b7_compress", default=64), 64)
     chunk_channels = _safe_int(_deep_get(cfg, "enhance241", "b7_chunk_channels", default=64), 64)
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_init", default=0.05), 0.05)
-    alpha_auto_fallback = False
-    if abs(alpha_init) < 1e-8:
-        # Avoid dead-start where CARAFE branch receives no gradient in the first steps.
-        alpha_init = 0.05
-        alpha_auto_fallback = True
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_init", default=0.0), 0.0)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_cap", default=0.5), 0.5)
 
     patched_indices: List[int] = []
@@ -404,7 +399,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "compress": int(compress),
         "chunk_channels": int(chunk_channels),
         "alpha_init": _to_float(alpha_init),
-        "alpha_auto_fallback": bool(alpha_auto_fallback),
         "alpha_cap": _to_float(alpha_cap),
         "mode": "carafe_residual_safe",
     }

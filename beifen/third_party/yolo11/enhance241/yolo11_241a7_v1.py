@@ -273,12 +273,7 @@ def apply(model: Any, cfg: Any) -> Any:
     channels = _infer_p3_channels(detect)
     order = _safe_int(_deep_get(cfg, "enhance241", "a7_order", default=3), 3)
     refine = str(_deep_get(cfg, "enhance241", "a7_refine", default="dw"))
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a7_alpha_init", default=0.05), 0.05)
-    alpha_auto_fallback = False
-    if abs(alpha_init) < 1e-8:
-        # Zero alpha + zero-init tail makes the branch effectively frozen at startup.
-        alpha_init = 0.05
-        alpha_auto_fallback = True
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a7_alpha_init", default=0.0), 0.0)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a7_alpha_cap", default=0.5), 0.5)
 
     wrapped = C3HBHorNetSafe(
@@ -315,7 +310,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "order": int(order),
         "refine": str(refine),
         "alpha_init": _to_float(alpha_init),
-        "alpha_auto_fallback": bool(alpha_auto_fallback),
         "alpha_cap": _to_float(alpha_cap),
         "params_old": int(old_params),
         "params_new": int(new_params),

@@ -75,7 +75,7 @@ enhance241:
   a7: false
   a7_order: 3
   a7_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
-  a7_alpha_init: 0.0
+  a7_alpha_init: 0.05
   a7_alpha_cap: 0.5
   b1: false
   b2: false
@@ -104,7 +104,7 @@ enhance241:
   b7_kernel_size: 5
   b7_compress: 64
   b7_chunk_channels: 64   # CARAFE 重组分块通道数，减小显存峰值
-  b7_alpha_init: 0.0
+  b7_alpha_init: 0.05
   b7_alpha_cap: 0.5
   debug_stats: false
   c1: false
@@ -130,4 +130,5 @@ enhance241:
   d5_downsample: "dw"     # d5(P2 head) 融合 refine 类型：dw=depthwise separable, conv=普通3x3
   d5_upsample: "nearest"  # P3 -> P2 对齐插值：nearest | bilinear
   d7: false
+  d7_cls_bias_shift: -0.25  # d7(P3-only) 分类分支初始偏置平移，抑制早期高置信假阳
   d1: false               # legacy alias of d3

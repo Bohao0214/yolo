@@ -73,39 +73,6 @@ def _d7_stride_tensor_for_loss_compat(stride: Any) -> torch.Tensor:
     return torch.tensor([8.0, 16.0], dtype=torch.float32)
 
 
-def _shift_keep_head_cls_bias(detect: Any, delta: float) -> bool:
-    ok = False
-
-    def _shift_from_head(head: Any) -> bool:
-        try:
-            if isinstance(head, torch.nn.Sequential) and len(head) > 0:
-                last = head[-1]
-            else:
-                last = head
-            if isinstance(last, torch.nn.Conv2d) and last.bias is not None:
-                with torch.no_grad():
-                    last.bias.add_(float(delta))
-                return True
-        except Exception:
-            return False
-        return False
-
-    try:
-        if hasattr(detect, "cv3") and len(detect.cv3) > 0:
-            ok = _shift_from_head(detect.cv3[0]) or ok
-    except Exception:
-        pass
-
-    try:
-        one2one_cv3 = getattr(detect, "one2one_cv3", None)
-        if isinstance(one2one_cv3, torch.nn.ModuleList) and len(one2one_cv3) > 0:
-            ok = _shift_from_head(one2one_cv3[0]) or ok
-    except Exception:
-        pass
-
-    return ok
-
-
 def apply(model: Any, cfg: Any) -> Any:
     enable_d7 = bool(_deep_get(cfg, "enhance241", "d7", default=False))
     if not enable_d7:
@@ -180,9 +147,6 @@ def apply(model: Any, cfg: Any) -> Any:
     except Exception:
         pass
 
-    d7_cls_bias_shift = float(_deep_get(cfg, "enhance241", "d7_cls_bias_shift", default=-0.25))
-    cls_bias_shift_ok = _shift_keep_head_cls_bias(detect, d7_cls_bias_shift) if abs(d7_cls_bias_shift) > 1e-12 else False
-
     # Keep full neck graph unchanged for safety; only Detect branches are pruned.
     info = {
         "enabled": True,
@@ -199,8 +163,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "dropped_heads": max(0, int(heads_before) - 1),
         "loss_scope": "only_p3_branch",
         "tal_compat_stride_len": int(len(_head_stride_list(getattr(detect, "stride", [])))),
-        "d7_cls_bias_shift": float(d7_cls_bias_shift),
-        "d7_cls_bias_shift_applied": bool(cls_bias_shift_ok),
     }
     setattr(yolo_obj, "_enhance241_d7_info", info)
 
