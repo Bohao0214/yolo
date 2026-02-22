@@ -111,8 +111,8 @@ def apply(model: Any, cfg: Any) -> Any:
     if not enable_d7:
         return model
 
-    if any(bool(_deep_get(cfg, "enhance241", k, default=False)) for k in ("d1", "d3", "d5", "d9")):
-        raise RuntimeError("enhance241.d7 conflicts with d1/d3/d5/d9; enable only one D-class module.")
+    if bool(_deep_get(cfg, "enhance241", "d5", default=False)):
+        raise RuntimeError("enhance241.d7 conflicts with d5; enable only one of d5/d7.")
 
     yolo_obj, det_model, seq = _extract_model_seq(model)
     if seq is None:

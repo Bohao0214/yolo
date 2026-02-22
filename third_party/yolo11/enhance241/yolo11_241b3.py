@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
-from .yolo11_241a3 import _bind_module_debug, _get_module_recorder, get_check_recorder
+from .yolo11_241a3 import _bind_module_debug, _get_module_recorder, _should_capture_delta, get_check_recorder
 
 ENHANCE241_AUDIT_KEYS = ["enhance241_b3"]  # enhance241-audit
 
@@ -169,7 +169,7 @@ class NASFPNLiteFuse(torch.nn.Module):
                         pass
             elif step <= 30:
                 recorder.record_scalar_curve(f"{prefix}.alpha", float(alpha.item()), step, max_steps=30)
-            if step == 1:
+            if _should_capture_delta(step):
                 recorder.capture_param_delta(self, prefix)
 
         setattr(self, "_enhance241_fwd_step", step + 1)

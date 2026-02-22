@@ -292,8 +292,8 @@ def apply(model: Any, cfg: Any) -> Any:
     if not enable_b7:
         return model
 
-    if any(bool(_deep_get(cfg, "enhance241", key, default=False)) for key in ("b1", "b2", "b3", "b5", "b9")):
-        raise RuntimeError("enhance241.b7 conflicts with b1/b2/b3/b5/b9; enable only one B-class module.")
+    if any(bool(_deep_get(cfg, "enhance241", key, default=False)) for key in ("b1", "b2", "b3", "b5")):
+        raise RuntimeError("enhance241.b7 conflicts with b1/b2/b3/b5; enable only one B-class module.")
 
     yolo_obj = model
     if hasattr(model, "model") and hasattr(getattr(model, "model"), "model"):
@@ -310,7 +310,7 @@ def apply(model: Any, cfg: Any) -> Any:
         info = {
             "enabled": True,
             "patched_indices": prepatched,
-            "patched_count": 0,
+            "patched_count": len(prepatched),
             "existing_count": len(prepatched),
             "note": "already_patched",
         }

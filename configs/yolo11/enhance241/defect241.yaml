@@ -61,7 +61,7 @@ threshold_sweep:
   curve: [0.01, 0.01, 1.00]   # start, step, end
   table: [0.00, 0.05, 1.00]   # start, step, end
 
-# enhance241 开关（实现 a3/a5/a7/b1/b2/b3/b5/b7/c5/c7/d3/d5/d7；d1 保留为 d3 兼容别名）
+# enhance241 开关（实现 a3/a5/a7/a9/b1/b2/b3/b5/b7/b9/c5/c7/c9/d3/d5/d7/d9；d1 保留为 d3 兼容别名）
 enhance241:
   a2: false
   a3: false
@@ -77,6 +77,12 @@ enhance241:
   a7_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
   a7_alpha_init: 0.05
   a7_alpha_cap: 0.5
+  a9: false
+  a9_reduction: 16
+  a9_spatial_kernel: 7
+  a9_act: "hswish"        # silu | hswish | mish
+  a9_alpha_init: 0.0
+  a9_alpha_cap: 0.5
   b1: false
   b2: false
   b1_version: "v3"
@@ -106,6 +112,12 @@ enhance241:
   b7_chunk_channels: 64   # CARAFE 重组分块通道数，减小显存峰值
   b7_alpha_init: 0.05
   b7_alpha_cap: 0.5
+  b9: false
+  b9_depth: 2
+  b9_shortcut: true
+  b9_upsample: "nearest"
+  b9_alpha_init: 0.0
+  b9_alpha_cap: 0.5
   debug_stats: false
   c1: false
   c5: false
@@ -122,6 +134,12 @@ enhance241:
   c7_reduction: 16
   c7_alpha_init: 0.0
   c7_alpha_cap: 0.5
+  c9: false
+  c9_mode: "full"         # full | channel | spatial
+  c9_reduction: 16
+  c9_kernel_size: 7
+  c9_alpha_init: 0.0
+  c9_alpha_cap: 0.5
   d3: false
   d3_temp_init: 1.0
   d3_temp_min: 0.5
@@ -131,4 +149,8 @@ enhance241:
   d5_upsample: "nearest"  # P3 -> P2 对齐插值：nearest | bilinear
   d7: false
   d7_cls_bias_shift: -0.25  # d7(P3-only) 分类分支初始偏置平移，抑制早期高置信假阳
+  d9: false
+  d9_mode: "dw"             # dw | conv
+  d9_alpha_init: 0.0
+  d9_alpha_cap: 0.5
   d1: false               # legacy alias of d3

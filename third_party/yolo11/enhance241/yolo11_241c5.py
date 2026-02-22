@@ -14,6 +14,7 @@ from .yolo11_241a3 import (
     _get_module_recorder,
     _infer_device_dtype,
     _locate_detect,
+    _should_capture_delta,
     _tensor_stats,
     _to_float,
     get_check_recorder,
@@ -271,7 +272,7 @@ class C5BRAInject(torch.nn.Module):
             elif step <= 100:
                 recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=100)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=100)
-            if step == 1:
+            if _should_capture_delta(step):
                 recorder.capture_param_delta(self, prefix)
 
         setattr(self, "_enhance241_fwd_step", step + 1)

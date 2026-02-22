@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# Path: third_party/yolo11/enhance241/yolo11_241c7.py
-# Purpose: enhance241 c7 patch (MCBAM residual-safe gate before Detect P3 input).
+# Path: third_party/yolo11/enhance241/yolo11_241a9.py
+# Purpose: enhance241 a9 patch (Light-PDD style SE-SAM on backbone P3 stage, residual-safe).
 
 from typing import Any, Dict, Optional, Tuple
 
@@ -19,7 +19,7 @@ from .yolo11_241a3 import (
     get_check_recorder,
 )
 
-ENHANCE241_AUDIT_KEYS = ["enhance241_c7"]  # enhance241-audit
+ENHANCE241_AUDIT_KEYS = ["enhance241_a9"]  # enhance241-audit
 
 
 def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
@@ -51,134 +51,113 @@ def _safe_float(x: Any, default: float) -> float:
         return float(default)
 
 
-class _ChannelAttention(torch.nn.Module):
-    def __init__(self, channels: int, reduction: int = 16) -> None:
+class _SEBlock(torch.nn.Module):
+    def __init__(self, channels: int, reduction: int = 16, act: str = "hswish") -> None:
         super().__init__()
         c = int(channels)
         hidden = max(4, c // max(1, int(reduction)))
         self.fc1 = torch.nn.Conv2d(c, hidden, kernel_size=1, stride=1, padding=0, bias=True)
-        self.act = torch.nn.SiLU(inplace=True)
         self.fc2 = torch.nn.Conv2d(hidden, c, kernel_size=1, stride=1, padding=0, bias=True)
+        self.act_name = str(act).lower()
 
-    def _shared_mlp(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc2(self.act(self.fc1(x)))
+    def _act(self, x: torch.Tensor) -> torch.Tensor:
+        if self.act_name == "mish":
+            return x * torch.tanh(F.softplus(x))
+        if self.act_name in ("hs", "hard_swish", "hardswish", "hard-swish"):
+            return F.hardswish(x)
+        return F.silu(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        avg = F.adaptive_avg_pool2d(x, output_size=1)
-        mx = F.adaptive_max_pool2d(x, output_size=1)
-        return torch.sigmoid(self._shared_mlp(avg) + self._shared_mlp(mx))
+        z = F.adaptive_avg_pool2d(x, output_size=1)
+        s = torch.sigmoid(self.fc2(self._act(self.fc1(z))))
+        return x * s
 
 
-class _SpatialAttentionBySubspace(torch.nn.Module):
-    """MCBAM-style spatial attention with n*n subspace max and two avg-pool aggregations.
-
-    Paper note:
-    n = (sum_{i=1..lambda} sum_{j=1..m_i} x_{ij}) / (sum_{i=1..lambda} m_i)
-    This module consumes precomputed/configured n (offline statistic).
-    """
-
-    def __init__(self, n: int = 3) -> None:
+class _SpatialAttention(torch.nn.Module):
+    def __init__(self, kernel_size: int = 7) -> None:
         super().__init__()
-        self.n = max(1, int(n))
-        self.proj = torch.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=True)
-
-    def _subspace_max_grid(self, x: torch.Tensor) -> torch.Tensor:
-        b, _, h, w = x.shape
-        n = max(1, min(self.n, h, w))
-        ys = torch.linspace(0, h, steps=n + 1, device=x.device, dtype=torch.float32).round().long()
-        xs = torch.linspace(0, w, steps=n + 1, device=x.device, dtype=torch.float32).round().long()
-
-        rows = []
-        for iy in range(n):
-            y0 = int(ys[iy].item())
-            y1 = int(ys[iy + 1].item())
-            if y1 <= y0:
-                y1 = min(h, y0 + 1)
-            cols = []
-            for ix in range(n):
-                x0 = int(xs[ix].item())
-                x1 = int(xs[ix + 1].item())
-                if x1 <= x0:
-                    x1 = min(w, x0 + 1)
-                cell = x[:, :, y0:y1, x0:x1]
-                # Subspace max response.
-                val = cell.amax(dim=(1, 2, 3), keepdim=True)
-                cols.append(val)
-            rows.append(torch.cat(cols, dim=-1))
-        return torch.cat(rows, dim=-2)  # [B, 1, n, n]
+        k = max(3, int(kernel_size))
+        if k % 2 == 0:
+            k += 1
+        self.conv = torch.nn.Conv2d(2, 1, kernel_size=k, stride=1, padding=k // 2, bias=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        grid = self._subspace_max_grid(x)
-        agg = F.avg_pool2d(grid, kernel_size=3, stride=1, padding=1)
-        agg = F.avg_pool2d(agg, kernel_size=3, stride=1, padding=1)
-        up = F.interpolate(agg, size=x.shape[-2:], mode="bilinear", align_corners=False)
-        return torch.sigmoid(self.proj(up))
+        avg_map = x.mean(dim=1, keepdim=True)
+        max_map = x.amax(dim=1, keepdim=True)
+        m = torch.sigmoid(self.conv(torch.cat([avg_map, max_map], dim=1)))
+        return x * m
 
 
-class MCBAMCore(torch.nn.Module):
-    def __init__(self, channels: int, n: int = 3, reduction: int = 16, mode: str = "full") -> None:
+class _MobileDeltaSESAM(torch.nn.Module):
+    """MobileNetV3-style light branch + SE-SAM (SE then spatial attention)."""
+
+    def __init__(self, channels: int, reduction: int = 16, k: int = 7, act: str = "hswish") -> None:
         super().__init__()
-        self.mode = str(mode).lower()
-        self.channel = _ChannelAttention(channels=int(channels), reduction=int(reduction))
-        self.spatial = _SpatialAttentionBySubspace(n=int(n))
+        c = int(channels)
+        self.dw = torch.nn.Conv2d(c, c, kernel_size=3, stride=1, padding=1, groups=c, bias=True)
+        self.pw = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
+        self.se = _SEBlock(c, reduction=reduction, act=act)
+        self.sa = _SpatialAttention(kernel_size=k)
+        self.out = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
+        torch.nn.init.zeros_(self.out.weight)
+        if self.out.bias is not None:
+            torch.nn.init.zeros_(self.out.bias)
+        self.act_name = str(act).lower()
+
+    def _act(self, x: torch.Tensor) -> torch.Tensor:
+        if self.act_name == "mish":
+            return x * torch.tanh(F.softplus(x))
+        if self.act_name in ("hs", "hard_swish", "hardswish", "hard-swish"):
+            return F.hardswish(x)
+        return F.silu(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        mode = self.mode
-        attn_c: Optional[torch.Tensor] = None
-        attn_s: Optional[torch.Tensor] = None
-        if mode in ("full", "channel"):
-            attn_c = self.channel(x)
-        if mode in ("full", "spatial"):
-            attn_s = self.spatial(x)
-
-        if attn_c is None and attn_s is None:
-            return x
-        if attn_c is None:
-            attn = attn_s
-        elif attn_s is None:
-            attn = attn_c
-        else:
-            attn = attn_c * attn_s
-        return x * attn
+        y = self._act(self.pw(self._act(self.dw(x))))
+        # SE -> SA serial flow (paper-style SE-SAM)
+        y = self.sa(self.se(y))
+        return self.out(y)
 
 
-class C7MCBAMInject(torch.nn.Module):
-    """Residual-safe c7 wrapper: out = base(x) + alpha * (MCBAM(base(x)) - base(x))."""
+class A9SESAMBackboneSafe(torch.nn.Module):
+    """a9 residual-safe wrapper on P3 stage: out = base(x) + alpha * delta(base(x))."""
 
     def __init__(
         self,
         base_module: torch.nn.Module,
         channels: int,
-        n: int = 3,
         reduction: int = 16,
-        mode: str = "full",
+        spatial_kernel: int = 7,
+        act: str = "hswish",
         alpha_init: float = 0.0,
         alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
-        self.enhance241_c7_base = base_module
-        self.enhance241_c7_mcbam = MCBAMCore(channels=int(channels), n=int(n), reduction=int(reduction), mode=str(mode))
+        self.enhance241_a9_base = base_module
+        self.enhance241_a9_delta = _MobileDeltaSESAM(
+            channels=int(channels),
+            reduction=int(reduction),
+            k=int(spatial_kernel),
+            act=str(act),
+        )
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
-
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
-        alpha_ratio = alpha_init / self.alpha_cap
-        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
-        self.enhance241_c7_alpha = torch.nn.Parameter(alpha_raw)
+        alpha_raw = torch.atanh(torch.tensor(alpha_init / self.alpha_cap, dtype=torch.float32))
+        self.enhance241_a9_alpha = torch.nn.Parameter(alpha_raw)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
-        prefix = str(getattr(self, "_enhance241_prefix", "c7"))
+        prefix = str(getattr(self, "_enhance241_prefix", "a9"))
         step = int(getattr(self, "_enhance241_fwd_step", 0))
 
         if recorder is not None and step == 0:
             recorder.capture_param_before(self, prefix)
 
-        y_base = self.enhance241_c7_base(x)
-        y_gate = self.enhance241_c7_mcbam(y_base)
-        delta = y_gate - y_base
-        alpha_raw = self.enhance241_c7_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        y_base = self.enhance241_a9_base(x)
+        delta_raw = self.enhance241_a9_delta(y_base)
+        alpha_raw = self.enhance241_a9_alpha.to(dtype=y_base.dtype, device=y_base.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
-        out = y_base + alpha * delta
+        delta = alpha * delta_raw
+        out = y_base + delta
 
         if recorder is not None:
             if step == 0:
@@ -203,14 +182,11 @@ class C7MCBAMInject(torch.nn.Module):
                         "pass": gate1_ok,
                         "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
-                        "alpha_cap": _to_float(self.alpha_cap),
                         "base_stats": _tensor_stats(y_base),
                         "delta_stats": _tensor_stats(delta),
                         "out_stats": _tensor_stats(out),
                     },
                 )
-                if not gate1_ok:
-                    recorder.add_note(f"{prefix}: Gate-1 failed (cos={cos:.4f}, var_ratio={v_out/(v_base+1e-12):.4f})")
                 recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=100)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=100)
                 if out.requires_grad:
@@ -261,26 +237,26 @@ def _infer_p3_channels(detect: Any) -> int:
                 return int(m.in_channels)
     except Exception:
         pass
-    raise RuntimeError("Unable to infer P3 channels for c7.")
+    raise RuntimeError("Unable to infer P3 channels for a9.")
 
 
 def apply(model: Any, cfg: Any) -> Any:
-    enable_c7 = bool(_deep_get(cfg, "enhance241", "c7", default=False))
-    if not enable_c7:
+    enable_a9 = bool(_deep_get(cfg, "enhance241", "a9", default=False))
+    if not enable_a9:
         return model
 
-    if any(bool(_deep_get(cfg, "enhance241", k, default=False)) for k in ("c5", "c9")):
-        raise RuntimeError("enhance241.c7 conflicts with c5/c9; enable only one C-class module.")
+    if any(bool(_deep_get(cfg, "enhance241", k, default=False)) for k in ("a3", "a5", "a7")):
+        raise RuntimeError("enhance241.a9 conflicts with a3/a5/a7; enable only one A-class module.")
 
     yolo_obj, seq = _extract_model_seq(model)
     if seq is None:
-        raise RuntimeError("enhance241.c7 requires YOLO/DetectionModel-like object with .model sequence.")
+        raise RuntimeError("enhance241.a9 requires YOLO/DetectionModel-like object with .model sequence.")
 
     p3_idx = _infer_p3_output_index(seq)
     detect_idx, detect = _locate_detect(seq)
     old = seq[p3_idx]
 
-    if isinstance(old, C7MCBAMInject):
+    if isinstance(old, A9SESAMBackboneSafe):
         info = {
             "enabled": True,
             "existing_count": 1,
@@ -289,32 +265,36 @@ def apply(model: Any, cfg: Any) -> Any:
             "detect_idx": int(detect_idx),
             "note": "already_patched",
         }
-        setattr(yolo_obj, "_enhance241_c7_info", info)
-        recorder = get_check_recorder("c7", cfg, patch_info=info)
+        setattr(yolo_obj, "_enhance241_a9_info", info)
+        recorder = get_check_recorder("a9", cfg, patch_info=info)
         if recorder is not None:
             try:
-                _bind_module_debug(old, recorder, prefix=f"c7.idx{p3_idx}.existing")
-                recorder.register_module_params(old, f"c7.idx{p3_idx}.existing")
+                _bind_module_debug(old, recorder, prefix=f"a9.idx{p3_idx}.existing")
+                recorder.register_module_params(old, f"a9.idx{p3_idx}.existing")
                 recorder.attach_detect_hooks(detect, detect_idx)
                 recorder.maybe_run_val_separability(yolo_obj, cfg)
             except Exception as exc:
-                recorder.add_note(f"c7_prepatched_hook_failed:{exc}")
+                recorder.add_note(f"a9_prepatched_hook_failed:{exc}")
         return yolo_obj
 
     channels = _infer_p3_channels(detect)
-    n = _safe_int(_deep_get(cfg, "enhance241", "c7_n", default=3), 3)
-    n = max(1, min(6, int(n)))
-    mode = str(_deep_get(cfg, "enhance241", "c7_mode", default="full")).lower()
-    reduction = _safe_int(_deep_get(cfg, "enhance241", "c7_reduction", default=16), 16)
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c7_alpha_init", default=0.0), 0.0)
-    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c7_alpha_cap", default=0.5), 0.5)
+    reduction = _safe_int(_deep_get(cfg, "enhance241", "a9_reduction", default=16), 16)
+    spatial_k = _safe_int(_deep_get(cfg, "enhance241", "a9_spatial_kernel", default=7), 7)
+    act = str(_deep_get(cfg, "enhance241", "a9_act", default="hswish")).lower()
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a9_alpha_init", default=0.0), 0.0)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a9_alpha_cap", default=0.5), 0.5)
 
-    wrapped = C7MCBAMInject(
+    alpha_auto_fallback = False
+    if abs(alpha_init) < 1e-8:
+        alpha_init = 0.05
+        alpha_auto_fallback = True
+
+    wrapped = A9SESAMBackboneSafe(
         old,
         channels=channels,
-        n=n,
         reduction=reduction,
-        mode=mode,
+        spatial_kernel=spatial_k,
+        act=act,
         alpha_init=alpha_init,
         alpha_cap=alpha_cap,
     )
@@ -339,32 +319,28 @@ def apply(model: Any, cfg: Any) -> Any:
         "p3_index": int(p3_idx),
         "detect_idx": int(detect_idx),
         "base_type": old.__class__.__name__,
-        "new_type": "C7MCBAMInject",
+        "new_type": "A9SESAMBackboneSafe",
         "channels": int(channels),
-        "n": int(n),
-        "mode": str(mode),
         "reduction": int(reduction),
+        "spatial_kernel": int(spatial_k),
+        "act": str(act),
         "alpha_init": _to_float(alpha_init),
+        "alpha_auto_fallback": bool(alpha_auto_fallback),
         "alpha_cap": _to_float(alpha_cap),
         "params_old": int(old_params),
         "params_new": int(new_params),
         "delta_params": int(new_params - old_params),
-        "gate1_thresholds": {"cosine_min": 0.98, "var_ratio_min": 0.5},
-        "gate2_thresholds": {"delta_l2_min": 0.0, "nan_forbidden": True},
     }
-    setattr(yolo_obj, "_enhance241_c7_info", info)
+    setattr(yolo_obj, "_enhance241_a9_info", info)
 
-    recorder = get_check_recorder("c7", cfg, patch_info=info)
+    recorder = get_check_recorder("a9", cfg, patch_info=info)
     if recorder is not None:
-        _bind_module_debug(wrapped, recorder, prefix=f"c7.idx{p3_idx}")
-        recorder.register_module_params(wrapped, f"c7.idx{p3_idx}")
+        _bind_module_debug(wrapped, recorder, prefix=f"a9.idx{p3_idx}")
+        recorder.register_module_params(wrapped, f"a9.idx{p3_idx}")
         try:
             recorder.attach_detect_hooks(detect, detect_idx)
-        except Exception as exc:
-            recorder.add_note(f"c7_detect_hook_failed:{exc}")
-        try:
             recorder.maybe_run_val_separability(yolo_obj, cfg)
         except Exception as exc:
-            recorder.add_note(f"c7_val_check_failed:{exc}")
+            recorder.add_note(f"a9_hook_failed:{exc}")
 
     return yolo_obj
