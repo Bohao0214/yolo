@@ -41,6 +41,9 @@ Options:
                Override batch size for all cases
   --combos L   Comma-separated cases, e.g.:
                baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,a7,a9,b5,b7,b9,c5,c7,c9,d5,d7,d9
+               Built-in aliases:
+               hmc7/abcd7 => a7+b7+c7+d7
+               pdd9/abcd9 => a9+b9+c9+d9
                Supports aliases a3_b3 / a3_b3_d1 and raw '+' expressions
   --tag NAME   Matrix tag (used for temp config/log folders)
   --dry-run    Generate configs and print commands only (no training)
@@ -127,7 +130,7 @@ fi
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
 
 # 默认组合：原有 S2 主线 + 新增模块单开
-DEFAULT_COMBOS="baseline,a9,b9,c9,d9,a5,a7,b5,b7,c5,c7,d5,d7,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,b5+c5,c5+d5,b5+d5,b5+c5+d5"
+DEFAULT_COMBOS="baseline,hmc7,pdd9,a9,b9,c9,d9,a5,a7,b5,b7,c5,c7,d5,d7,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,b5+c5,c5+d5,b5+d5,b5+c5+d5"
 if [[ -z "${COMBOS_RAW}" ]]; then
   COMBOS_RAW="${DEFAULT_COMBOS}"
 fi
@@ -162,6 +165,14 @@ normalize_and_add_case() {
   case "${token}" in
     baseline|base|none)
       add_case "baseline" ""
+      return
+      ;;
+    hmc7|abcd7|a7_b7_c7_d7|a7+b7+c7+d7)
+      add_case "a7_b7_c7_d7" "a7 b7 c7 d7"
+      return
+      ;;
+    pdd9|abcd9|a9_b9_c9_d9|a9+b9+c9+d9)
+      add_case "a9_b9_c9_d9" "a9 b9 c9 d9"
       return
       ;;
     a3|a5|a7|a9|b1|b2|b3|b5|b7|b9|c5|c7|c9|d1|d3|d5|d7|d9)
@@ -199,7 +210,7 @@ normalize_and_add_case() {
       baseline|base|none) continue ;;
       a3|a5|a7|a9|b1|b2|b3|b5|b7|b9|c5|c7|c9|d1|d3|d5|d7|d9) ;;
       *)
-        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,a3,a5,a7,a9,b1,b2,b3,b5,b7,b9,c5,c7,c9,d1,d3,d5,d7,d9)" >&2
+        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,hmc7/pdd9,a3,a5,a7,a9,b1,b2,b3,b5,b7,b9,c5,c7,c9,d1,d3,d5,d7,d9)" >&2
         exit 2
         ;;
     esac
@@ -448,6 +459,12 @@ bash tools/run_yolov11_241_matrix.sh \
   --epochs 10 \
   --batch 6 \
   --combos a5,a7,a9,b5,b7,b9,c5,c7,c9,d5,d7,d9
+
+# 直接跑论文分组组合
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 10 \
+  --batch 6 \
+  --combos baseline,hmc7,pdd9
 
 # 干跑检查（不训练，只生成配置+命令）
 bash tools/run_yolov11_241_matrix.sh \

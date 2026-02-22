@@ -18,6 +18,8 @@ Usage:
   bash tools/run_yolov11_241.sh [base_config.yaml] [switches...]
 
 Switches (implemented):
+  hmc7  Alias of: a7 b7 c7 d7 (YOLO-HMC group)
+  pdd9  Alias of: a9 b9 c9 d9 (PDD group)
   a3    Enable 2.4.1 a3 (SPDConvDownsample P3 downsample)
   a5    Enable 2.4.1 a5 (P3-side residual-safe lightweight enhancement)
   a7    Enable 2.4.1 a7 (HorNet/C3HB-style residual-safe P3 generation enhancer)
@@ -39,6 +41,8 @@ Switches (implemented):
 
 Examples:
   bash tools/run_yolov11_241.sh
+  bash tools/run_yolov11_241.sh hmc7
+  bash tools/run_yolov11_241.sh pdd9
   bash tools/run_yolov11_241.sh a3
   bash tools/run_yolov11_241.sh a5
   bash tools/run_yolov11_241.sh a7
@@ -58,6 +62,8 @@ Examples:
   bash tools/run_yolov11_241.sh d3
   bash tools/run_yolov11_241.sh d1
   bash tools/run_yolov11_241.sh b1 b2
+  bash tools/run_yolov11_241.sh a7+b7+c7+d7
+  bash tools/run_yolov11_241.sh a9_b9_c9_d9
   bash tools/run_yolov11_241.sh a3 b3 d3
   bash tools/run_yolov11_241.sh a3 b3 d1
   bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1
@@ -103,12 +109,18 @@ if ! ensure_ultralytics "${PYTHON_BIN}"; then
   fi
 fi
 
-SWITCHES=("$@")
-if [[ ${#SWITCHES[@]} -eq 1 ]]; then
-  if [[ "${SWITCHES[0]}" =~ [[:space:]] ]]; then
-    read -r -a SWITCHES <<<"${SWITCHES[0]}"
+RAW_SWITCHES=("$@")
+SWITCHES=()
+for _sw in "${RAW_SWITCHES[@]}"; do
+  _norm="${_sw//,/ }"
+  _norm="${_norm//+/ }"
+  if [[ -n "${_norm}" ]]; then
+    read -r -a _parts <<<"${_norm}"
+    for _p in "${_parts[@]}"; do
+      [[ -n "${_p}" ]] && SWITCHES+=("${_p}")
+    done
   fi
-fi
+done
 ENABLE_A3="false"
 ENABLE_A5="false"
 ENABLE_A7="false"
@@ -133,6 +145,8 @@ for sw in "${SWITCHES[@]}"; do
   key="$(echo "${sw}" | tr '[:upper:]' '[:lower:]')"
   case "${key}" in
     "" ) ;;
+    hmc7|abcd7|a7_b7_c7_d7 ) ENABLE_A7="true"; ENABLE_B7="true"; ENABLE_C7="true"; ENABLE_D7="true" ;;
+    pdd9|abcd9|a9_b9_c9_d9 ) ENABLE_A9="true"; ENABLE_B9="true"; ENABLE_C9="true"; ENABLE_D9="true" ;;
     a3 ) ENABLE_A3="true" ;;
     a5 ) ENABLE_A5="true" ;;
     a7 ) ENABLE_A7="true" ;;
@@ -156,7 +170,7 @@ for sw in "${SWITCHES[@]}"; do
 done
 
 if [[ ${#UNKNOWN[@]} -gt 0 ]]; then
-  echo "[error] Unsupported switches (a3/a5/a7/a9/b1/b2/b3/b5/b7/b9/c5/c7/c9/d5/d7/d9/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
+  echo "[error] Unsupported switches (hmc7/pdd9/a3/a5/a7/a9/b1/b2/b3/b5/b7/b9/c5/c7/c9/d5/d7/d9/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
   exit 4
 fi
 
