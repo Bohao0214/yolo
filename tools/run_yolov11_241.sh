@@ -11,11 +11,23 @@ BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 E241_SAFE_BATCH="${E241_SAFE_BATCH:-6}"
 E241_SAFE_WORKERS="${E241_SAFE_WORKERS:-4}"
+E241_VRAM_GUARD="${E241_VRAM_GUARD:-auto}"   # auto|on|off
+E241_GUARD_MAX_GB="${E241_GUARD_MAX_GB:-10}" # apply guard when total VRAM <= this value in auto mode
+CLEANUP_FILES=()
+
+cleanup_on_exit() {
+  local f
+  for f in "${CLEANUP_FILES[@]:-}"; do
+    [[ -n "${f}" && -f "${f}" ]] && rm -f "${f}" || true
+  done
+}
+
+trap cleanup_on_exit EXIT
 
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241.sh [base_config.yaml] [switches...]
+  bash tools/run_yolov11_241.sh [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [base_config.yaml] [switches...]
 
 Switches (implemented):
   hmc7  Alias of: a7 b7 c7 d7 (YOLO-HMC group)
@@ -41,6 +53,8 @@ Switches (implemented):
 
 Examples:
   bash tools/run_yolov11_241.sh
+  bash tools/run_yolov11_241.sh --vram-guard auto a9
+  bash tools/run_yolov11_241.sh --vram-guard off --safe-batch 12 --safe-workers 8 a9
   bash tools/run_yolov11_241.sh hmc7
   bash tools/run_yolov11_241.sh pdd9
   bash tools/run_yolov11_241.sh a3
@@ -73,12 +87,52 @@ Examples:
 Env:
   PYTHON_BIN=/path/to/python
   BASE_CONFIG=/path/to/base_config.yaml
+  E241_VRAM_GUARD=auto|on|off
+  E241_GUARD_MAX_GB=10
+  E241_SAFE_BATCH=6
+  E241_SAFE_WORKERS=4  # worker cap for non-low-VRAM path (avoid CPU/IO bottleneck on strong GPU machines)
 USAGE
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --vram-guard)
+      [[ $# -ge 2 ]] || { echo "[error] --vram-guard requires a value (auto|on|off)" >&2; exit 2; }
+      E241_VRAM_GUARD="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --guard-max-gb)
+      [[ $# -ge 2 ]] || { echo "[error] --guard-max-gb requires a value" >&2; exit 2; }
+      E241_GUARD_MAX_GB="$2"
+      shift 2
+      ;;
+    --safe-batch)
+      [[ $# -ge 2 ]] || { echo "[error] --safe-batch requires a value" >&2; exit 2; }
+      E241_SAFE_BATCH="$2"
+      shift 2
+      ;;
+    --safe-workers)
+      [[ $# -ge 2 ]] || { echo "[error] --safe-workers requires a value" >&2; exit 2; }
+      E241_SAFE_WORKERS="$2"
+      shift 2
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [[ "${E241_VRAM_GUARD}" != "auto" && "${E241_VRAM_GUARD}" != "on" && "${E241_VRAM_GUARD}" != "off" ]]; then
+  echo "[error] invalid --vram-guard='${E241_VRAM_GUARD}', expected auto|on|off" >&2
+  exit 2
 fi
 
 if [[ $# -gt 0 ]]; then
@@ -350,13 +404,23 @@ fi
 
 # Safety guard for enhance runs on limited VRAM:
 # baseline (all enhance241 flags false) stays untouched.
-export _E241_RUN_CFG="${CONFIG_TO_RUN}"
+# Use a runtime config copy so original yaml is never mutated by guard logic.
+RUNTIME_CONFIG="${CONFIG_TO_RUN}"
+if [[ -f "${CONFIG_TO_RUN}" ]]; then
+  RUNTIME_CONFIG="$(mktemp /tmp/e241_run_cfg.XXXXXX.yaml)"
+  cp "${CONFIG_TO_RUN}" "${RUNTIME_CONFIG}"
+  CLEANUP_FILES+=("${RUNTIME_CONFIG}")
+fi
+
+export _E241_RUN_CFG="${RUNTIME_CONFIG}"
 export _E241_ENABLE_D3="${ENABLE_D3}"
 export _E241_ENABLE_D5="${ENABLE_D5}"
 export _E241_ENABLE_D7="${ENABLE_D7}"
 export _E241_ENABLE_D9="${ENABLE_D9}"
 export _E241_SAFE_BATCH="${E241_SAFE_BATCH}"
 export _E241_SAFE_WORKERS="${E241_SAFE_WORKERS}"
+export _E241_VRAM_GUARD="${E241_VRAM_GUARD}"
+export _E241_GUARD_MAX_GB="${E241_GUARD_MAX_GB}"
 "${PYTHON_BIN}" - <<'PY'
 import os
 from pathlib import Path
@@ -370,6 +434,11 @@ enable_d7_arg = str(os.environ.get("_E241_ENABLE_D7", "false")).lower() == "true
 enable_d9_arg = str(os.environ.get("_E241_ENABLE_D9", "false")).lower() == "true"
 safe_batch = int(os.environ.get("_E241_SAFE_BATCH", "6"))
 safe_workers = int(os.environ.get("_E241_SAFE_WORKERS", "4"))
+vram_guard_mode = str(os.environ.get("_E241_VRAM_GUARD", "auto")).lower().strip()
+try:
+    guard_max_gb = float(os.environ.get("_E241_GUARD_MAX_GB", "10"))
+except Exception:
+    guard_max_gb = 10.0
 
 with cfg_path.open("r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f) or {}
@@ -393,15 +462,71 @@ enable_d7 = enable_d7_arg or bool(enh.get("d7", False))
 enable_d9 = enable_d9_arg or bool(enh.get("d9", False))
 changed = False
 
+
+def _detect_total_vram_gb(cfg_obj: dict) -> float:
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return -1.0
+    try:
+        if not torch.cuda.is_available():
+            return -1.0
+        ndev = int(torch.cuda.device_count())
+        if ndev <= 0:
+            return -1.0
+        dev_cfg = cfg_obj.get("device", None)
+        idxs = []
+        if dev_cfg is None:
+            idxs = list(range(ndev))
+        else:
+            s = str(dev_cfg).strip().lower()
+            if s in ("", "none", "-1", "cpu", "mps"):
+                return -1.0
+            if s == "cuda":
+                idxs = [0]
+            else:
+                for part in str(dev_cfg).split(","):
+                    part = part.strip()
+                    if part.isdigit():
+                        idxs.append(int(part))
+        valid = [i for i in idxs if 0 <= i < ndev]
+        if not valid:
+            valid = list(range(ndev))
+        if not valid:
+            return -1.0
+        total_bytes = max(int(torch.cuda.get_device_properties(i).total_memory) for i in valid)
+        return float(total_bytes) / (1024.0 ** 3)
+    except Exception:
+        return -1.0
+
+
+gpu_total_gb = _detect_total_vram_gb(cfg)
+if vram_guard_mode == "off":
+    apply_guard = False
+    guard_reason = "force_off"
+elif vram_guard_mode == "on":
+    apply_guard = True
+    guard_reason = "force_on"
+else:
+    # auto: if detection fails, keep command params (no clamp)
+    if gpu_total_gb < 0:
+        apply_guard = False
+        guard_reason = "auto_detect_failed_or_no_cuda"
+    else:
+        apply_guard = bool(gpu_total_gb <= guard_max_gb)
+        guard_reason = f"auto_detect_{gpu_total_gb:.1f}GB"
+
 try:
     batch = int(cfg.get("batch", safe_batch))
 except Exception:
     batch = safe_batch
-if batch >= 8:
+if apply_guard and batch >= 8:
     cfg["batch"] = int(safe_batch)
     changed = True
 
-if enable_d3 or enable_d5 or enable_d7 or enable_d9:
+# Worker cap is intended for non-low-VRAM paths, where strong GPU may
+# expose CPU/disk pipeline bottlenecks.
+if (not apply_guard):
     try:
         workers = int(cfg.get("workers", safe_workers))
     except Exception:
@@ -413,7 +538,13 @@ if enable_d3 or enable_d5 or enable_d7 or enable_d9:
 if changed:
     with cfg_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+
+print(
+    f"[guard] mode={vram_guard_mode} apply={apply_guard} reason={guard_reason} "
+    f"gpu_total_gb={gpu_total_gb if gpu_total_gb >= 0 else 'NA'} max_gb={guard_max_gb} "
+    f"safe_batch={safe_batch} safe_workers={safe_workers} changed={changed}"
+)
 PY
 
-echo "[run] config=${CONFIG_TO_RUN} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN}"
-"${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${CONFIG_TO_RUN}"
+echo "[run] config=${CONFIG_TO_RUN} runtime_config=${RUNTIME_CONFIG} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN} vram_guard=${E241_VRAM_GUARD}"
+"${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${RUNTIME_CONFIG}"

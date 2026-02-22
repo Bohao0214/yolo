@@ -11,6 +11,10 @@ FORCE_MODE="${FORCE_MODE:-train_test}"
 SEED_OVERRIDE="${SEED_OVERRIDE:-}"
 BATCH_OVERRIDE="${BATCH_OVERRIDE:-6}"
 D1_WORKERS_OVERRIDE="${D1_WORKERS_OVERRIDE:-4}"
+VRAM_GUARD_OVERRIDE="${VRAM_GUARD_OVERRIDE:-auto}" # auto|on|off
+GUARD_MAX_GB_OVERRIDE="${GUARD_MAX_GB_OVERRIDE:-10}"
+SAFE_BATCH_OVERRIDE="${SAFE_BATCH_OVERRIDE:-${E241_SAFE_BATCH:-6}}"
+SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
 PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
@@ -20,7 +24,7 @@ COMBOS_RAW="${COMBOS_RAW:-}"
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241_matrix.sh [base_config.yaml] [--epochs N] [--batch N] [--combos LIST] [--tag NAME] [--dry-run]
+  bash tools/run_yolov11_241_matrix.sh [base_config.yaml] [--epochs N] [--batch N] [--combos LIST] [--tag NAME] [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [--dry-run]
 
 Runs S2 quick A/B matrix with identical seed/data/epochs:
   baseline, a3, b3, d3, a3+b3, a3+d3, b3+d3, a3+b3+d3
@@ -46,12 +50,21 @@ Options:
                pdd9/abcd9 => a9+b9+c9+d9
                Supports aliases a3_b3 / a3_b3_d1 and raw '+' expressions
   --tag NAME   Matrix tag (used for temp config/log folders)
+  --vram-guard MODE
+               Pass-through to run_yolov11_241.sh: auto|on|off (default auto)
+  --guard-max-gb N
+               Pass-through to run_yolov11_241.sh auto mode threshold (default 10)
+  --safe-batch N
+               Pass-through safe fallback batch when guard applies (default 6)
+  --safe-workers N
+               Pass-through worker cap for non-low-VRAM path (default 4)
   --dry-run    Generate configs and print commands only (no training)
   -h, --help   Show help
 
 Env overrides:
   BASE_CONFIG, EPOCHS_OVERRIDE, COMBOS_RAW, FORCE_MODE, SEED_OVERRIDE, BATCH_OVERRIDE(default 6)
-  D1_WORKERS_OVERRIDE(default 4)
+  D1_WORKERS_OVERRIDE(default 4), VRAM_GUARD_OVERRIDE(auto|on|off), GUARD_MAX_GB_OVERRIDE(default 10)
+  SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4)
   TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN
 USAGE
 }
@@ -82,6 +95,26 @@ while [[ $# -gt 0 ]]; do
       MATRIX_TAG="$2"
       shift 2
       ;;
+    --vram-guard)
+      [[ $# -ge 2 ]] || { echo "[error] --vram-guard requires a value (auto|on|off)" >&2; exit 2; }
+      VRAM_GUARD_OVERRIDE="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --guard-max-gb)
+      [[ $# -ge 2 ]] || { echo "[error] --guard-max-gb requires a value" >&2; exit 2; }
+      GUARD_MAX_GB_OVERRIDE="$2"
+      shift 2
+      ;;
+    --safe-batch)
+      [[ $# -ge 2 ]] || { echo "[error] --safe-batch requires a value" >&2; exit 2; }
+      SAFE_BATCH_OVERRIDE="$2"
+      shift 2
+      ;;
+    --safe-workers)
+      [[ $# -ge 2 ]] || { echo "[error] --safe-workers requires a value" >&2; exit 2; }
+      SAFE_WORKERS_OVERRIDE="$2"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN="true"
       shift
@@ -100,6 +133,11 @@ done
 
 if [[ ! -f "${BASE_CONFIG}" ]]; then
   echo "[error] base config not found: ${BASE_CONFIG}" >&2
+  exit 2
+fi
+
+if [[ "${VRAM_GUARD_OVERRIDE}" != "auto" && "${VRAM_GUARD_OVERRIDE}" != "on" && "${VRAM_GUARD_OVERRIDE}" != "off" ]]; then
+  echo "[error] invalid --vram-guard='${VRAM_GUARD_OVERRIDE}', expected auto|on|off" >&2
   exit 2
 fi
 
@@ -332,6 +370,7 @@ SUMMARY_TSV="${LOG_ROOT}/summary.tsv"
 
 echo "[matrix] base_config=${BASE_CONFIG}"
 echo "[matrix] epochs=${EPOCHS_OVERRIDE} mode=${FORCE_MODE} seed=${SEED_OVERRIDE:-<keep>} batch=${BATCH_OVERRIDE:-<keep>}"
+echo "[matrix] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OVERRIDE} safe_batch=${SAFE_BATCH_OVERRIDE} safe_workers=${SAFE_WORKERS_OVERRIDE}"
 echo "[matrix] combos_raw=${COMBOS_RAW}"
 echo "[matrix] combos_resolved=${CASE_TAGS[*]}"
 echo "[matrix] tmp_cfg_dir=${TMP_CFG_DIR}"
@@ -354,7 +393,14 @@ for i in "${!CASE_TAGS[@]}"; do
   after_tmp="$(mktemp)"
   list_exp_dirs "${exp_root}" > "${before_tmp}"
 
-  cmd=(bash "${ROOT_DIR}/tools/run_yolov11_241.sh" "${cfg_path}")
+  cmd=(
+    bash "${ROOT_DIR}/tools/run_yolov11_241.sh"
+    --vram-guard "${VRAM_GUARD_OVERRIDE}"
+    --guard-max-gb "${GUARD_MAX_GB_OVERRIDE}"
+    --safe-batch "${SAFE_BATCH_OVERRIDE}"
+    --safe-workers "${SAFE_WORKERS_OVERRIDE}"
+    "${cfg_path}"
+  )
   echo "[matrix:${tag}] config=${cfg_path} switches=${switches:-baseline}"
   echo "[matrix:${tag}] cmd=${cmd[*]}"
 
@@ -422,61 +468,105 @@ column -s $'\t' -t "${SUMMARY_TSV}" || cat "${SUMMARY_TSV}"
 exit 0
 
 : <<'EXAMPLES'
- 
-
-# 默认矩阵（含新模块），10 epoch，默认 batch=6
+#
+# 0) 最小启动：默认组合（含 baseline/hmc7/pdd9 等），10 epoch，batch=6
+# 场景：先确认脚本可跑通。
 bash tools/run_yolov11_241_matrix.sh
 
-# 指定 epoch
+# 1) 只改训练轮数，不改其它（默认仍会走 guard=auto）
+# 场景：快速缩短或拉长实验。
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 12
 
-# 指定 batchsize（新增）
+# 2) 显式指定 batch
+# 场景：你想统一所有组合的 batch。
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 12 \
   --batch 8
 
-# 只跑你选的组合（+ 表示组合）
+# 3) 只跑指定组合（用 + 表示同一次实验里同时开多个模块）
+# 场景：小规模对比。
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 8 \
   --batch 6 \
   --combos baseline,a3+b3,d1
 
-# 组合支持下划线别名
+# 4) 组合同样支持下划线别名（与上条等价）
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 8 \
   --combos baseline,a3_b3,a3_b3_d1
 
-# 指定基础配置（例如走 defect.yaml 做公平 baseline 对比）
+# 5) 指定基础配置（例如用 defect.yaml 只跑纯 baseline）
+# 场景：做“增强框架 vs 原始流程”的公平对比。
 bash tools/run_yolov11_241_matrix.sh \
   configs/yolo11/defect.yaml \
   --epochs 100 \
   --batch 10 \
   --combos baseline
 
-# 只跑新模块单开
+# 6) 跑新模块单开全集（A/B/C/D 各模块单独验证）
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 10 \
   --batch 6 \
   --combos a5,a7,a9,b5,b7,b9,c5,c7,c9,d5,d7,d9
 
-# 直接跑论文分组组合
+# 7) 跑论文分组组合
+# hmc7 = a7+b7+c7+d7
+# pdd9 = a9+b9+c9+d9
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 10 \
   --batch 6 \
   --combos baseline,hmc7,pdd9
 
-# 干跑检查（不训练，只生成配置+命令）
+# 8) 干跑检查（不训练，只生成配置和最终执行命令）
+# 场景：先确认解析结果、路径、开关是否正确。
 bash tools/run_yolov11_241_matrix.sh \
   --epochs 10 \
   --batch 6 \
   --combos baseline,b5+c5 \
   --dry-run
 
-# 自定义标签，方便区分日志目录
+# 9) 8GB 机器推荐：自动显存保护（auto）
+# 规则：检测到显存 <= guard-max-gb 时，回落到 safe-batch；
+#       safe-workers 主要用于非低显存路径（防 CPU/IO 瓶颈）。
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 150 \
+  --batch 12 \
+  --vram-guard auto \
+  --guard-max-gb 10 \
+  --safe-batch 6 \
+  --safe-workers 4 \
+  --combos a5,a7,a9,b5,b7,b9,c5,c7,c9,d5,d7,d9
+
+# 10) 24GB 机器推荐：关闭显存保护（off）
+# 规则：严格尊重 --batch/配置里的 workers，不做自动降级。
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 150 \
+  --batch 12 \
+  --vram-guard off \
+  --combos a5,a7,a9,b5,b7,b9,c5,c7,c9,d5,d7,d9
+
+# 11) 强制保护（on）
+# 场景：即使是大显存机，也希望固定使用安全参数复现实验。
+bash tools/run_yolov11_241_matrix.sh \
+  --epochs 50 \
+  --batch 16 \
+  --vram-guard on \
+  --safe-batch 6 \
+  --safe-workers 4 \
+  --combos baseline,hmc7,pdd9
+
+# 12) 自定义 tag（方便区分日志目录和 summary）
 bash tools/run_yolov11_241_matrix.sh \
   --tag ablation_$(date +%m%d_%H%M) \
   --epochs 20 \
   --batch 6 \
   --combos baseline,a3,b3,d3,a3+b3+d3
+
+# 13) 环境变量等价写法（适合脚本/CI）
+VRAM_GUARD_OVERRIDE=off \
+BATCH_OVERRIDE=12 \
+EPOCHS_OVERRIDE=120 \
+COMBOS_RAW=baseline,hmc7,pdd9 \
+bash tools/run_yolov11_241_matrix.sh
 EXAMPLES
