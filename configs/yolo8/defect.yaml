@@ -12,9 +12,9 @@ conf: 0.20
 mode: train_test
 weights: models/defect/exp_2601221534/best/best.pt
 patience: 0        # 0 disables early stopping; higher values stop later if no val improvement
-lr0: 0.02          # higher -> faster start but more risk of instability; lower -> safer, slower
+lr0: 0.0133333333          # higher -> faster start but more risk of instability; lower -> safer, slower
 lrf: 0.2           # higher -> higher final LR; lower -> more conservative late training
-warmup_epochs: 0.0 # longer warmup can stabilize early training; 0 removes warmup
+warmup_epochs: 2 # longer warmup can stabilize early training; 0 removes warmup
 save_train_pic: false
 save_val_pic: true
 save_test_pic: true

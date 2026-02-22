@@ -18,9 +18,9 @@ match_iou: 0.3  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值
 mode: test # fine/test/train_test
 weights: '/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__b3__d1/exp_2602111914/train/weights/best.pt'
 patience: 0
-lr0: 0.012
+lr0: 0.008
 lrf: 0.12
-warmup_epochs: 0.0
+warmup_epochs: 2
 save_train_pic: false
 save_val_pic: true
 save_test_pic: true
