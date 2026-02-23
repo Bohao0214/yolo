@@ -31,6 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import argparse
 import atexit
+import csv
 import datetime as dt
 import gc
 import hashlib
@@ -118,6 +119,120 @@ def append_audit(md_path: Path, dict_or_text: Any) -> None:
         payload = json.dumps(dict_or_text, ensure_ascii=False, indent=2)
     with open(md_path, "a", encoding="utf-8") as f:
         f.write(payload)
+
+
+def _write_hparam_plan(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None:
+    plan_path = exp_dir / "train" / "hparam_plan.md"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"# HParam Plan ({dt.datetime.now().isoformat(timespec='seconds')})",
+        "",
+        "## Baseline Anchor",
+        "- epochs: 100",
+        "- batch: 10",
+        "- patience: 0",
+        "- lr0: 0.008",
+        "- lrf: 0.12",
+        "- warmup_epochs: 2",
+        "",
+        "## This Run",
+        f"- config_path: `{cfg_path}`",
+        f"- epochs: `{cfg.get('epochs', 100)}`",
+        f"- batch: `{cfg.get('batch', 10)}`",
+        f"- workers: `{cfg.get('workers', 8)}`",
+        f"- patience: `{cfg.get('patience', 0)}`",
+        f"- lr0: `{cfg.get('lr0', 0.008)}`",
+        f"- lrf: `{cfg.get('lrf', 0.12)}`",
+        f"- warmup_epochs: `{cfg.get('warmup_epochs', 2)}`",
+        f"- seed: `{cfg.get('seed', 0)}`",
+        "",
+        "## Rule",
+        "- Keep `total_optimizer_steps` comparable across runs when comparing module deltas.",
+    ]
+    plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _save_roc_curve_csv(
+    metrics_dir: Path,
+    tag: str,
+    thresholds: np.ndarray,
+    recall: np.ndarray,
+    precision: np.ndarray,
+    fpr: np.ndarray,
+) -> None:
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    out_path = metrics_dir / "roc_curve.csv"
+    with out_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["tag", "threshold", "recall", "precision", "fpr"])
+        for thr, rec, pre, fp in zip(thresholds.tolist(), recall.tolist(), precision.tolist(), fpr.tolist()):
+            writer.writerow([str(tag), float(thr), float(rec), float(pre), float(fp)])
+
+
+def _save_roc_keypoints_md(
+    metrics_dir: Path,
+    tag: str,
+    thresholds: np.ndarray,
+    recall: np.ndarray,
+    fpr: np.ndarray,
+    targets: Tuple[float, ...] = (0.05, 0.10, 0.30),
+) -> None:
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    lines = [f"# ROC Keypoints ({tag})", "", "| target_fpr | nearest_fpr | recall | threshold |", "|---:|---:|---:|---:|"]
+    if fpr.size == 0:
+        for t in targets:
+            lines.append(f"| {t:.2f} | 0.0000 | 0.0000 | 0.0000 |")
+    else:
+        for t in targets:
+            idx = int(np.argmin(np.abs(fpr - float(t))))
+            lines.append(
+                f"| {t:.2f} | {float(fpr[idx]):.4f} | {float(recall[idx]):.4f} | {float(thresholds[idx]):.4f} |"
+            )
+    (metrics_dir / "roc_keypoints.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_result_summary(
+    exp_dir: Path,
+    *,
+    mode: str,
+    eval_weights: str,
+    auroc: float,
+    ap: float,
+    labels_count: int,
+    sweep_cfg: Dict[str, Any],
+    best_last_compare: Optional[Dict[str, Any]] = None,
+) -> None:
+    out = exp_dir / "train" / "result_summary.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"# Result Summary ({dt.datetime.now().isoformat(timespec='seconds')})",
+        "",
+        f"- mode: `{mode}`",
+        f"- eval_weights: `{eval_weights}`",
+        f"- image_auroc: `{auroc:.6f}`",
+        f"- image_ap: `{ap:.6f}`",
+        f"- samples: `{labels_count}`",
+        "- key_files:",
+        f"  - `{exp_dir / 'metrics' / 'roc_curve.csv'}`",
+        f"  - `{exp_dir / 'metrics' / 'roc_keypoints.md'}`",
+        f"  - `{exp_dir / 'train' / 'enhance241_audit.md'}`",
+        "",
+        "## Sweep Config",
+        "```json",
+        json.dumps(sweep_cfg, ensure_ascii=False, indent=2),
+        "```",
+    ]
+    if best_last_compare is not None:
+        lines.extend(
+            [
+                "",
+                "## Best vs Last",
+                "```json",
+                json.dumps(best_last_compare, ensure_ascii=False, indent=2),
+                "```",
+            ]
+        )
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _collect_env_probe() -> Dict[str, Any]:
@@ -880,6 +995,8 @@ def main() -> None:
     else:
         exp_dir = exp_root / f"exp_{timestamp}"
     exp_dir.mkdir(parents=True, exist_ok=True)
+    cfg["enhance241_exp_dir"] = str(exp_dir)
+    os.environ["ENHANCE241_EXP_DIR"] = str(exp_dir)
 
     data_yaml = Path(cfg.get("data", project_root / "configs" / "data" / "defect.yaml")).resolve()
     data_root_override = str(cfg.get("data_root", ""))
@@ -905,6 +1022,7 @@ def main() -> None:
         "file_hashes": _collect_file_hashes(project_root),
     }
     _register_enhance241_audit(exp_dir / "train" / "enhance241_audit.md", audit_state)
+    _write_hparam_plan(exp_dir, cfg, cfg_path)
 
     model_path = normalize_weight_ref(project_root, str(cfg.get("model", "yolo11n.pt")))
     weights_path = normalize_weight_ref(project_root, str(cfg.get("weights", "")))
@@ -1129,12 +1247,18 @@ def main() -> None:
             return np.array([], dtype=np.int32)
         return np.concatenate(labels_list, axis=0)
 
-    def _compute_scores_all(fn, sources: List[Path], *args: object) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_scores_all(
+        fn,
+        sources: List[Path],
+        *args: object,
+        model_obj: Optional[Any] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        active_model = model if model_obj is None else model_obj
         labels_all: List[np.ndarray] = []
         scores_all: List[np.ndarray] = []
         for src in sources:
             try:
-                lab, sc = fn(model, src, *args)
+                lab, sc = fn(active_model, src, *args)
             except RuntimeError as exc:
                 if "out of memory" not in str(exc).lower():
                     raise
@@ -1148,9 +1272,9 @@ def main() -> None:
                 gc.collect()
                 # CPU fallback for this shard
                 if fn is compute_image_scores:
-                    lab, sc = fn(model, src, *args[:1], 1, "cpu", *args[3:])
+                    lab, sc = fn(active_model, src, *args[:1], 1, "cpu", *args[3:])
                 else:
-                    lab, sc = fn(model, src, *args[:2], 1, "cpu", *args[4:])
+                    lab, sc = fn(active_model, src, *args[:2], 1, "cpu", *args[4:])
             labels_all.append(lab)
             scores_all.append(sc)
         return _concat_labels(labels_all), _concat_scores(scores_all)
@@ -1214,6 +1338,10 @@ def main() -> None:
 
     # 2) Combined metrics/curves/tables (val+test merged, and multiple roots merged)
     all_sources = val_sources + test_sources
+    run_auroc = 0.0
+    run_ap = 0.0
+    run_label_count = 0
+    run_best_last_compare: Optional[Dict[str, Any]] = None
     if all_sources:
         metrics_dir.mkdir(parents=True, exist_ok=True)
         tag = "eval"
@@ -1237,14 +1365,114 @@ def main() -> None:
         labels_base, scores_base = _compute_scores_all(
             compute_image_scores, all_sources, metric_conf, eval_batch, eval_device, nms_iou, max_det
         )
+        run_label_count = int(labels_base.size)
         if labels_base.size:
             recall, precision, fpr = compute_threshold_metrics(labels_base, scores_base, curve_vals)
             auroc = compute_auc(fpr, recall)
             ap = compute_ap(recall, precision)
+            run_auroc = float(auroc)
+            run_ap = float(ap)
             save_metric_plots(metrics_dir, tag, curve_vals, recall, precision, fpr, plot_cfg=plot_cfg)
+            _save_roc_curve_csv(metrics_dir, tag, curve_vals, recall, precision, fpr)
+            _save_roc_keypoints_md(metrics_dir, tag, curve_vals, recall, fpr)
             with open(metrics_dir / f"{tag}_summary.txt", "w", encoding="utf-8") as f:
                 f.write(f"image_auroc: {auroc:.6f}\n")
                 f.write(f"image_ap: {ap:.6f}\n")
+        else:
+            _save_roc_curve_csv(
+                metrics_dir,
+                tag,
+                np.array([], dtype=np.float32),
+                np.array([], dtype=np.float32),
+                np.array([], dtype=np.float32),
+                np.array([], dtype=np.float32),
+            )
+            _save_roc_keypoints_md(
+                metrics_dir,
+                tag,
+                np.array([0.0], dtype=np.float32),
+                np.array([0.0], dtype=np.float32),
+                np.array([0.0], dtype=np.float32),
+            )
+
+        if mode in {"train_test", "finetune_test"}:
+            best_w = exp_dir / "train" / "weights" / "best.pt"
+            last_w = exp_dir / "train" / "weights" / "last.pt"
+            eval_w = Path(str(audit_state.get("eval_weights", ""))) if str(audit_state.get("eval_weights", "")).strip() else None
+            if best_w.exists() and last_w.exists() and eval_w is not None:
+                try:
+                    best_is_eval = eval_w.resolve() == best_w.resolve()
+                except Exception:
+                    best_is_eval = False
+                if best_is_eval:
+                    model_last = None
+                    try:
+                        model_last = YOLO(str(last_w))
+                        model_last = _apply_enhance241_patches(model_last, cfg, stage="eval_last", audit_state=audit_state)
+                        labels_last, scores_last = _compute_scores_all(
+                            compute_image_scores,
+                            all_sources,
+                            metric_conf,
+                            eval_batch,
+                            eval_device,
+                            nms_iou,
+                            max_det,
+                            model_obj=model_last,
+                        )
+                        if labels_last.size:
+                            rec_last, pre_last, fpr_last = compute_threshold_metrics(labels_last, scores_last, curve_vals)
+                            auroc_last = compute_auc(fpr_last, rec_last)
+                            ap_last = compute_ap(rec_last, pre_last)
+
+                            def _kp(fprs: np.ndarray, recs: np.ndarray, target: float) -> Dict[str, float]:
+                                idx = int(np.argmin(np.abs(fprs - float(target))))
+                                return {
+                                    "target_fpr": float(target),
+                                    "nearest_fpr": float(fprs[idx]),
+                                    "recall": float(recs[idx]),
+                                    "threshold": float(curve_vals[idx]),
+                                }
+
+                            run_best_last_compare = {
+                                "best_weight": str(best_w),
+                                "last_weight": str(last_w),
+                                "best": {
+                                    "auroc": float(run_auroc),
+                                    "ap": float(run_ap),
+                                },
+                                "last": {
+                                    "auroc": float(auroc_last),
+                                    "ap": float(ap_last),
+                                },
+                                "delta_last_minus_best": {
+                                    "auroc": float(auroc_last - run_auroc),
+                                    "ap": float(ap_last - run_ap),
+                                },
+                                "best_keypoints": [_kp(fpr, recall, t) for t in (0.05, 0.10, 0.30)] if labels_base.size else [],
+                                "last_keypoints": [_kp(fpr_last, rec_last, t) for t in (0.05, 0.10, 0.30)],
+                            }
+                        else:
+                            run_best_last_compare = {
+                                "best_weight": str(best_w),
+                                "last_weight": str(last_w),
+                                "note": "last weight exists but produced empty score set",
+                            }
+                    except Exception as exc:
+                        run_best_last_compare = {"error": f"best_last_compare_failed: {exc}"}
+                    finally:
+                        try:
+                            if model_last is not None:
+                                del model_last
+                        except Exception:
+                            pass
+                        try:
+                            import torch
+
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        except Exception:
+                            pass
+                        gc.collect()
 
         multi_rows: List[dict] = []
         curve_recall: List[Tuple[str, np.ndarray]] = []
@@ -1570,6 +1798,20 @@ def main() -> None:
             },
         }
     audit_state["a4_diag"] = a4_diag
+
+    try:
+        _write_result_summary(
+            exp_dir,
+            mode=str(mode),
+            eval_weights=str(audit_state.get("eval_weights", "")),
+            auroc=float(run_auroc),
+            ap=float(run_ap),
+            labels_count=int(run_label_count),
+            sweep_cfg=dict(audit_state.get("threshold_sweep", {})),
+            best_last_compare=run_best_last_compare,
+        )
+    except Exception:
+        pass
 
     # Keep weights only under exp_dir/train/weights for baseline workflow.
 

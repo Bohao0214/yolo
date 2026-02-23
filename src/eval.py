@@ -1,12 +1,15 @@
 from __future__ import annotations
-
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import cv2
-import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
+
+# Force non-interactive backend for headless training/eval workers.
+matplotlib.use("Agg", force=True)
+import matplotlib.pyplot as plt
 
 
 def list_source_images(source: Path) -> List[Path]:
