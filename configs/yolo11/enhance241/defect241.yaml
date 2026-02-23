@@ -29,7 +29,7 @@ data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
 epochs: 150
 imgsz: 640
-batch: 12  # 约束：batchsize < 8，显存 ≤24GB
+batch: 6  # 约束：batchsize < 8，显存 ≤24GB
 device: ""
 
 workers: 4
