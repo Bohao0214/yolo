@@ -369,6 +369,91 @@ def update_args_yaml(exp_dir: Path, cfg: Dict[str, Any], cfg_path: Path) -> None
         yaml.safe_dump(merged, f, sort_keys=False, allow_unicode=True)
 
 
+def _safe_float(v: Any) -> Optional[float]:
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+
+def append_best_summary_to_results_csv(
+    exp_dir: Path,
+    *,
+    metric_key: str = "metrics/mAP50-95(B)",
+) -> Optional[int]:
+    """Append one BEST_SUMMARY row to train/results.csv.
+
+    The summary row records which epoch is selected as "best" by a metric proxy.
+    It keeps CSV format valid and is easy to inspect when reviewing experiments.
+    """
+
+    results_path = exp_dir / "train" / "results.csv"
+    if not results_path.exists():
+        return None
+
+    with open(results_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = [dict(r) for r in reader]
+    if not fieldnames or not rows:
+        return None
+
+    marker_col = "best_epoch_note"
+    # De-duplicate previously appended summary rows.
+    rows = [r for r in rows if not str(r.get(marker_col, "")).startswith("BEST_SUMMARY")]
+    if not rows:
+        return None
+
+    metric_candidates = [metric_key, "metrics/mAP50-95(B)", "metrics/mAP50(B)", "metrics/recall(B)"]
+    best_idx: Optional[int] = None
+    best_epoch: Optional[int] = None
+    best_metric_name: Optional[str] = None
+    best_metric_value = -float("inf")
+
+    for i, r in enumerate(rows):
+        epoch_val = _safe_float(r.get("epoch", ""))
+        if epoch_val is None:
+            continue
+        metric_name: Optional[str] = None
+        metric_val: Optional[float] = None
+        for k in metric_candidates:
+            v = _safe_float(r.get(k, ""))
+            if v is not None:
+                metric_name = k
+                metric_val = v
+                break
+        if metric_name is None or metric_val is None:
+            continue
+        if best_idx is None or metric_val > best_metric_value:
+            best_idx = i
+            best_metric_value = float(metric_val)
+            best_metric_name = metric_name
+            best_epoch = int(round(epoch_val))
+
+    if best_idx is None or best_epoch is None or best_metric_name is None:
+        return None
+
+    if marker_col not in fieldnames:
+        fieldnames.append(marker_col)
+    for r in rows:
+        r.setdefault(marker_col, "")
+
+    summary = {k: "" for k in fieldnames}
+    summary["epoch"] = str(best_epoch)
+    if "time" in fieldnames:
+        summary["time"] = rows[best_idx].get("time", "")
+    summary[best_metric_name] = rows[best_idx].get(best_metric_name, "")
+    summary[marker_col] = f"BEST_SUMMARY metric={best_metric_name}"
+    rows.append(summary)
+
+    with open(results_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+    return int(best_epoch)
+
+
 def build_data_yaml(
     data_yaml: Path,
     save_dir: Path,
@@ -1125,6 +1210,13 @@ def main() -> None:
         else:
             model.train(**train_kwargs)
         update_args_yaml(exp_dir, cfg, cfg_path)
+        best_metric_key = str(cfg.get("best_epoch_metric", "metrics/mAP50-95(B)"))
+        best_epoch_mark = append_best_summary_to_results_csv(exp_dir, metric_key=best_metric_key)
+        if best_epoch_mark is not None:
+            print(
+                f"[best_marker] results.csv appended BEST_SUMMARY epoch={best_epoch_mark} "
+                f"(metric={best_metric_key})"
+            )
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
     if mode in {"train_test", "finetune_test"}:
