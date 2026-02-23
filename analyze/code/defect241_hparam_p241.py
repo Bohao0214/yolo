@@ -1208,32 +1208,34 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # 用法说明（主脚本）:
-    #
-    # 1) 先只看实验计划（不训练）:
-    #    /home/ubuntu/anaconda3/envs/yolo11/bin/python \
-    #      /home/ubuntu/hpproject/yolo/analyze/code/defect241_hparam_p241.py \
-    #      --dry_run --variants baseline a3c5 --steps 0 1 2 --repeats 1
-    #
-    # 2) 按 Step0/1/2 执行训练+分析（baseline 与 a3+c5）:
-    #    /home/ubuntu/anaconda3/envs/yolo11/bin/python \
-    #      /home/ubuntu/hpproject/yolo/analyze/code/defect241_hparam_p241.py \
-    #      --execute --variants baseline a3c5 --steps 0 1 2 --repeats 1 \
-    #      --run_name_prefix p241_v1
-    #
-    # 3) 仅分析已有实验（按 run_name_prefix 回收历史 exp_*）:
-    #    /home/ubuntu/anaconda3/envs/yolo11/bin/python \
-    #      /home/ubuntu/hpproject/yolo/analyze/code/defect241_hparam_p241.py \
-    #      --analyze_only --variants baseline a3c5 --steps 0 1 2 \
-    #      --run_name_prefix p241_v1
-    #
-    # 关键可调参数:
-    # - 数据/配置: --baseline_config --enhanced_base_config --out_root
-    # - 实验结构: --variants --steps --repeats --run_name_prefix
-    # - 训练超参: --epochs_step0 --epochs_step1 --epochs_step2 --patience
-    #           --warmup_epochs --lr_ref --lrf --seed_step0/1/2
-    # - 评估口径: --conf_op --match_iou --nms_iou --max_det
-    #           --metric_conf --eval_batch --eval_device
-    # - KPI 定义: --kpi_fpr_cap --small_thr --kpi_noise_eps
-    # - 显存保护: --vram_guard --guard_max_gb --safe_batch --safe_workers
+    """""
+    用法说明（主脚本）:
+    
+    1) 先只看实验计划（不训练）:
+       /home/ubuntu/anaconda3/envs/yolo11/bin/python \
+         /home/ubuntu/hpproject/yolo/analyze/code/defect241_hparam_p241.py \
+         --dry_run --variants baseline a3c5 --steps 0 1 2 --repeats 1
+    
+    2) 按 Step0/1/2 执行训练+分析（baseline 与 a3+c5）:
+       /home/ubuntu/anaconda3/envs/yolo11/bin/python \
+         /home/ubuntu/hpproject/yolo/analyze/code/defect241_hparam_p241.py \
+         --execute --variants baseline a3c5 --steps 0 1 2 --repeats 1 \
+         --run_name_prefix p241_v1
+    
+    3) 仅分析已有实验（按 run_name_prefix 回收历史 exp_*）:
+       /home/ubuntu/anaconda3/envs/yolo11/bin/python \
+         /home/ubuntu/hpproject/yolo/analyze/code/defect241_hparam_p241.py \
+         --analyze_only --variants baseline a3c5 --steps 0 1 2 \
+         --run_name_prefix p241_v1
+    
+    关键可调参数:
+    - 数据/配置: --baseline_config --enhanced_base_config --out_root
+    - 实验结构: --variants --steps --repeats --run_name_prefix
+    - 训练超参: --epochs_step0 --epochs_step1 --epochs_step2 --patience
+              --warmup_epochs --lr_ref --lrf --seed_step0/1/2
+    - 评估口径: --conf_op --match_iou --nms_iou --max_det
+              --metric_conf --eval_batch --eval_device
+    - KPI 定义: --kpi_fpr_cap --small_thr --kpi_noise_eps
+    - 显存保护: --vram_guard --guard_max_gb --safe_batch --safe_workers
+    """""
     main()
