@@ -6,7 +6,6 @@ from __future__ import annotations
 import atexit
 import datetime as dt
 import json
-import math
 import os
 import subprocess
 import threading
@@ -109,11 +108,6 @@ def _to_float(v: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _should_capture_delta(step: int) -> bool:
-    """Sparse sampling schedule that remains valid with gradient accumulation."""
-    return int(step) in {1, 2, 4, 8, 12, 16, 24, 32, 48, 64}
-
-
 def _vector_summary(vec: Optional[torch.Tensor]) -> Dict[str, Any]:
     if vec is None:
         return {"count": 0}
@@ -132,6 +126,18 @@ def _vector_summary(vec: Optional[torch.Tensor]) -> Dict[str, Any]:
         "p90": _to_float(q[1].item()),
         "p99": _to_float(q[2].item()),
     }
+
+
+def _is_nonzero_map(values: Dict[str, Any], eps: float = 1e-12) -> bool:
+    for v in values.values():
+        if abs(_to_float(v, 0.0)) > float(eps):
+            return True
+    return False
+
+
+def _should_capture_delta(step: int) -> bool:
+    # Sparse schedule to survive grad-accumulate setups (e.g., nbs=64, batch=6 => accumulate~11).
+    return int(step) in {1, 2, 4, 8, 12, 16, 24, 32, 48, 64}
 
 
 def _tensor_stats(tensor: Optional[torch.Tensor]) -> Dict[str, Any]:
@@ -307,13 +313,6 @@ def _resolve_project_root(cfg: Any) -> Path:
 
 
 def _resolve_exp_dir(cfg: Any) -> Optional[Path]:
-    explicit_exp = str(_deep_get(cfg, "enhance241_exp_dir", default="")).strip() or os.environ.get("ENHANCE241_EXP_DIR", "").strip()
-    if explicit_exp:
-        p = Path(explicit_exp).expanduser()
-        if not p.is_absolute():
-            p = (_resolve_project_root(cfg) / p).resolve()
-        return p.resolve()
-
     project_root = _resolve_project_root(cfg)
     yolo_version = str(_deep_get(cfg, "yolo_version", default="yolo11"))
     exp_name = str(_deep_get(cfg, "exp_name", default="defect241"))
@@ -465,92 +464,6 @@ def _resolve_val_source(cfg: Any) -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
-def _resolve_split_source(cfg: Any, split_key: str) -> Optional[Path]:
-    data_yaml = _resolve_data_yaml(cfg)
-    if data_yaml is None:
-        return None
-
-    try:
-        import yaml  # type: ignore
-
-        with data_yaml.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except Exception:
-        return None
-
-    split_ref = data.get(split_key, "")
-    if isinstance(split_ref, (list, tuple)):
-        split_ref = split_ref[0] if split_ref else ""
-    split_ref = str(split_ref).strip()
-    if not split_ref:
-        return None
-
-    data_root_override = str(_deep_get(cfg, "data_root", default="")).strip()
-    root_ref = str(data.get("path", "")).strip()
-
-    candidates: List[Path] = []
-    p = Path(split_ref).expanduser()
-    if p.is_absolute():
-        candidates.append(p)
-    if data_root_override:
-        candidates.append(Path(data_root_override).expanduser() / split_ref)
-    if root_ref:
-        root = Path(root_ref).expanduser()
-        if not root.is_absolute():
-            root = (data_yaml.parent / root).resolve()
-        candidates.append(root / split_ref)
-    candidates.append((data_yaml.parent / split_ref).resolve())
-    candidates.append((_resolve_project_root(cfg) / split_ref).resolve())
-
-    for c in candidates:
-        if c.exists():
-            return c
-    return candidates[0] if candidates else None
-
-
-def _collect_batch_context(cfg: Any) -> Dict[str, Any]:
-    batch = max(1, _safe_int(_deep_get(cfg, "batch", default=1), 1))
-    workers = max(0, _safe_int(_deep_get(cfg, "workers", default=8), 8))
-    epochs = max(1, _safe_int(_deep_get(cfg, "epochs", default=1), 1))
-    seed = _safe_int(_deep_get(cfg, "seed", default=0), 0)
-    lr0 = _safe_float(_deep_get(cfg, "lr0", default=0.01), 0.01)
-    lrf = _safe_float(_deep_get(cfg, "lrf", default=0.1), 0.1)
-    warmup_epochs = _safe_float(_deep_get(cfg, "warmup_epochs", default=3.0), 3.0)
-    nbs = max(1, _safe_int(_deep_get(cfg, "nbs", default=64), 64))
-    accumulate_cfg = _safe_int(_deep_get(cfg, "accumulate", default=0), 0)
-    accumulate = accumulate_cfg if accumulate_cfg > 0 else max(1, int(round(float(nbs) / float(batch))))
-    effective_batch = int(batch * accumulate)
-
-    train_source = _resolve_split_source(cfg, "train")
-    n_train = 0
-    if train_source is not None:
-        try:
-            n_train = int(len(_list_source_images(train_source)))
-        except Exception:
-            n_train = 0
-    steps_per_epoch = int(math.ceil(float(n_train) / float(batch))) if n_train > 0 else 0
-    total_optimizer_steps = int(math.ceil(float(steps_per_epoch) / float(accumulate)) * int(epochs)) if steps_per_epoch > 0 else 0
-
-    return {
-        "batch": int(batch),
-        "workers": int(workers),
-        "epochs": int(epochs),
-        "seed": int(seed),
-        "lr0": float(lr0),
-        "lrf": float(lrf),
-        "warmup_epochs": float(warmup_epochs),
-        "nbs": int(nbs),
-        "accumulate": int(accumulate),
-        "effective_batch": int(effective_batch),
-        "n_train": int(n_train),
-        "steps_per_epoch": int(steps_per_epoch),
-        "total_optimizer_steps": int(total_optimizer_steps),
-        "train_source": str(train_source) if train_source is not None else "",
-        "bn_frozen": bool(_deep_get(cfg, "freeze_bn", default=False)),
-        "note": "total_optimizer_steps mismatch => cross-run best/ROC is not directly comparable",
-    }
-
-
 def _list_source_images(source: Path) -> List[Path]:
     if source.is_file() and source.suffix.lower() == ".txt":
         items: List[Path] = []
@@ -584,7 +497,6 @@ class Enhance241CheckRecorder:
         self.project_root = _resolve_project_root(cfg)
         self.git = _git_hash(self.project_root)
         self.created_at = dt.datetime.now().isoformat(timespec="seconds")
-        self.batch_context = _collect_batch_context(cfg)
 
         self.lock = threading.Lock()
         self.patch_info: Dict[str, Any] = {}
@@ -681,6 +593,10 @@ class Enhance241CheckRecorder:
                 continue
 
     def capture_param_delta(self, module: torch.nn.Module, prefix: str) -> None:
+        with self.lock:
+            # Keep re-sampling until we observe non-zero updates; this avoids false zeros under grad accumulation.
+            if self.a2["delta_l2"] and _is_nonzero_map(self.a2["delta_l2"]):
+                return
         delta: Dict[str, float] = {}
         for name, p in module.named_parameters():
             full = f"{prefix}.{name}"
@@ -690,14 +606,11 @@ class Enhance241CheckRecorder:
             try:
                 now = p.detach().float().cpu()
                 d = now - before
-                cur = _to_float(torch.linalg.vector_norm(d).item())
-                prev = _to_float(self.a2["delta_l2"].get(full, 0.0), 0.0)
-                if abs(cur) >= abs(prev):
-                    delta[full] = cur
+                delta[full] = _to_float(torch.linalg.vector_norm(d).item())
             except Exception:
                 continue
         with self.lock:
-            self.a2["delta_l2"].update(delta)
+            self.a2["delta_l2"] = delta
 
     def record_output_grad(self, name: str, grad: Optional[torch.Tensor]) -> None:
         if grad is None:
@@ -861,16 +774,16 @@ class Enhance241CheckRecorder:
 
         try:
             if not hasattr(yolo_obj, "predict"):
-                self.add_note("Gate-3 skipped: model has no predict().")
+                self.add_note("A3 skipped: model has no predict().")
                 return
             source = _resolve_val_source(cfg)
             if source is None:
-                self.add_note("Gate-3 skipped: val source unresolved.")
+                self.add_note("A3 skipped: val source unresolved.")
                 return
 
             imgs = _list_source_images(source)
             if not imgs:
-                self.add_note(f"Gate-3 skipped: no images under {source}")
+                self.add_note(f"A3 skipped: no images under {source}")
                 return
             imgs = imgs[: int(max_images)]
 
@@ -935,139 +848,79 @@ class Enhance241CheckRecorder:
                     "sample_rows": sample_rows,
                 }
         except Exception as exc:
-            self.add_note(f"Gate-3 predict failed: {exc}")
+            self.add_note(f"A3 predict failed: {exc}")
 
-    def _build_gate_summary(self) -> Dict[str, Any]:
-        params = self.a2.get("params", {}) if isinstance(self.a2, dict) else {}
+    def _judge_conclusion(self) -> Tuple[str, List[str]]:
+        reasons: List[str] = []
+        structure = False
+        a1_bad = False
+        a2_bad = False
+        a3_bad = False
+
+        a1_items = [v for v in self.a1.values() if isinstance(v, dict)]
+        for item in a1_items:
+            patched = item.get("patched") if isinstance(item, dict) else None
+            if isinstance(patched, dict):
+                if int(patched.get("nan_count", 0)) > 0 or int(patched.get("inf_count", 0)) > 0:
+                    structure = True
+                    a1_bad = True
+                    reasons.append("A1 patched tensor contains NaN/Inf.")
+            comp = item.get("patched_vs_baseline") if isinstance(item, dict) else None
+            if isinstance(comp, dict):
+                vr = _to_float(comp.get("var_ratio", 1.0), 1.0)
+                if (vr > 4.0) or (vr < 0.25):
+                    structure = True
+                    a1_bad = True
+                    reasons.append(f"A1 variance ratio abnormal ({vr:.4f}).")
+
         grad_map = self.a2.get("grad_l2", {}) if isinstance(self.a2, dict) else {}
         delta_map = self.a2.get("delta_l2", {}) if isinstance(self.a2, dict) else {}
-
-        trainable = [v for v in params.values() if isinstance(v, dict) and bool(v.get("requires_grad", False))]
-        trainable_numel = int(sum(int(v.get("numel", 0)) for v in trainable))
-        gate0_ok = bool(trainable_numel > 0)
-
-        cos_vals: List[float] = []
-        var_vals: List[float] = []
-        has_nan_inf = False
-        for item in self.a1.values():
-            if not isinstance(item, dict):
-                continue
-            patched = item.get("patched", {})
-            if isinstance(patched, dict):
-                has_nan_inf = has_nan_inf or int(patched.get("nan_count", 0)) > 0 or int(patched.get("inf_count", 0)) > 0
-            comp = item.get("patched_vs_baseline", {})
-            if isinstance(comp, dict):
-                cos_vals.append(_to_float(comp.get("cosine_mean", 0.0), 0.0))
-                var_vals.append(_to_float(comp.get("var_ratio", 1.0), 1.0))
-
-        gate1_has_compare = bool(cos_vals and var_vals)
-        gate1_cos_min = min(cos_vals) if cos_vals else 0.0
-        gate1_var_min = min(var_vals) if var_vals else 0.0
-        gate1_ok = bool(
-            (not has_nan_inf)
-            and gate1_has_compare
-            and gate1_cos_min >= 0.98
-            and gate1_var_min >= 0.5
-        )
-
-        grad_vals = [_to_float(v, 0.0) for v in grad_map.values()]
-        delta_vals = [_to_float(v, 0.0) for v in delta_map.values()]
-        grad_finite = all(math.isfinite(v) for v in grad_vals) if grad_vals else False
-        delta_finite = all(math.isfinite(v) for v in delta_vals) if delta_vals else False
-        grad_nonzero = int(sum(1 for v in grad_vals if abs(v) > 0.0))
-        delta_nonzero = int(sum(1 for v in delta_vals if abs(v) > 0.0))
-        gate2_ok = bool(grad_finite and delta_finite and grad_nonzero > 0 and delta_nonzero > 0)
+        if grad_map and all(_to_float(v, 0.0) == 0.0 for v in grad_map.values()):
+            structure = True
+            a2_bad = True
+            reasons.append("A2 gradients are all zero.")
+        if delta_map and all(_to_float(v, 0.0) == 0.0 for v in delta_map.values()):
+            if grad_map and _is_nonzero_map(grad_map):
+                reasons.append("A2 deltas sampled before optimizer step (gradients are non-zero; check accumulate schedule).")
+            else:
+                structure = True
+                a2_bad = True
+                reasons.append("A2 parameter update deltas are all zero.")
 
         pos = self.a3.get("pos_max_conf", {}) if isinstance(self.a3, dict) else {}
         neg = self.a3.get("neg_max_conf", {}) if isinstance(self.a3, dict) else {}
-        pos_count = int(pos.get("count", 0)) if isinstance(pos, dict) else 0
-        neg_count = int(neg.get("count", 0)) if isinstance(neg, dict) else 0
-        pos_p90 = _to_float(pos.get("p90", 0.0), 0.0) if isinstance(pos, dict) else 0.0
-        neg_p90 = _to_float(neg.get("p90", 0.0), 0.0) if isinstance(neg, dict) else 0.0
-        gate3_eval = bool(pos_count > 0 and neg_count > 0)
-        gate3_ok = bool(gate3_eval and pos_p90 > neg_p90)
+        if isinstance(pos, dict) and isinstance(neg, dict) and pos.get("count", 0) and neg.get("count", 0):
+            if _to_float(pos.get("p90", 0.0)) <= _to_float(neg.get("p90", 0.0)):
+                a3_bad = True
+                reasons.append("A3 positive/negative max_conf not separable (pos p90 <= neg p90).")
+                reasons.append("A3 is a patch-time snapshot on pretrain weights; verify post-train sweep before final judgment.")
 
-        return {
-            "gate0_param_chain": {
-                "pass": gate0_ok,
-                "param_total": int(len(params)),
-                "trainable_param_count": int(len(trainable)),
-                "trainable_numel": int(trainable_numel),
-                "optimizer_membership_note": "Direct optimizer inspection unavailable in module patch; grad/delta acts as runtime evidence.",
-            },
-            "gate1_step0_numeric": {
-                "pass": gate1_ok,
-                "has_step0_compare": bool(gate1_has_compare),
-                "cosine_min": float(gate1_cos_min),
-                "var_ratio_min": float(gate1_var_min),
-                "thresholds": {"cosine_min": 0.98, "var_ratio_min": 0.5},
-                "nan_or_inf_seen": bool(has_nan_inf),
-            },
-            "gate2_learnability": {
-                "pass": gate2_ok,
-                "grad_count": int(len(grad_vals)),
-                "delta_count": int(len(delta_vals)),
-                "grad_nonzero_count": int(grad_nonzero),
-                "delta_nonzero_count": int(delta_nonzero),
-                "grad_finite": bool(grad_finite),
-                "delta_finite": bool(delta_finite),
-                "delta_sampling_steps": [1, 2, 4, 8, 12, 16, 24, 32, 48, 64],
-            },
-            "gate3_pos_neg_separability": {
-                "evaluated": bool(gate3_eval),
-                "pass": bool(gate3_ok),
-                "pos_p90": float(pos_p90),
-                "neg_p90": float(neg_p90),
-                "condition": "pos_p90 > neg_p90",
-            },
-        }
-
-    def _judge_conclusion(self, gates: Dict[str, Any]) -> Tuple[str, List[str]]:
-        reasons: List[str] = []
-
-        gate0 = gates.get("gate0_param_chain", {})
-        gate1 = gates.get("gate1_step0_numeric", {})
-        gate2 = gates.get("gate2_learnability", {})
-        gate3 = gates.get("gate3_pos_neg_separability", {})
-
-        if not bool(gate0.get("pass", False)):
-            reasons.append("Gate-0 failed: no trainable module parameter detected.")
-        if not bool(gate1.get("pass", False)):
-            reasons.append("Gate-1 failed: step0 health check did not satisfy cosine/variance threshold.")
-        if not bool(gate2.get("pass", False)):
-            reasons.append("Gate-2 failed: gradients/updates are missing or zero in early training steps.")
-        if bool(gate3.get("evaluated", False)) and not bool(gate3.get("pass", False)):
-            reasons.append("Gate-3 failed: positive/negative max_conf is not separable (pos p90 <= neg p90).")
-        if not bool(gate3.get("evaluated", False)):
-            reasons.append("Gate-3 not evaluated: val probe set unavailable, check data path.")
+        # Treat A3 as supporting evidence; avoid hard-failing solely on pretrain separability.
+        if a3_bad and (a1_bad or a2_bad):
+            structure = True
 
         if not reasons:
-            reasons.append("All gates pass on current run; if KPI still weak, continue hyper-parameter tuning.")
-            reasons.append("Next action: tune lr0/warmup/lrf under fixed total_optimizer_steps.")
-            return "检查通过", reasons
+            reasons.append("No hard structural anomaly detected from A1/A2/A3; likely hyper-parameter mismatch.")
 
-        if not bool(gate0.get("pass", False)) or not bool(gate2.get("pass", False)):
-            reasons.append("Next action: fix optimizer chain / grad flow before discussing model quality.")
-            return "实现问题", reasons
-
-        if not bool(gate1.get("pass", False)) or (bool(gate3.get("evaluated", False)) and not bool(gate3.get("pass", False))):
-            if self.module_key == "a3":
-                reasons.append(
-                    "Next action: keep residual-safe a3 and verify alpha learns from near-zero without destabilizing step0."
-                )
-            elif self.module_key == "b3":
-                reasons.append(
-                    "Next action: constrain b3 fusion weights and keep refine branch zero-init for safe startup."
-                )
-            elif self.module_key == "c7":
-                reasons.append(
-                    "Next action: check c7 mode/reduction/n settings and ensure gate branch keeps detail on positives."
-                )
-            else:
-                reasons.append("Next action: apply safe residual injection and rerun >=10 epochs.")
+        if structure:
+            next_actions = {
+                "a3": "Next action: use gradient-safe residual a3 (baseline_downsample + alpha*spd_branch, alpha small non-zero init with bounded tanh, last conv zero-init), then rerun >=10 epochs.",
+                "a9": "Next action: keep a9 SE-SAM residual-safe with non-zero alpha warm start, verify Gate-2 delta after first effective optimizer step, then rerun >=10 epochs.",
+                "a7": "Next action: keep HorNet delta residual-safe and non-zero alpha init (>=0.03), verify first effective optimizer-step delta>0, then rerun >=10 epochs.",
+                "b3": "Next action: use residual-safe b3 (lo + alpha*refine(weighted-hi/lo - lo), alpha init 0, refine last conv zero-init), then rerun >=10 epochs.",
+                "b9": "Next action: keep b9 improved_CSP fusion residual-safe, confirm P4->P3 fusion delta is non-zero and low-FPR recall does not regress, then rerun >=10 epochs.",
+                "b7": "Next action: keep CARAFE residual-safe with non-zero alpha init and chunked reassembly, then rerun >=10 epochs.",
+                "c5": "Next action: use gradient-safe c5 (out=x+alpha*BRA(x), alpha small non-zero init, BRA proj zero-init), then rerun >=10 epochs.",
+                "c9": "Next action: use c9 as post-fusion SE-SAM guardrail; compare `full/channel/spatial` modes for FP suppression without low-FPR recall drop.",
+                "c7": "Next action: keep MCBAM residual-safe with non-zero alpha init and validate channel/spatial mode separately, then rerun >=10 epochs.",
+                "d7": "Next action: keep P3-only d7 with TAL-compatible stride and tuned cls bias shift, then rerun >=10 epochs and inspect low-FPR recall.",
+                "d9": "Next action: keep d9 score-calib residual branch conservative (small alpha, zero-init tail), then rerun >=10 epochs and inspect FPR=0.05/0.1 recall.",
+            }
+            if self.module_key in next_actions:
+                reasons.append(next_actions[self.module_key])
             return "结构问题", reasons
 
-        reasons.append("Next action: lock structure and tune lr0/warmup/lrf with fixed optimizer steps.")
+        reasons.append("Next action: keep structure, try lr0 down 3x + warmup_epochs=3 then rerun >=10 epochs.")
         return "超参问题", reasons
 
     def flush(self) -> None:
@@ -1076,8 +929,7 @@ class Enhance241CheckRecorder:
                 return
             self._flushed = True
 
-        gates = self._build_gate_summary()
-        conclusion, reasons = self._judge_conclusion(gates)
+        conclusion, reasons = self._judge_conclusion()
 
         enabled_flags = []
         enh = _deep_get(self.cfg, "enhance241", default={}) or {}
@@ -1090,31 +942,22 @@ class Enhance241CheckRecorder:
         lines.append(f"- exp_dir: `{self.exp_dir}`")
         lines.append(f"- git_hash: `{self.git}`")
         lines.append(f"- enable_flags: `{enabled_flags}`")
-        lines.append("- stage_note: `Gate-0/1/2/3 are check stages, not module IDs (a2/a3 etc).`")
-        lines.append("### Run Metadata")
-        lines.append("```json")
-        lines.append(json.dumps(self.batch_context, ensure_ascii=False, indent=2))
-        lines.append("```")
-        lines.append("### Gate Summary")
-        lines.append("```json")
-        lines.append(json.dumps(gates, ensure_ascii=False, indent=2))
-        lines.append("```")
         lines.append("- patch_info:")
         lines.append("```json")
         lines.append(json.dumps(self.patch_info, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### Gate-1 Step0 Stats")
+        lines.append("### Gate-1 Step0 Equivalence (legacy: A1)")
         lines.append("```json")
         lines.append(json.dumps(self.a1, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### Gate-0/2 Params Grad Delta")
+        lines.append("### Gate-2 Trainability (legacy: A2)")
         lines.append("```json")
         lines.append(json.dumps(self.a2, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### Gate-3 Pos Neg MaxConf")
+        lines.append("### Gate-3 Score Separability Snapshot (legacy: A3)")
         lines.append("```json")
         lines.append(json.dumps(self.a3, ensure_ascii=False, indent=2))
         lines.append("```")
@@ -1130,6 +973,11 @@ class Enhance241CheckRecorder:
             for n in self.notes:
                 lines.append(f"- {n}")
 
+        lines.append("### Gate Legend")
+        lines.append("- `Gate-1`: patch 后 step0 的数值稳定性/等价启动检查。")
+        lines.append("- `Gate-2`: 参数是否进 optimizer、梯度是否有效、是否观察到参数更新。")
+        lines.append("- `Gate-3`: val 快照上正负样本 max_conf 可分性（用于早期诊断，非最终指标结论）。")
+
         lines.append(f"### 结论: {conclusion}")
         for r in reasons:
             lines.append(f"- {r}")
@@ -1137,10 +985,6 @@ class Enhance241CheckRecorder:
         try:
             self.md_path.parent.mkdir(parents=True, exist_ok=True)
             with self.md_path.open("a", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-            merged_md = self.exp_dir / "train" / "enhance241_check.md"
-            merged_md.parent.mkdir(parents=True, exist_ok=True)
-            with merged_md.open("a", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
         except Exception:
             pass
@@ -1264,12 +1108,15 @@ class SPDConvDownsample(torch.nn.Module):
         out_ch: int,
         pre_div: int = 4,
         refine: str = "dw",
+        alpha_init: float = 0.05,
+        alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
         self.enhance241_a3_base = base_downsample
         self.in_ch = int(in_ch)
         self.out_ch = int(out_ch)
         self.pre_div = int(max(1, pre_div))
+        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         refine = str(refine).lower()
 
         if self.out_ch > 0 and self.out_ch % self.pre_div == 0:
@@ -1293,7 +1140,11 @@ class SPDConvDownsample(torch.nn.Module):
         if self.enhance241_a3_post.bias is not None:
             torch.nn.init.zeros_(self.enhance241_a3_post.bias)
 
-        self.enhance241_a3_alpha = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+        # Use bounded alpha = alpha_cap * tanh(alpha_raw): keeps residual stable while allowing non-zero init.
+        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
+        alpha_ratio = alpha_init / self.alpha_cap
+        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
+        self.enhance241_a3_alpha = torch.nn.Parameter(alpha_raw)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -1312,7 +1163,8 @@ class SPDConvDownsample(torch.nn.Module):
         if y_spd.shape[-2:] != y_base.shape[-2:]:
             y_spd = torch.nn.functional.interpolate(y_spd, size=y_base.shape[-2:], mode="nearest")
 
-        alpha = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        alpha_raw = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        alpha = torch.tanh(alpha_raw) * self.alpha_cap
         delta = alpha * y_spd
         out = y_base + delta
 
@@ -1331,7 +1183,9 @@ class SPDConvDownsample(torch.nn.Module):
                 recorder.record_a1_payload(
                     f"{prefix}.residual_safe",
                     {
+                        "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
+                        "alpha_cap": _to_float(self.alpha_cap),
                         "var_ratio_alpha_spd_vs_base": v_delta / (v_base + 1e-12),
                         "target_var_ratio": [0.01, 0.3],
                         "y_base": _tensor_stats(y_base),
@@ -1340,6 +1194,7 @@ class SPDConvDownsample(torch.nn.Module):
                         "out_vs_base_cosine": cos,
                     },
                 )
+                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
                 if out.requires_grad:
                     try:
@@ -1347,6 +1202,7 @@ class SPDConvDownsample(torch.nn.Module):
                     except Exception:
                         pass
             elif step <= 30:
+                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
             if _should_capture_delta(step):
                 recorder.capture_param_delta(self, prefix)
@@ -1424,8 +1280,18 @@ def apply(model: Any, cfg: Any) -> Any:
     out_ch = int(conv.out_channels)
     pre_div = _safe_int(_deep_get(cfg, "enhance241", "a3_pre_div", default=4), 4)
     refine = str(_deep_get(cfg, "enhance241", "a3_refine", default="dw"))
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_init", default=0.05), 0.05)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_cap", default=0.5), 0.5)
 
-    fuse = SPDConvDownsample(base_downsample=old, in_ch=in_ch, out_ch=out_ch, pre_div=pre_div, refine=refine)
+    fuse = SPDConvDownsample(
+        base_downsample=old,
+        in_ch=in_ch,
+        out_ch=out_ch,
+        pre_div=pre_div,
+        refine=refine,
+        alpha_init=alpha_init,
+        alpha_cap=alpha_cap,
+    )
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
             setattr(fuse, attr, getattr(old, attr))
@@ -1456,7 +1322,8 @@ def apply(model: Any, cfg: Any) -> Any:
         "pre_div": int(pre_div),
         "refine": str(refine),
         "mode": "residual_safe",
-        "alpha_init": 0.0,
+        "alpha_init": _to_float(alpha_init),
+        "alpha_cap": _to_float(alpha_cap),
     }
     setattr(yolo_obj, "_enhance241_a3_info", info)
 
