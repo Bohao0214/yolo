@@ -33,13 +33,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--exp_name",
         type=str,
-        default="exp_2602240148",
-        help="Experiment run directory name to inspect in each case.",
+        default="",
+        help=(
+            "Exact run directory name in each case (e.g. exp_2602240148). "
+            "Leave empty to auto-select the latest exp_* in each case."
+        ),
     )
     p.add_argument(
         "--fallback_latest",
         action="store_true",
-        help="If --exp_name missing for one case, fallback to latest exp_* in that case.",
+        help="Only used when --exp_name is set: if missing, fallback to latest exp_* in that case.",
     )
     p.add_argument(
         "--out_root",
@@ -72,16 +75,21 @@ def count_images(path: Path) -> int:
 
 
 def pick_run_dir(case_dir: Path, exp_name: str, fallback_latest: bool) -> Optional[Path]:
+    runs = [p for p in case_dir.glob("exp_*") if p.is_dir()]
+    runs.sort(key=lambda p: p.stat().st_mtime)
+
+    exp_name = str(exp_name).strip()
+    if not exp_name:
+        # Auto mode: each case may have different exp_*, choose latest.
+        return runs[-1] if runs else None
+
     target = case_dir / exp_name
     if target.exists() and target.is_dir():
         return target
-    if not fallback_latest:
-        return None
-    runs = [p for p in case_dir.glob("exp_*") if p.is_dir()]
-    if not runs:
-        return None
-    runs.sort(key=lambda p: p.stat().st_mtime)
-    return runs[-1]
+
+    if fallback_latest:
+        return runs[-1] if runs else None
+    return None
 
 
 def write_csv(path: Path, rows: List[Dict[str, object]]) -> None:
@@ -132,7 +140,7 @@ def main() -> None:
                     "test_total": 0,
                     "val_total": 0,
                     "all_total": 0,
-                    "status": f"missing:{args.exp_name}",
+                    "status": f"missing:{args.exp_name or 'exp_*'}",
                     "run_dir": "",
                 }
             )
@@ -171,7 +179,7 @@ def main() -> None:
         "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
         "hp_root": str(hp_root),
         "case_glob": args.case_glob,
-        "exp_name": args.exp_name,
+        "exp_name": args.exp_name or "<auto_latest>",
         "fallback_latest": bool(args.fallback_latest),
         "case_count": len(rows),
         "ok_count": len(ok_rows),
@@ -188,7 +196,7 @@ def main() -> None:
         "",
         f"- hp_root: `{hp_root}`",
         f"- case_glob: `{args.case_glob}`",
-        f"- exp_name: `{args.exp_name}`",
+        f"- exp_name: `{args.exp_name or '<auto_latest>'}`",
         f"- fallback_latest: `{args.fallback_latest}`",
         f"- case_count: `{len(rows)}`",
         f"- ok_count: `{len(ok_rows)}`",
