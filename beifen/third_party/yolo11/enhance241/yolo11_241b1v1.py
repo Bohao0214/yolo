@@ -84,8 +84,7 @@ class P3ASFFLiteFuse(torch.nn.Module):
     def __init__(
         self,
         channels_per_branch: int,
-        alpha_init: float = 0.02,
-        alpha_cap: float = 0.3,
+        alpha_init: float = 0.05,
         weight_hidden: int = 64,
         refine: str = "dw",
         upsample_mode: str = "nearest",
@@ -112,11 +111,10 @@ class P3ASFFLiteFuse(torch.nn.Module):
         else:
             self.enhance241_b1_refine = _DWSeparableConv(self.c)  # enhance241-audit
 
-        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
-        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
-        alpha_ratio = alpha_init / self.alpha_cap
-        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
-        self.enhance241_b1_alpha_raw = torch.nn.Parameter(alpha_raw)  # enhance241-audit
+        # Learnable alpha (scalar or per-channel). Here: scalar for stability.
+        self.enhance241_b1_alpha = torch.nn.Parameter(  # enhance241-audit
+            torch.tensor(float(alpha_init), dtype=torch.float32)
+        )
 
         self._step: int = 0
         self._last_mon: Optional[Dict[str, float]] = None
@@ -153,8 +151,7 @@ class P3ASFFLiteFuse(torch.nn.Module):
         w = torch.softmax(w_logits, dim=1)
         fused = w[:, 0:1] * p3 + w[:, 1:2] * p4_up
         refined = self.enhance241_b1_refine(fused)
-        alpha = torch.tanh(self.enhance241_b1_alpha_raw).to(dtype=refined.dtype, device=refined.device) * self.alpha_cap
-        p3_out = p3 + alpha * refined
+        p3_out = p3 + self.enhance241_b1_alpha * refined
 
         # Lightweight monitoring: cache stats, flush by callbacks (no file I/O in forward).
         if self.training and torch.is_grad_enabled():
@@ -162,7 +159,7 @@ class P3ASFFLiteFuse(torch.nn.Module):
                 with torch.no_grad():
                     row = {
                         "step": float(self._step),
-                        "alpha_mean": float(alpha.detach().float().mean().cpu()),
+                        "alpha_mean": float(self.enhance241_b1_alpha.mean().detach().cpu()),
                         "w_mean": float(w.mean().detach().cpu()),
                         "w_var": float(w.var(unbiased=False).detach().cpu()),
                         "fused_mean": float(p3_out.mean().detach().cpu()),
@@ -249,8 +246,7 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError(f"Unable to infer concat channels from next layer at idx={fuse_idx+1}. c_in={c_in}")
 
     c = c_in // 2
-    alpha_init = _safe_float(enhance_cfg.get("b1_alpha_init", 0.02), 0.02)
-    alpha_cap = _safe_float(enhance_cfg.get("b1_alpha_cap", 0.3), 0.3)
+    alpha_init = _safe_float(enhance_cfg.get("b1_alpha_init", 0.05), 0.05)
     weight_hidden = int(_safe_float(enhance_cfg.get("b1_weight_hidden", 64), 64))
     refine = str(enhance_cfg.get("b1_refine", "dw"))
     upsample_mode = str(enhance_cfg.get("b1_upsample", "nearest")).lower()
@@ -259,7 +255,6 @@ def apply(model: Any, cfg: Any) -> Any:
     fuse = P3ASFFLiteFuse(
         channels_per_branch=c,
         alpha_init=alpha_init,
-        alpha_cap=alpha_cap,
         weight_hidden=weight_hidden,
         refine=refine,
         upsample_mode=upsample_mode,
@@ -275,7 +270,7 @@ def apply(model: Any, cfg: Any) -> Any:
 
     print(
         f"[enhance241] b1 enabled: patched neck P4->P3 fuse at model.model[{fuse_idx}] "
-        f"-> P3ASFFLiteFuse(C={c}, alpha_init={alpha_init}, alpha_cap={alpha_cap})"
+        f"-> P3ASFFLiteFuse(C={c}, alpha_init={alpha_init})"
     )
 
     # Lightweight monitor via Ultralytics callbacks (train only).

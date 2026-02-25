@@ -20,16 +20,6 @@ from .yolo11_241a3 import (
 ENHANCE241_AUDIT_KEYS = ["enhance241_d5"]  # enhance241-audit
 
 
-def _zero_init_last_conv(module: torch.nn.Module) -> None:
-    convs = [m for m in module.modules() if isinstance(m, torch.nn.Conv2d)]
-    if not convs:
-        return
-    last = convs[-1]
-    torch.nn.init.zeros_(last.weight)
-    if last.bias is not None:
-        torch.nn.init.zeros_(last.bias)
-
-
 def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
     cur = mapping
     for k in keys:
@@ -55,15 +45,12 @@ class P2LiteFuse(torch.nn.Module):
         out_channels: int,
         mode: str = "dw",
         upsample: str = "nearest",
-        alpha_init: float = 0.02,
-        alpha_cap: float = 0.3,
     ) -> None:
         super().__init__()
         c2 = int(p2_channels)
         c3 = int(p3_channels)
         co = int(out_channels)
         self.upsample = str(upsample).lower()
-        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
 
         self.p2_proj = torch.nn.Identity() if c2 == co else torch.nn.Conv2d(c2, co, kernel_size=1, stride=1, padding=0, bias=True)
         self.p3_proj = torch.nn.Identity() if c3 == co else torch.nn.Conv2d(c3, co, kernel_size=1, stride=1, padding=0, bias=True)
@@ -77,12 +64,7 @@ class P2LiteFuse(torch.nn.Module):
                 torch.nn.SiLU(inplace=True),
                 torch.nn.Conv2d(co, co, kernel_size=1, stride=1, padding=0, bias=True),
             )
-        _zero_init_last_conv(self.refine)
         self.act = torch.nn.SiLU(inplace=True)
-        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
-        alpha_ratio = alpha_init / self.alpha_cap
-        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
-        self.enhance241_d5_alpha_raw = torch.nn.Parameter(alpha_raw)
 
     def forward(self, x: Any) -> torch.Tensor:
         if not isinstance(x, (list, tuple)) or len(x) != 2:
@@ -99,11 +81,10 @@ class P2LiteFuse(torch.nn.Module):
 
         p2p = self.p2_proj(p2)
         p3p = self.p3_proj(p3)
-        mix = torch.cat((p3p, p2p), dim=1)
-        mix = self.act(self.mix(mix))
-        delta = self.act(self.refine(mix))
-        alpha = torch.tanh(self.enhance241_d5_alpha_raw.to(dtype=p2p.dtype, device=p2p.device)) * self.alpha_cap
-        return p2p + alpha * delta
+        y = torch.cat((p3p, p2p), dim=1)
+        y = self.act(self.mix(y))
+        y = self.act(self.refine(y))
+        return y
 
 
 def _extract_model_seq(model: Any) -> Tuple[Any, Any, Optional[Any]]:
@@ -274,8 +255,6 @@ def apply(model: Any, cfg: Any) -> Any:
 
     d5_mode = str(_deep_get(cfg, "enhance241", "d5_downsample", default="dw")).lower()
     d5_upsample = str(_deep_get(cfg, "enhance241", "d5_upsample", default="nearest")).lower()
-    d5_alpha_init = float(_deep_get(cfg, "enhance241", "d5_alpha_init", default=0.02))
-    d5_alpha_cap = float(_deep_get(cfg, "enhance241", "d5_alpha_cap", default=0.3))
 
     p2_fuse = P2LiteFuse(
         p2_channels=p2_channels,
@@ -283,8 +262,6 @@ def apply(model: Any, cfg: Any) -> Any:
         out_channels=head_channels,
         mode=d5_mode,
         upsample=d5_upsample,
-        alpha_init=d5_alpha_init,
-        alpha_cap=d5_alpha_cap,
     )
     p2_fuse.f = [p3_idx, p2_idx]
     p2_fuse.i = int(detect_idx)
@@ -352,8 +329,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "head_channels": int(head_channels),
         "fuse_mode": d5_mode,
         "upsample_mode": d5_upsample,
-        "alpha_init": float(d5_alpha_init),
-        "alpha_cap": float(d5_alpha_cap),
     }
     setattr(yolo_obj, "_enhance241_d5_info", info)
 

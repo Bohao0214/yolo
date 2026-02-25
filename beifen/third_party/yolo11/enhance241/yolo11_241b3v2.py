@@ -77,12 +77,9 @@ class NASFPNLiteFuse(torch.nn.Module):
         self,
         channels_per_branch: int,
         weight_init: float = 1.0,
-        weight_temp: float = 1.0,
         refine: str = "dw",
         upsample_mode: str = "nearest",
         eps: float = 1e-4,
-        alpha_init: float = 0.02,
-        alpha_cap: float = 0.3,
         tag: str = "",
     ) -> None:
         super().__init__()
@@ -92,8 +89,6 @@ class NASFPNLiteFuse(torch.nn.Module):
         self.upsample_mode = str(upsample_mode).lower()
         self.eps = float(eps)
         self.tag = str(tag)
-        self.weight_temp = float(max(1e-6, weight_temp))
-        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
 
         refine = str(refine).lower()
         if refine == "conv":
@@ -105,10 +100,7 @@ class NASFPNLiteFuse(torch.nn.Module):
         self.enhance241_b3_weight = torch.nn.Parameter(  # enhance241-audit
             torch.tensor([float(weight_init), float(weight_init)], dtype=torch.float32)
         )
-        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
-        alpha_ratio = alpha_init / self.alpha_cap
-        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
-        self.enhance241_b3_alpha_raw = torch.nn.Parameter(alpha_raw)  # enhance241-audit
+        self.enhance241_b3_alpha = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
 
     def _maybe_align(self, hi: torch.Tensor, lo: torch.Tensor) -> torch.Tensor:
         if hi.shape[-2:] == lo.shape[-2:]:
@@ -139,15 +131,13 @@ class NASFPNLiteFuse(torch.nn.Module):
         if recorder is not None and step == 0:
             recorder.capture_param_before(self, prefix)
 
-        weight_logits = self.enhance241_b3_weight / self.weight_temp
-        w = torch.softmax(weight_logits, dim=0)
+        w = torch.softmax(self.enhance241_b3_weight, dim=0)
         if recorder is not None:
             recorder.record_b3_weight(prefix, self.tag, w.detach().float(), step)
 
         mix = w[0] * hi + w[1] * lo
         delta = self.enhance241_b3_refine(mix - lo)
-        alpha_raw = self.enhance241_b3_alpha_raw.to(dtype=lo.dtype, device=lo.device)
-        alpha = torch.tanh(alpha_raw) * self.alpha_cap
+        alpha = self.enhance241_b3_alpha.to(dtype=lo.dtype, device=lo.device)
         lo_out = lo + alpha * delta
         out = torch.cat((hi, lo_out), dim=1)
 
@@ -338,12 +328,9 @@ def apply(model: Any, cfg: Any) -> Any:
     if not isinstance(enhance_cfg, dict):
         enhance_cfg = {}
     weight_init = _safe_float(enhance_cfg.get("b3_weight_init", 1.0), 1.0)
-    weight_temp = _safe_float(enhance_cfg.get("b3_weight_temp", 1.0), 1.0)
     refine = str(enhance_cfg.get("b3_refine", "dw"))
     upsample_mode = str(enhance_cfg.get("b3_upsample", "nearest")).lower()
     eps = _safe_float(enhance_cfg.get("b3_eps", 1e-4), 1e-4)
-    alpha_init = _safe_float(enhance_cfg.get("b3_alpha_init", 0.02), 0.02)
-    alpha_cap = _safe_float(enhance_cfg.get("b3_alpha_cap", 0.3), 0.3)
 
     patched_indices: List[int] = []
     weights_info: List[Dict[str, Any]] = []
@@ -363,12 +350,9 @@ def apply(model: Any, cfg: Any) -> Any:
         fuse = NASFPNLiteFuse(
             channels_per_branch=c,
             weight_init=weight_init,
-            weight_temp=weight_temp,
             refine=refine,
             upsample_mode=upsample_mode,
             eps=eps,
-            alpha_init=alpha_init,
-            alpha_cap=alpha_cap,
             tag=tag,
         )
         for attr in ("i", "f", "type"):
@@ -410,12 +394,10 @@ def apply(model: Any, cfg: Any) -> Any:
         "concat_candidates": _concat_candidates(seq),
         "weights": weights_info,
         "weight_init": float(weight_init),
-        "weight_temp": float(weight_temp),
         "refine": str(refine),
         "upsample": str(upsample_mode),
         "mode": "residual_safe",
-        "alpha_init": float(alpha_init),
-        "alpha_cap": float(alpha_cap),
+        "alpha_init": 0.0,
     }
     setattr(yolo_obj, "_enhance241_b3_info", info)
 

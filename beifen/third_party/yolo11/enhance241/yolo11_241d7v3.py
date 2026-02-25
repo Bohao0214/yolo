@@ -106,41 +106,6 @@ def _shift_keep_head_cls_bias(detect: Any, delta: float) -> bool:
     return ok
 
 
-def _shift_all_head_cls_bias(detect: Any, delta: float) -> bool:
-    ok = False
-
-    def _shift_from_head(head: Any) -> bool:
-        try:
-            if isinstance(head, torch.nn.Sequential) and len(head) > 0:
-                last = head[-1]
-            else:
-                last = head
-            if isinstance(last, torch.nn.Conv2d) and last.bias is not None:
-                with torch.no_grad():
-                    last.bias.add_(float(delta))
-                return True
-        except Exception:
-            return False
-        return False
-
-    try:
-        if hasattr(detect, "cv3") and isinstance(detect.cv3, torch.nn.ModuleList):
-            for head in detect.cv3:
-                ok = _shift_from_head(head) or ok
-    except Exception:
-        pass
-
-    try:
-        one2one_cv3 = getattr(detect, "one2one_cv3", None)
-        if isinstance(one2one_cv3, torch.nn.ModuleList):
-            for head in one2one_cv3:
-                ok = _shift_from_head(head) or ok
-    except Exception:
-        pass
-
-    return ok
-
-
 def apply(model: Any, cfg: Any) -> Any:
     enable_d7 = bool(_deep_get(cfg, "enhance241", "d7", default=False))
     if not enable_d7:
@@ -148,10 +113,6 @@ def apply(model: Any, cfg: Any) -> Any:
 
     if any(bool(_deep_get(cfg, "enhance241", k, default=False)) for k in ("d1", "d3", "d5", "d9")):
         raise RuntimeError("enhance241.d7 conflicts with d1/d3/d5/d9; enable only one D-class module.")
-
-    d7_mode = str(_deep_get(cfg, "enhance241", "d7_mode", default="bias_only")).lower()
-    if d7_mode not in {"bias_only", "p3_only"}:
-        raise RuntimeError(f"Unsupported enhance241.d7_mode={d7_mode}, expected bias_only|p3_only")
 
     yolo_obj, det_model, seq = _extract_model_seq(model)
     if seq is None:
@@ -161,37 +122,6 @@ def apply(model: Any, cfg: Any) -> Any:
     f_before = _f_as_list(getattr(detect, "f", []))
     heads_before = int(getattr(detect, "nl", len(f_before) if f_before else 0))
     stride_before = _head_stride_list(getattr(detect, "stride", []))
-
-    if d7_mode == "bias_only":
-        d7_cls_bias_shift = float(_deep_get(cfg, "enhance241", "d7_cls_bias_shift", default=-0.15))
-        cls_bias_shift_ok = _shift_all_head_cls_bias(detect, d7_cls_bias_shift) if abs(d7_cls_bias_shift) > 1e-12 else False
-        info = {
-            "enabled": True,
-            "patched_count": 1,
-            "existing_count": 0,
-            "detect_idx": int(detect_idx),
-            "detect_heads_before": int(heads_before),
-            "detect_heads_after": int(heads_before),
-            "detect_f_before": [int(x) for x in f_before],
-            "detect_f_after": [int(x) for x in f_before],
-            "stride_before": stride_before,
-            "stride_after": stride_before,
-            "head_keep": "all",
-            "mode": "bias_only",
-            "d7_cls_bias_shift": float(d7_cls_bias_shift),
-            "d7_cls_bias_shift_applied": bool(cls_bias_shift_ok),
-        }
-        setattr(yolo_obj, "_enhance241_d7_info", info)
-        recorder = get_check_recorder("d7", cfg, patch_info=info)
-        if recorder is not None:
-            try:
-                _bind_module_debug(detect, recorder, prefix=f"d7.detect.idx{detect_idx}.bias_only")
-                recorder.register_module_params(detect, f"d7.detect.idx{detect_idx}.bias_only")
-                recorder.attach_detect_hooks(detect, detect_idx)
-                recorder.maybe_run_val_separability(yolo_obj, cfg)
-            except Exception as exc:
-                recorder.add_note(f"d7_detect_hook_failed:{exc}")
-        return yolo_obj
 
     already_small_only = heads_before == 1 and len(f_before) == 1
     if already_small_only:
@@ -250,7 +180,7 @@ def apply(model: Any, cfg: Any) -> Any:
     except Exception:
         pass
 
-    d7_cls_bias_shift = float(_deep_get(cfg, "enhance241", "d7_cls_bias_shift", default=-0.15))
+    d7_cls_bias_shift = float(_deep_get(cfg, "enhance241", "d7_cls_bias_shift", default=-0.25))
     cls_bias_shift_ok = _shift_keep_head_cls_bias(detect, d7_cls_bias_shift) if abs(d7_cls_bias_shift) > 1e-12 else False
 
     # Keep full neck graph unchanged for safety; only Detect branches are pruned.

@@ -41,8 +41,8 @@ class P3LogitTemperature(torch.nn.Module):
         self,
         base_cls_head: torch.nn.Module,
         temp_init: float = 1.0,
-        t_min: float = 0.7,
-        t_max: float = 2.0,
+        t_min: float = 0.5,
+        t_max: float = 4.0,
     ) -> None:
         super().__init__()
         self.enhance241_d3_base_cls = base_cls_head
@@ -130,8 +130,8 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError("enhance241.d3 expects Detect.cv3 ModuleList with at least one head.")
 
     temp_init = _safe_float(enh.get("d3_temp_init", enh.get("d1_temp_init", 1.0)), 1.0)
-    t_min = _safe_float(enh.get("d3_temp_min", 0.7), 0.7)
-    t_max = _safe_float(enh.get("d3_temp_max", 2.0), 2.0)
+    t_min = _safe_float(enh.get("d3_temp_min", 0.5), 0.5)
+    t_max = _safe_float(enh.get("d3_temp_max", 4.0), 4.0)
 
     if isinstance(cls_heads[0], P3LogitTemperature):
         wrapped = cls_heads[0]

@@ -38,26 +38,6 @@ def _logit(p: float) -> float:
     return float(torch.log(torch.tensor(p / (1 - p))).item())
 
 
-def _module_param_dtype(module: torch.nn.Module) -> torch.dtype:
-    weight = getattr(module, "weight", None)
-    if isinstance(weight, torch.Tensor):
-        return weight.dtype
-    bias = getattr(module, "bias", None)
-    if isinstance(bias, torch.Tensor):
-        return bias.dtype
-    return torch.float32
-
-
-def _module_param_device(module: torch.nn.Module) -> Optional[torch.device]:
-    weight = getattr(module, "weight", None)
-    if isinstance(weight, torch.Tensor):
-        return weight.device
-    bias = getattr(module, "bias", None)
-    if isinstance(bias, torch.Tensor):
-        return bias.device
-    return None
-
-
 class _DWSeparableConv(torch.nn.Module):
     """Depthwise-separable 3x3 + pointwise 1x1 (no BN)."""
 
@@ -174,26 +154,21 @@ class P4P3GateAlignFuse(torch.nn.Module):
     def _align(self, p4_up: torch.Tensor, p3: torch.Tensor) -> torch.Tensor:
         if self.align == "dcn" and self.enhance241_b2_dcn is not None and self.enhance241_b2_offset is not None:
             # Keep dtype aligned with offset/DCN params under AMP.
-            offset_dtype = _module_param_dtype(self.enhance241_b2_offset)
-            offset_device = _module_param_device(self.enhance241_b2_offset) or p3.device
-            p3_off = p3.to(device=offset_device, dtype=offset_dtype, non_blocking=True)
-            p4_off = p4_up.to(device=offset_device, dtype=offset_dtype, non_blocking=True)
-            offset_in = torch.cat((p3_off, p4_off), dim=1)
-            offset = self.enhance241_b2_offset(offset_in)
-            dcn_dtype = _module_param_dtype(self.enhance241_b2_dcn)
-            dcn_device = _module_param_device(self.enhance241_b2_dcn) or p3.device
-            p4_dcn = p4_off.to(device=dcn_device, dtype=dcn_dtype, non_blocking=True)
-            offset_dcn = offset.to(device=dcn_device, dtype=dcn_dtype, non_blocking=True)
+            offset_dtype = self.enhance241_b2_offset.weight.dtype
+            p3_off = p3 if p3.dtype == offset_dtype else p3.to(offset_dtype)
+            p4_off = p4_up if p4_up.dtype == offset_dtype else p4_up.to(offset_dtype)
+            offset = self.enhance241_b2_offset(torch.cat((p3_off, p4_off), dim=1))
+            dcn_dtype = self.enhance241_b2_dcn.weight.dtype
+            p4_dcn = p4_off if p4_off.dtype == dcn_dtype else p4_off.to(dcn_dtype)
+            offset_dcn = offset if offset.dtype == dcn_dtype else offset.to(dcn_dtype)
             out = self.enhance241_b2_dcn(p4_dcn, offset_dcn)
             return out if out.dtype == p4_up.dtype else out.to(p4_up.dtype)
         if self.align == "flow" and self.enhance241_b2_flow is not None:
             # Keep dtype aligned with flow conv params under AMP.
-            flow_dtype = _module_param_dtype(self.enhance241_b2_flow)
-            flow_device = _module_param_device(self.enhance241_b2_flow) or p3.device
-            p3_flow = p3.to(device=flow_device, dtype=flow_dtype, non_blocking=True)
-            p4_flow = p4_up.to(device=flow_device, dtype=flow_dtype, non_blocking=True)
-            flow_in = torch.cat((p3_flow, p4_flow), dim=1)
-            flow = torch.tanh(self.enhance241_b2_flow(flow_in)) * self.flow_max
+            flow_dtype = self.enhance241_b2_flow.weight.dtype
+            p3_flow = p3 if p3.dtype == flow_dtype else p3.to(flow_dtype)
+            p4_flow = p4_up if p4_up.dtype == flow_dtype else p4_up.to(flow_dtype)
+            flow = torch.tanh(self.enhance241_b2_flow(torch.cat((p3_flow, p4_flow), dim=1))) * self.flow_max
             b, _, h, w = flow.shape
             grid_y, grid_x = torch.meshgrid(
                 torch.linspace(-1.0, 1.0, h, device=flow.device, dtype=flow.dtype),
@@ -241,28 +216,19 @@ class P4P3GateAlignFuse(torch.nn.Module):
         # Run b2 path in the current module-parameter dtype (fp32/fp16) to stay valid
         # across both training and validation precision modes.
         orig_dtype = p3.dtype
-        orig_device = p3.device
-        run_dtype = _module_param_dtype(self.enhance241_b2_fuse)
-        run_device = _module_param_device(self.enhance241_b2_fuse) or p3.device
-        p3_conv = p3.to(device=run_device, dtype=run_dtype, non_blocking=True)
-        p4_conv = p4_up.to(device=run_device, dtype=run_dtype, non_blocking=True)
+        run_dtype = self.enhance241_b2_fuse.weight.dtype
+        p3_conv = p3 if p3.dtype == run_dtype else p3.to(run_dtype)
+        p4_conv = p4_up if p4_up.dtype == run_dtype else p4_up.to(run_dtype)
         p4_aligned = self._align(p4_conv, p3_conv)
-        fuse_in = torch.cat((p4_aligned, p3_conv), dim=1).to(device=run_device, dtype=run_dtype, non_blocking=True)
-        fused = self.enhance241_b2_fuse(fuse_in)
-        refine_dtype = next(self.enhance241_b2_refine.parameters()).dtype
-        fused = fused if fused.dtype == refine_dtype else fused.to(refine_dtype)
-        fused = self.enhance241_b2_refine(fused)
-        if fused.dtype != run_dtype:
-            fused = fused.to(run_dtype)
-        gate_param = self.enhance241_b2_gate
-        gate = torch.sigmoid(gate_param if gate_param.dtype == run_dtype else gate_param.to(run_dtype))
+        fused = self.enhance241_b2_refine(self.enhance241_b2_fuse(torch.cat((p4_aligned, p3_conv), dim=1)))
+        gate = torch.sigmoid(self.enhance241_b2_gate if self.enhance241_b2_gate.dtype == run_dtype else self.enhance241_b2_gate.to(run_dtype))
         p3_out = p3_conv + gate * fused
 
         # Cast results back to original dtype for downstream layers.
-        if p4_aligned.dtype != orig_dtype or p4_aligned.device != orig_device:
-            p4_aligned = p4_aligned.to(device=orig_device, dtype=orig_dtype, non_blocking=True)
-        if p3_out.dtype != orig_dtype or p3_out.device != orig_device:
-            p3_out = p3_out.to(device=orig_device, dtype=orig_dtype, non_blocking=True)
+        if p4_aligned.dtype != orig_dtype:
+            p4_aligned = p4_aligned.to(orig_dtype)
+        if p3_out.dtype != orig_dtype:
+            p3_out = p3_out.to(orig_dtype)
 
         if self.debug_stats and not self._debug_printed:
             self._debug_printed = True
@@ -398,7 +364,7 @@ def apply(model: Any, cfg: Any) -> Any:
     mode = str(enhance_cfg.get("b2_mode", "safe")).lower()
     gate_init = _safe_float(enhance_cfg.get("b2_gate_init", 0.0), 0.0)
     if gate_init <= 0:
-        gate_init = 0.20 if mode == "strong" else 0.02
+        gate_init = 0.20 if mode == "strong" else 0.05
     flow_max = _safe_float(enhance_cfg.get("b2_flow_max", 2.0), 2.0)
     refine = str(enhance_cfg.get("b2_refine", "dw"))
     upsample_mode = str(enhance_cfg.get("b2_upsample", "nearest")).lower()

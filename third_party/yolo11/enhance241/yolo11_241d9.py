@@ -205,11 +205,8 @@ def apply(model: Any, cfg: Any) -> Any:
     channels = _infer_p3_channels(detect)
     mode = str(_deep_get(cfg, "enhance241", "d9_mode", default="dw")).lower()
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "d9_alpha_init", default=0.0), 0.0)
-    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "d9_alpha_cap", default=0.5), 0.5)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "d9_alpha_cap", default=0.3), 0.3)
     alpha_auto_fallback = False
-    if abs(alpha_init) < 1e-8:
-        alpha_init = 0.05
-        alpha_auto_fallback = True
 
     wrapped = D9HeadScoreCalib(
         old,

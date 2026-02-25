@@ -306,8 +306,8 @@ def apply(model: Any, cfg: Any) -> Any:
     n = max(1, min(6, int(n)))
     mode = str(_deep_get(cfg, "enhance241", "c7_mode", default="full")).lower()
     reduction = _safe_int(_deep_get(cfg, "enhance241", "c7_reduction", default=16), 16)
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c7_alpha_init", default=0.02), 0.02)
-    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c7_alpha_cap", default=0.3), 0.3)
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c7_alpha_init", default=0.0), 0.0)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c7_alpha_cap", default=0.5), 0.5)
 
     wrapped = C7MCBAMInject(
         old,

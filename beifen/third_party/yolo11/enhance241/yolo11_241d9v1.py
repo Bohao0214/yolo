@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# Path: third_party/yolo11/enhance241/yolo11_241c9.py
-# Purpose: enhance241 c9 patch (SE-SAM guardrail before head, residual-safe).
+# Path: third_party/yolo11/enhance241/yolo11_241d9.py
+# Purpose: enhance241 d9 patch (P3 head score-calib residual block, baseline-safe).
 
 from typing import Any, Dict, Optional, Tuple
 
@@ -19,7 +19,7 @@ from .yolo11_241a3 import (
     get_check_recorder,
 )
 
-ENHANCE241_AUDIT_KEYS = ["enhance241_c9"]  # enhance241-audit
+ENHANCE241_AUDIT_KEYS = ["enhance241_d9"]  # enhance241-audit
 
 
 def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
@@ -37,13 +37,6 @@ def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
     return cur if cur is not None else default
 
 
-def _safe_int(x: Any, default: int) -> int:
-    try:
-        return int(x)
-    except Exception:
-        return int(default)
-
-
 def _safe_float(x: Any, default: float) -> float:
     try:
         return float(x)
@@ -51,91 +44,60 @@ def _safe_float(x: Any, default: float) -> float:
         return float(default)
 
 
-class _ChannelSE(torch.nn.Module):
-    def __init__(self, channels: int, reduction: int = 16) -> None:
+def _safe_int(x: Any, default: int) -> int:
+    try:
+        return int(x)
+    except Exception:
+        return int(default)
+
+
+class _ScoreCalibDelta(torch.nn.Module):
+    def __init__(self, channels: int, mode: str = "dw") -> None:
         super().__init__()
         c = int(channels)
-        hidden = max(4, c // max(1, int(reduction)))
-        self.fc1 = torch.nn.Conv2d(c, hidden, kernel_size=1, stride=1, padding=0, bias=True)
-        self.fc2 = torch.nn.Conv2d(hidden, c, kernel_size=1, stride=1, padding=0, bias=True)
+        m = str(mode).lower()
+        if m == "conv":
+            self.conv3 = torch.nn.Conv2d(c, c, kernel_size=3, stride=1, padding=1, bias=True)
+        else:
+            self.conv3 = torch.nn.Conv2d(c, c, kernel_size=3, stride=1, padding=1, groups=c, bias=True)
+        self.conv1 = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
+        torch.nn.init.zeros_(self.conv1.weight)
+        if self.conv1.bias is not None:
+            torch.nn.init.zeros_(self.conv1.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = F.adaptive_avg_pool2d(x, output_size=1)
-        s = torch.sigmoid(self.fc2(F.silu(self.fc1(z))))
-        return x * s
+        return self.conv1(F.silu(self.conv3(x)))
 
 
-class _SpatialSAM(torch.nn.Module):
-    def __init__(self, kernel_size: int = 7) -> None:
-        super().__init__()
-        k = max(3, int(kernel_size))
-        if k % 2 == 0:
-            k += 1
-        self.conv = torch.nn.Conv2d(2, 1, kernel_size=k, stride=1, padding=k // 2, bias=True)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        avg_map = x.mean(dim=1, keepdim=True)
-        max_map = x.amax(dim=1, keepdim=True)
-        m = torch.sigmoid(self.conv(torch.cat([avg_map, max_map], dim=1)))
-        return x * m
-
-
-class _SESAMCore(torch.nn.Module):
-    def __init__(self, channels: int, reduction: int = 16, kernel_size: int = 7, mode: str = "full") -> None:
-        super().__init__()
-        self.mode = str(mode).lower()
-        self.se = _ChannelSE(channels=int(channels), reduction=int(reduction))
-        self.sam = _SpatialSAM(kernel_size=int(kernel_size))
-        self.out = torch.nn.Conv2d(int(channels), int(channels), kernel_size=1, stride=1, padding=0, bias=True)
-        torch.nn.init.zeros_(self.out.weight)
-        if self.out.bias is not None:
-            torch.nn.init.zeros_(self.out.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = x
-        if self.mode in ("full", "channel"):
-            y = self.se(y)
-        if self.mode in ("full", "spatial"):
-            y = self.sam(y)
-        return self.out(y)
-
-
-class C9SESAMGuard(torch.nn.Module):
-    """Guardrail gate before head: out = base + alpha * delta(base)."""
+class D9HeadScoreCalib(torch.nn.Module):
+    """x_head = x + alpha * conv1x1(conv3x3(x)) on P3 input."""
 
     def __init__(
         self,
         base_module: torch.nn.Module,
         channels: int,
-        reduction: int = 16,
-        kernel_size: int = 7,
-        mode: str = "full",
+        mode: str = "dw",
         alpha_init: float = 0.0,
         alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
-        self.enhance241_c9_base = base_module
-        self.enhance241_c9_delta = _SESAMCore(
-            channels=int(channels),
-            reduction=int(reduction),
-            kernel_size=int(kernel_size),
-            mode=str(mode),
-        )
+        self.enhance241_d9_base = base_module
+        self.enhance241_d9_delta = _ScoreCalibDelta(channels=int(channels), mode=str(mode))
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
         alpha_raw = torch.atanh(torch.tensor(alpha_init / self.alpha_cap, dtype=torch.float32))
-        self.enhance241_c9_alpha = torch.nn.Parameter(alpha_raw)
+        self.enhance241_d9_alpha = torch.nn.Parameter(alpha_raw)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
-        prefix = str(getattr(self, "_enhance241_prefix", "c9"))
+        prefix = str(getattr(self, "_enhance241_prefix", "d9"))
         step = int(getattr(self, "_enhance241_fwd_step", 0))
         if recorder is not None and step == 0:
             recorder.capture_param_before(self, prefix)
 
-        y_base = self.enhance241_c9_base(x)
-        delta_raw = self.enhance241_c9_delta(y_base)
-        alpha_raw = self.enhance241_c9_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        y_base = self.enhance241_d9_base(x)
+        delta_raw = self.enhance241_d9_delta(y_base)
+        alpha_raw = self.enhance241_d9_alpha.to(dtype=y_base.dtype, device=y_base.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
         delta = alpha * delta_raw
         out = y_base + delta
@@ -202,24 +164,24 @@ def _infer_p3_channels(detect: Any) -> int:
                 return int(m.in_channels)
     except Exception:
         pass
-    raise RuntimeError("Unable to infer P3 channels for c9.")
+    raise RuntimeError("Unable to infer P3 channels for d9.")
 
 
 def apply(model: Any, cfg: Any) -> Any:
-    enable_c9 = bool(_deep_get(cfg, "enhance241", "c9", default=False))
-    if not enable_c9:
+    enable_d9 = bool(_deep_get(cfg, "enhance241", "d9", default=False))
+    if not enable_d9:
         return model
-    if any(bool(_deep_get(cfg, "enhance241", k, default=False)) for k in ("c5", "c7")):
-        raise RuntimeError("enhance241.c9 conflicts with c5/c7; enable only one C-class module.")
+    if any(bool(_deep_get(cfg, "enhance241", k, default=False)) for k in ("d3", "d5", "d7", "d1")):
+        raise RuntimeError("enhance241.d9 conflicts with d1/d3/d5/d7; enable only one D-class module.")
 
     yolo_obj, seq = _extract_model_seq(model)
     if seq is None:
-        raise RuntimeError("enhance241.c9 requires YOLO/DetectionModel-like object with .model sequence.")
+        raise RuntimeError("enhance241.d9 requires YOLO/DetectionModel-like object with .model sequence.")
     p3_idx = _infer_p3_output_index(seq)
     detect_idx, detect = _locate_detect(seq)
     old = seq[p3_idx]
 
-    if isinstance(old, C9SESAMGuard):
+    if isinstance(old, D9HeadScoreCalib):
         info = {
             "enabled": True,
             "existing_count": 1,
@@ -228,31 +190,30 @@ def apply(model: Any, cfg: Any) -> Any:
             "detect_idx": int(detect_idx),
             "note": "already_patched",
         }
-        setattr(yolo_obj, "_enhance241_c9_info", info)
-        recorder = get_check_recorder("c9", cfg, patch_info=info)
+        setattr(yolo_obj, "_enhance241_d9_info", info)
+        recorder = get_check_recorder("d9", cfg, patch_info=info)
         if recorder is not None:
             try:
-                _bind_module_debug(old, recorder, prefix=f"c9.idx{p3_idx}.existing")
-                recorder.register_module_params(old, f"c9.idx{p3_idx}.existing")
+                _bind_module_debug(old, recorder, prefix=f"d9.idx{p3_idx}.existing")
+                recorder.register_module_params(old, f"d9.idx{p3_idx}.existing")
                 recorder.attach_detect_hooks(detect, detect_idx)
                 recorder.maybe_run_val_separability(yolo_obj, cfg)
             except Exception as exc:
-                recorder.add_note(f"c9_prepatched_hook_failed:{exc}")
+                recorder.add_note(f"d9_prepatched_hook_failed:{exc}")
         return yolo_obj
 
     channels = _infer_p3_channels(detect)
-    reduction = _safe_int(_deep_get(cfg, "enhance241", "c9_reduction", default=16), 16)
-    kernel_size = _safe_int(_deep_get(cfg, "enhance241", "c9_kernel_size", default=7), 7)
-    mode = str(_deep_get(cfg, "enhance241", "c9_mode", default="full")).lower()
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c9_alpha_init", default=0.0), 0.0)
-    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c9_alpha_cap", default=0.3), 0.3)
+    mode = str(_deep_get(cfg, "enhance241", "d9_mode", default="dw")).lower()
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "d9_alpha_init", default=0.0), 0.0)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "d9_alpha_cap", default=0.5), 0.5)
     alpha_auto_fallback = False
+    if abs(alpha_init) < 1e-8:
+        alpha_init = 0.05
+        alpha_auto_fallback = True
 
-    wrapped = C9SESAMGuard(
+    wrapped = D9HeadScoreCalib(
         old,
         channels=channels,
-        reduction=reduction,
-        kernel_size=kernel_size,
         mode=mode,
         alpha_init=alpha_init,
         alpha_cap=alpha_cap,
@@ -277,10 +238,8 @@ def apply(model: Any, cfg: Any) -> Any:
         "p3_index": int(p3_idx),
         "detect_idx": int(detect_idx),
         "base_type": old.__class__.__name__,
-        "new_type": "C9SESAMGuard",
+        "new_type": "D9HeadScoreCalib",
         "channels": int(channels),
-        "reduction": int(reduction),
-        "kernel_size": int(kernel_size),
         "mode": str(mode),
         "alpha_init": _to_float(alpha_init),
         "alpha_auto_fallback": bool(alpha_auto_fallback),
@@ -289,15 +248,15 @@ def apply(model: Any, cfg: Any) -> Any:
         "params_new": int(new_params),
         "delta_params": int(new_params - old_params),
     }
-    setattr(yolo_obj, "_enhance241_c9_info", info)
+    setattr(yolo_obj, "_enhance241_d9_info", info)
 
-    recorder = get_check_recorder("c9", cfg, patch_info=info)
+    recorder = get_check_recorder("d9", cfg, patch_info=info)
     if recorder is not None:
-        _bind_module_debug(wrapped, recorder, prefix=f"c9.idx{p3_idx}")
-        recorder.register_module_params(wrapped, f"c9.idx{p3_idx}")
+        _bind_module_debug(wrapped, recorder, prefix=f"d9.idx{p3_idx}")
+        recorder.register_module_params(wrapped, f"d9.idx{p3_idx}")
         try:
             recorder.attach_detect_hooks(detect, detect_idx)
             recorder.maybe_run_val_separability(yolo_obj, cfg)
         except Exception as exc:
-            recorder.add_note(f"c9_hook_failed:{exc}")
+            recorder.add_note(f"d9_hook_failed:{exc}")
     return yolo_obj
