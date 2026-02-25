@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+METRIC_KEYS = ("fn_total", "fp_total", "val_fn", "val_fp", "test_fn", "test_fp")
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,16 +95,18 @@ def pick_run_dir(case_dir: Path, exp_name: str, fallback_latest: bool) -> Option
 
 def write_csv(path: Path, rows: List[Dict[str, object]]) -> None:
     headers = [
-        "case_name",
-        "run_name",
-        "test_fn",
-        "test_fp",
+        "experiment_name",
+        "fn_total",
+        "fp_total",
         "val_fn",
         "val_fp",
-        "test_total",
-        "val_total",
-        "all_total",
+        "test_fn",
+        "test_fp",
+        "summary_type",
+        "metric_name",
+        "metric_value",
         "status",
+        "run_name",
         "run_dir",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
@@ -111,6 +114,21 @@ def write_csv(path: Path, rows: List[Dict[str, object]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def write_minima_csv(path: Path, rows: List[Dict[str, object]]) -> None:
+    headers = ["experiment_name", "metric_name", "metric_value"]
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "experiment_name": row.get("experiment_name", ""),
+                    "metric_name": row.get("metric_name", ""),
+                    "metric_value": row.get("metric_value", ""),
+                }
+            )
 
 
 def main() -> None:
@@ -131,15 +149,17 @@ def main() -> None:
         if run_dir is None:
             rows.append(
                 {
-                    "case_name": case_dir.name,
-                    "run_name": "",
-                    "test_fn": 0,
-                    "test_fp": 0,
+                    "experiment_name": case_dir.name,
+                    "fn_total": 0,
+                    "fp_total": 0,
                     "val_fn": 0,
                     "val_fp": 0,
-                    "test_total": 0,
-                    "val_total": 0,
-                    "all_total": 0,
+                    "test_fn": 0,
+                    "test_fp": 0,
+                    "summary_type": "case",
+                    "metric_name": "",
+                    "metric_value": "",
+                    "run_name": "",
                     "status": f"missing:{args.exp_name or 'exp_*'}",
                     "run_dir": "",
                 }
@@ -150,31 +170,60 @@ def main() -> None:
         test_fp = count_images(run_dir / "test_vis" / "image_fp")
         val_fn = count_images(run_dir / "val_vis" / "image_fn")
         val_fp = count_images(run_dir / "val_vis" / "image_fp")
+        fn_total = val_fn + test_fn
+        fp_total = val_fp + test_fp
 
         rows.append(
             {
-                "case_name": case_dir.name,
-                "run_name": run_dir.name,
-                "test_fn": test_fn,
-                "test_fp": test_fp,
+                "experiment_name": case_dir.name,
+                "fn_total": fn_total,
+                "fp_total": fp_total,
                 "val_fn": val_fn,
                 "val_fp": val_fp,
-                "test_total": test_fn + test_fp,
-                "val_total": val_fn + val_fp,
-                "all_total": test_fn + test_fp + val_fn + val_fp,
+                "test_fn": test_fn,
+                "test_fp": test_fp,
+                "summary_type": "case",
+                "metric_name": "",
+                "metric_value": "",
+                "run_name": run_dir.name,
                 "status": "ok",
                 "run_dir": str(run_dir),
             }
         )
 
+    minima_rows: List[Dict[str, object]] = []
+    ok_rows = [r for r in rows if r["status"] == "ok"]
+    for metric in METRIC_KEYS:
+        if not ok_rows:
+            break
+        winner = min(ok_rows, key=lambda r: (int(r[metric]), str(r["experiment_name"])))
+        minima_rows.append(
+            {
+                "experiment_name": winner["experiment_name"],
+                "fn_total": "",
+                "fp_total": "",
+                "val_fn": "",
+                "val_fp": "",
+                "test_fn": "",
+                "test_fp": "",
+                "summary_type": "min",
+                "metric_name": metric,
+                "metric_value": int(winner[metric]),
+                "status": "ok",
+                "run_name": winner.get("run_name", ""),
+                "run_dir": winner.get("run_dir", ""),
+            }
+        )
+
     report_dir = make_report_dir(out_root)
     csv_path = report_dir / "hparam_case_fpfn_counts.csv"
+    minima_csv_path = report_dir / "hparam_case_fpfn_minima.csv"
     json_path = report_dir / "hparam_case_fpfn_summary.json"
     md_path = report_dir / "hparam_case_fpfn_readme.md"
 
-    write_csv(csv_path, rows)
+    write_csv(csv_path, rows + minima_rows)
+    write_minima_csv(minima_csv_path, minima_rows)
 
-    ok_rows = [r for r in rows if r["status"] == "ok"]
     summary = {
         "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
         "hp_root": str(hp_root),
@@ -187,7 +236,18 @@ def main() -> None:
         "sum_test_fp": int(sum(int(r["test_fp"]) for r in ok_rows)),
         "sum_val_fn": int(sum(int(r["val_fn"]) for r in ok_rows)),
         "sum_val_fp": int(sum(int(r["val_fp"]) for r in ok_rows)),
+        "sum_fn_total": int(sum(int(r["fn_total"]) for r in ok_rows)),
+        "sum_fp_total": int(sum(int(r["fp_total"]) for r in ok_rows)),
+        "minima": [
+            {
+                "experiment_name": r["experiment_name"],
+                "metric_name": r["metric_name"],
+                "metric_value": int(r["metric_value"]),
+            }
+            for r in minima_rows
+        ],
         "report_csv": str(csv_path),
+        "minima_csv": str(minima_csv_path),
     }
     json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -201,19 +261,27 @@ def main() -> None:
         f"- case_count: `{len(rows)}`",
         f"- ok_count: `{len(ok_rows)}`",
         f"- csv: `{csv_path}`",
+        f"- minima_csv: `{minima_csv_path}`",
         "",
         "## Columns",
         "",
-        "- case_name, run_name",
-        "- test_fn, test_fp",
+        "- experiment_name",
+        "- fn_total, fp_total",
         "- val_fn, val_fp",
-        "- test_total, val_total, all_total",
-        "- status, run_dir",
+        "- test_fn, test_fp",
+        "- summary_type, metric_name, metric_value",
+        "- status, run_name, run_dir",
+        "",
+        "## Summary Rows",
+        "",
+        "- summary_type=min rows are appended at the end of the main csv",
+        "- each min row contains: experiment_name + metric_name + metric_value",
     ]
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
     print(f"[DONE] report_dir: {report_dir}")
     print(f"[DONE] csv: {csv_path}")
+    print(f"[DONE] minima_csv: {minima_csv_path}")
     print(f"[DONE] cases={len(rows)} ok={len(ok_rows)}")
 
 
