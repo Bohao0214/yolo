@@ -28,7 +28,7 @@ Usage:
 
 Runs S2 quick A/B matrix with identical seed/data/epochs:
   baseline, a3, b3, d3, a3+b3, a3+d3, b3+d3, a3+b3+d3
-  plus added singles: a5, a7, a9, b5, b7, b9, c5, c7, c9, d5, d7, d9
+  plus added singles: a5, a7, a9, a11, b5, b7, b9, b11, c5, c7, c9, c11, d5, d7, d9, d11
   (d1 is legacy alias of d3)
 
 Behavior:
@@ -44,10 +44,13 @@ Options:
   --batch-size N
                Override batch size for all cases
   --combos L   Comma-separated cases, e.g.:
-               baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,a7,a9,b5,b7,b9,c5,c7,c9,d5,d7,d9
+               baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a5,a7,a9,a11,b5,b7,b9,b11,c5,c7,c9,c11,d5,d7,d9,d11
                Built-in aliases:
                hmc7/abcd7 => a7+b7+c7+d7
                pdd9/abcd9 => a9+b9+c9+d9
+               abcd11 => a11+b11+c11+d11
+               b1237 => b1,b2,b3,b7 (expanded to four single cases)
+               d1579 => d1,d5,d7,d9 (expanded to four single cases)
                Supports aliases a3_b3 / a3_b3_d1 and raw '+' expressions
   --tag NAME   Matrix tag (used for temp config/log folders)
   --vram-guard MODE
@@ -168,7 +171,7 @@ fi
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
 
 # 默认组合：原有 S2 主线 + 新增模块单开
-DEFAULT_COMBOS="baseline,hmc7,pdd9,a9,b9,c9,d9,a5,a7,b5,b7,c5,c7,d5,d7,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,b5+c5,c5+d5,b5+d5,b5+c5+d5"
+DEFAULT_COMBOS="baseline,hmc7,pdd9,abcd11,a11,b11,c11,d11,a9,b9,c9,d9,a5,a7,b5,b7,c5,c7,d5,d7,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,b5+c5,c5+d5,b5+d5,b5+c5+d5"
 if [[ -z "${COMBOS_RAW}" ]]; then
   COMBOS_RAW="${DEFAULT_COMBOS}"
 fi
@@ -213,7 +216,25 @@ normalize_and_add_case() {
       add_case "a9_b9_c9_d9" "a9 b9 c9 d9"
       return
       ;;
-    a3|a5|a7|a9|b1|b2|b3|b5|b7|b9|c5|c7|c9|d1|d3|d5|d7|d9)
+    abcd11|a11_b11_c11_d11|a11+b11+c11+d11)
+      add_case "a11_b11_c11_d11" "a11 b11 c11 d11"
+      return
+      ;;
+    b1237)
+      add_case "b1" "b1"
+      add_case "b2" "b2"
+      add_case "b3" "b3"
+      add_case "b7" "b7"
+      return
+      ;;
+    d1579)
+      add_case "d1" "d1"
+      add_case "d5" "d5"
+      add_case "d7" "d7"
+      add_case "d9" "d9"
+      return
+      ;;
+    a3|a5|a7|a9|a11|b1|b2|b3|b5|b7|b9|b11|c5|c7|c9|c11|d1|d3|d5|d7|d9|d11)
       add_case "${token}" "${token}"
       return
       ;;
@@ -246,9 +267,9 @@ normalize_and_add_case() {
     [[ -z "${part}" ]] && continue
     case "${part}" in
       baseline|base|none) continue ;;
-      a3|a5|a7|a9|b1|b2|b3|b5|b7|b9|c5|c7|c9|d1|d3|d5|d7|d9) ;;
+      a3|a5|a7|a9|a11|b1|b2|b3|b5|b7|b9|b11|c5|c7|c9|c11|d1|d3|d5|d7|d9|d11) ;;
       *)
-        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,hmc7/pdd9,a3,a5,a7,a9,b1,b2,b3,b5,b7,b9,c5,c7,c9,d1,d3,d5,d7,d9)" >&2
+        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,hmc7/pdd9/abcd11,b1237,d1579,a3,a5,a7,a9,a11,b1,b2,b3,b5,b7,b9,b11,c5,c7,c9,c11,d1,d3,d5,d7,d9,d11)" >&2
         exit 2
         ;;
     esac
@@ -323,10 +344,10 @@ enh = cfg.setdefault("enhance241", {})
 if not isinstance(enh, dict):
     raise SystemExit("enhance241 must be a mapping in base config.")
 
-for key in ("a3", "a5", "a7", "a9", "b1", "b2", "b3", "b5", "b7", "b9", "c5", "c7", "c9", "d1", "d3", "d5", "d7", "d9"):
+for key in ("a3", "a5", "a7", "a9", "a11", "b1", "b2", "b3", "b5", "b7", "b9", "b11", "c5", "c7", "c9", "c11", "d1", "d3", "d5", "d7", "d9", "d11"):
     enh[key] = False
 for key in switches:
-    if key not in {"a3", "a5", "a7", "a9", "b1", "b2", "b3", "b5", "b7", "b9", "c5", "c7", "c9", "d1", "d3", "d5", "d7", "d9"}:
+    if key not in {"a3", "a5", "a7", "a9", "a11", "b1", "b2", "b3", "b5", "b7", "b9", "b11", "c5", "c7", "c9", "c11", "d1", "d3", "d5", "d7", "d9", "d11"}:
         raise SystemExit(f"Unsupported matrix switch: {key}")
     if key == "d1":
         enh["d1"] = True

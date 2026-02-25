@@ -32,22 +32,27 @@ Usage:
 Switches (implemented):
   hmc7  Alias of: a7 b7 c7 d7 (YOLO-HMC group)
   pdd9  Alias of: a9 b9 c9 d9 (PDD group)
+  abcd11 Alias of: a11 b11 c11 d11 (ATL11 group)
   a3    Enable 2.4.1 a3 (SPDConvDownsample P3 downsample)
   a5    Enable 2.4.1 a5 (P3-side residual-safe lightweight enhancement)
   a7    Enable 2.4.1 a7 (HorNet/C3HB-style residual-safe P3 generation enhancer)
   a9    Enable 2.4.1 a9 (Light-PDD SE-SAM backbone enhancer on P3 stage)
+  a11   Enable 2.4.1 a11 (GAM backbone stage enhancement on P3 route)
   b1    Enable 2.4.1 b1 (ASFF-lite P4->P3 fuse)
   b2    Enable 2.4.1 b2-safe (residual P4->P3 fuse, baseline-safe init)
   b3    Enable 2.4.1 b3 (NASFPNLite P5->P4 + P4->P3)
   b5    Enable 2.4.1 b5 (GFPN-like CSPStage fusion refinement)
   b7    Enable 2.4.1 b7 (CARAFE residual-safe upsampling)
   b9    Enable 2.4.1 b9 (Light-PDD improved_CSP refinement at P4->P3 fusion)
+  b11   Enable 2.4.1 b11 (Tiny stride=4 detection branch, backbone_l3 + P3 fusion)
   c5    Enable 2.4.1 c5 (BRA residual-safe semantic enhancer)
   c7    Enable 2.4.1 c7 (MCBAM residual-safe gate)
   c9    Enable 2.4.1 c9 (SE-SAM guardrail before head)
+  c11   Enable 2.4.1 c11 (light head-input gate on P3/P2_new)
   d5    Enable 2.4.1 d5 (Add P2 stride=4/160x160 detect head)
   d7    Enable 2.4.1 d7 (keep only small-target detect head, P3-only)
   d9    Enable 2.4.1 d9 (P3 head score-calib residual block)
+  d11   Enable 2.4.1 d11 (residual-safe cls score calibration)
   d3    Enable 2.4.1 d3 (P3 logit temperature; minimal score-shaping)
   d1    Legacy alias of d3 (kept for backward compatibility)
 
@@ -57,22 +62,27 @@ Examples:
   bash tools/run_yolov11_241.sh --vram-guard off --safe-batch 12 --safe-workers 8 a9
   bash tools/run_yolov11_241.sh hmc7
   bash tools/run_yolov11_241.sh pdd9
+  bash tools/run_yolov11_241.sh abcd11
   bash tools/run_yolov11_241.sh a3
   bash tools/run_yolov11_241.sh a5
   bash tools/run_yolov11_241.sh a7
   bash tools/run_yolov11_241.sh a9
+  bash tools/run_yolov11_241.sh a11
   bash tools/run_yolov11_241.sh b1
   bash tools/run_yolov11_241.sh b2
   bash tools/run_yolov11_241.sh b3
   bash tools/run_yolov11_241.sh b5
   bash tools/run_yolov11_241.sh b7
   bash tools/run_yolov11_241.sh b9
+  bash tools/run_yolov11_241.sh b11
   bash tools/run_yolov11_241.sh c5
   bash tools/run_yolov11_241.sh c7
   bash tools/run_yolov11_241.sh c9
+  bash tools/run_yolov11_241.sh c11
   bash tools/run_yolov11_241.sh d5
   bash tools/run_yolov11_241.sh d7
   bash tools/run_yolov11_241.sh d9
+  bash tools/run_yolov11_241.sh d11
   bash tools/run_yolov11_241.sh d3
   bash tools/run_yolov11_241.sh d1
   bash tools/run_yolov11_241.sh b1 b2
@@ -179,19 +189,23 @@ ENABLE_A3="false"
 ENABLE_A5="false"
 ENABLE_A7="false"
 ENABLE_A9="false"
+ENABLE_A11="false"
 ENABLE_B1="false"
 ENABLE_B2="false"
 ENABLE_B3="false"
 ENABLE_B5="false"
 ENABLE_B7="false"
 ENABLE_B9="false"
+ENABLE_B11="false"
 ENABLE_C5="false"
 ENABLE_C7="false"
 ENABLE_C9="false"
+ENABLE_C11="false"
 ENABLE_D3="false"
 ENABLE_D5="false"
 ENABLE_D7="false"
 ENABLE_D9="false"
+ENABLE_D11="false"
 ENABLE_D1_ALIAS="false"
 UNKNOWN=()
 
@@ -201,22 +215,27 @@ for sw in "${SWITCHES[@]}"; do
     "" ) ;;
     hmc7|abcd7|a7_b7_c7_d7 ) ENABLE_A7="true"; ENABLE_B7="true"; ENABLE_C7="true"; ENABLE_D7="true" ;;
     pdd9|abcd9|a9_b9_c9_d9 ) ENABLE_A9="true"; ENABLE_B9="true"; ENABLE_C9="true"; ENABLE_D9="true" ;;
+    abcd11|a11_b11_c11_d11 ) ENABLE_A11="true"; ENABLE_B11="true"; ENABLE_C11="true"; ENABLE_D11="true" ;;
     a3 ) ENABLE_A3="true" ;;
     a5 ) ENABLE_A5="true" ;;
     a7 ) ENABLE_A7="true" ;;
     a9 ) ENABLE_A9="true" ;;
+    a11 ) ENABLE_A11="true" ;;
     b1 ) ENABLE_B1="true" ;;
     b2 ) ENABLE_B2="true" ;;
     b3 ) ENABLE_B3="true" ;;
     b5 ) ENABLE_B5="true" ;;
     b7 ) ENABLE_B7="true" ;;
     b9 ) ENABLE_B9="true" ;;
+    b11 ) ENABLE_B11="true" ;;
     c5 ) ENABLE_C5="true" ;;
     c7 ) ENABLE_C7="true" ;;
     c9 ) ENABLE_C9="true" ;;
+    c11 ) ENABLE_C11="true" ;;
     d5 ) ENABLE_D5="true" ;;
     d7 ) ENABLE_D7="true" ;;
     d9 ) ENABLE_D9="true" ;;
+    d11 ) ENABLE_D11="true" ;;
     d3 ) ENABLE_D3="true" ;;
     d1 ) ENABLE_D3="true"; ENABLE_D1_ALIAS="true" ;;
     * ) UNKNOWN+=("${sw}") ;;
@@ -224,30 +243,34 @@ for sw in "${SWITCHES[@]}"; do
 done
 
 if [[ ${#UNKNOWN[@]} -gt 0 ]]; then
-  echo "[error] Unsupported switches (hmc7/pdd9/a3/a5/a7/a9/b1/b2/b3/b5/b7/b9/c5/c7/c9/d5/d7/d9/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
+  echo "[error] Unsupported switches (hmc7/pdd9/abcd11, a3/a5/a7/a9/a11, b1/b2/b3/b5/b7/b9/b11, c5/c7/c9/c11, d5/d7/d9/d11/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
   exit 4
 fi
 
 CONFIG_TO_RUN="${BASE_CONFIG}"
 
-if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == "true" || "${ENABLE_A9}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_B5}" == "true" || "${ENABLE_B7}" == "true" || "${ENABLE_B9}" == "true" || "${ENABLE_C5}" == "true" || "${ENABLE_C7}" == "true" || "${ENABLE_C9}" == "true" || "${ENABLE_D5}" == "true" || "${ENABLE_D7}" == "true" || "${ENABLE_D9}" == "true" || "${ENABLE_D3}" == "true" ]]; then
+if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == "true" || "${ENABLE_A9}" == "true" || "${ENABLE_A11}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_B5}" == "true" || "${ENABLE_B7}" == "true" || "${ENABLE_B9}" == "true" || "${ENABLE_B11}" == "true" || "${ENABLE_C5}" == "true" || "${ENABLE_C7}" == "true" || "${ENABLE_C9}" == "true" || "${ENABLE_C11}" == "true" || "${ENABLE_D5}" == "true" || "${ENABLE_D7}" == "true" || "${ENABLE_D9}" == "true" || "${ENABLE_D11}" == "true" || "${ENABLE_D3}" == "true" ]]; then
   ENABLED_KEYS=()
   [[ "${ENABLE_A3}" == "true" ]] && ENABLED_KEYS+=("a3")
   [[ "${ENABLE_A5}" == "true" ]] && ENABLED_KEYS+=("a5")
   [[ "${ENABLE_A7}" == "true" ]] && ENABLED_KEYS+=("a7")
   [[ "${ENABLE_A9}" == "true" ]] && ENABLED_KEYS+=("a9")
+  [[ "${ENABLE_A11}" == "true" ]] && ENABLED_KEYS+=("a11")
   [[ "${ENABLE_B1}" == "true" ]] && ENABLED_KEYS+=("b1")
   [[ "${ENABLE_B2}" == "true" ]] && ENABLED_KEYS+=("b2")
   [[ "${ENABLE_B3}" == "true" ]] && ENABLED_KEYS+=("b3")
   [[ "${ENABLE_B5}" == "true" ]] && ENABLED_KEYS+=("b5")
   [[ "${ENABLE_B7}" == "true" ]] && ENABLED_KEYS+=("b7")
   [[ "${ENABLE_B9}" == "true" ]] && ENABLED_KEYS+=("b9")
+  [[ "${ENABLE_B11}" == "true" ]] && ENABLED_KEYS+=("b11")
   [[ "${ENABLE_C5}" == "true" ]] && ENABLED_KEYS+=("c5")
   [[ "${ENABLE_C7}" == "true" ]] && ENABLED_KEYS+=("c7")
   [[ "${ENABLE_C9}" == "true" ]] && ENABLED_KEYS+=("c9")
+  [[ "${ENABLE_C11}" == "true" ]] && ENABLED_KEYS+=("c11")
   [[ "${ENABLE_D5}" == "true" ]] && ENABLED_KEYS+=("d5")
   [[ "${ENABLE_D7}" == "true" ]] && ENABLED_KEYS+=("d7")
   [[ "${ENABLE_D9}" == "true" ]] && ENABLED_KEYS+=("d9")
+  [[ "${ENABLE_D11}" == "true" ]] && ENABLED_KEYS+=("d11")
   if [[ "${ENABLE_D1_ALIAS}" == "true" ]]; then
     ENABLED_KEYS+=("d1")
   elif [[ "${ENABLE_D3}" == "true" ]]; then
@@ -280,6 +303,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == 
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a9.yaml"
         DERIVED_SUFFIX="__a9"
         ;;
+      a11 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a11.yaml"
+        DERIVED_SUFFIX="__a11"
+        ;;
       b3 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b3.yaml"
         DERIVED_SUFFIX="__b3"
@@ -296,6 +323,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == 
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b9.yaml"
         DERIVED_SUFFIX="__b9"
         ;;
+      b11 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b11.yaml"
+        DERIVED_SUFFIX="__b11"
+        ;;
       c5 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c5.yaml"
         DERIVED_SUFFIX="__c5"
@@ -308,6 +339,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == 
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c9.yaml"
         DERIVED_SUFFIX="__c9"
         ;;
+      c11 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c11.yaml"
+        DERIVED_SUFFIX="__c11"
+        ;;
       d5 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d5.yaml"
         DERIVED_SUFFIX="__d5"
@@ -319,6 +354,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == 
       d9 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d9.yaml"
         DERIVED_SUFFIX="__d9"
+        ;;
+      d11 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d11.yaml"
+        DERIVED_SUFFIX="__d11"
         ;;
       d1 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d1.yaml"
@@ -363,20 +402,24 @@ enh["a3"] = False
 enh["a5"] = False
 enh["a7"] = False
 enh["a9"] = False
+enh["a11"] = False
 enh["b1"] = False
 enh["b2"] = False
 enh["b3"] = False
 enh["b5"] = False
 enh["b7"] = False
 enh["b9"] = False
+enh["b11"] = False
 enh["c5"] = False
 enh["c7"] = False
 enh["c9"] = False
+enh["c11"] = False
 enh["d1"] = False
 enh["d3"] = False
 enh["d5"] = False
 enh["d7"] = False
 enh["d9"] = False
+enh["d11"] = False
 for k in keys:
     if k == "d1":
         enh["d1"] = True
@@ -417,6 +460,7 @@ export _E241_ENABLE_D3="${ENABLE_D3}"
 export _E241_ENABLE_D5="${ENABLE_D5}"
 export _E241_ENABLE_D7="${ENABLE_D7}"
 export _E241_ENABLE_D9="${ENABLE_D9}"
+export _E241_ENABLE_D11="${ENABLE_D11}"
 export _E241_SAFE_BATCH="${E241_SAFE_BATCH}"
 export _E241_SAFE_WORKERS="${E241_SAFE_WORKERS}"
 export _E241_VRAM_GUARD="${E241_VRAM_GUARD}"
@@ -432,6 +476,7 @@ enable_d3_arg = str(os.environ.get("_E241_ENABLE_D3", "false")).lower() == "true
 enable_d5_arg = str(os.environ.get("_E241_ENABLE_D5", "false")).lower() == "true"
 enable_d7_arg = str(os.environ.get("_E241_ENABLE_D7", "false")).lower() == "true"
 enable_d9_arg = str(os.environ.get("_E241_ENABLE_D9", "false")).lower() == "true"
+enable_d11_arg = str(os.environ.get("_E241_ENABLE_D11", "false")).lower() == "true"
 safe_batch = int(os.environ.get("_E241_SAFE_BATCH", "6"))
 safe_workers = int(os.environ.get("_E241_SAFE_WORKERS", "4"))
 vram_guard_mode = str(os.environ.get("_E241_VRAM_GUARD", "auto")).lower().strip()
@@ -451,7 +496,7 @@ if not isinstance(enh, dict):
 
 enhance_enabled = any(
     bool(enh.get(k, False))
-    for k in ("a3", "a5", "a7", "a9", "b1", "b2", "b3", "b5", "b7", "b9", "c5", "c7", "c9", "d1", "d3", "d5", "d7", "d9")
+    for k in ("a3", "a5", "a7", "a9", "a11", "b1", "b2", "b3", "b5", "b7", "b9", "b11", "c5", "c7", "c9", "c11", "d1", "d3", "d5", "d7", "d9", "d11")
 )
 if not enhance_enabled:
     raise SystemExit(0)
@@ -460,6 +505,7 @@ enable_d3 = enable_d3_arg or bool(enh.get("d3", False)) or bool(enh.get("d1", Fa
 enable_d5 = enable_d5_arg or bool(enh.get("d5", False))
 enable_d7 = enable_d7_arg or bool(enh.get("d7", False))
 enable_d9 = enable_d9_arg or bool(enh.get("d9", False))
+enable_d11 = enable_d11_arg or bool(enh.get("d11", False))
 changed = False
 
 
