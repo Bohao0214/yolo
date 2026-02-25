@@ -77,6 +77,7 @@ Options:
 Notes:
   - grad_accum is recorded in generated config and summary for traceability.
   - current src/train.py may not consume grad_accum directly.
+  - output layout: experiments/<yolo_version>/<exp_group_hp>/<exp_group_hp__case_tag>/exp_*
 
 Env overrides:
   BASE_CONFIG, SWEEP_TAG, MODULES_RAW, HPARAMS_RAW, GRID_RAW, MAX_CASES_OVERRIDE
@@ -532,10 +533,13 @@ if switches:
     if not exp_name.endswith(module_suffix):
         exp_name = exp_name + module_suffix
 
-hp_suffix = f"__hp__{case_tag}"
-if not exp_name.endswith(hp_suffix):
-    exp_name = exp_name + hp_suffix
-cfg["exp_name"] = exp_name
+# New layout:
+#   experiments/<yolo_version>/<group_hp>/<group_hp__case_tag>/exp_*
+# Example:
+#   experiments/yolo11/defect241__a3__c5__hp/defect241__a3__c5__hp__c001_xxx/exp_*
+exp_group_hp = exp_name if exp_name.endswith("__hp") else f"{exp_name}__hp"
+case_exp_name = f"{exp_group_hp}__{case_tag}"
+cfg["exp_name"] = f"{exp_group_hp}/{case_exp_name}"
 
 cfg["epochs"] = int(hparams["epochs"])
 cfg["patience"] = int(hparams["patience"])
@@ -569,7 +573,7 @@ hparam_text = (
     f"warmup_epochs={cfg['warmup_epochs']:g}"
 )
 
-print(f"{exp_name}\t{yolo_version}\t{hparam_text}")
+print(f"{cfg['exp_name']}\t{yolo_version}\t{hparam_text}")
 PY
 }
 
