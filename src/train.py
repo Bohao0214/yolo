@@ -290,18 +290,24 @@ def _collect_file_hashes(project_root: Path) -> List[Dict[str, str]]:
         project_root / "configs" / "yolo11" / "enhance241" / "defect241.yaml",
         project_root / "configs" / "yolo11" / "enhance241" / "defect241b2.yaml",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a3.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a4.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a21.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a11.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a5.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b2.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b21.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b3.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b5.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241b11.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241c4.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241c21.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241c5.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241c11.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d1.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d3.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d5.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d11.py",
+        project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241d21.py",
     ]
     out: List[Dict[str, str]] = []
     for p in targets:
@@ -542,10 +548,12 @@ def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
     enh = _enhance241_cfg(cfg)
     keys = [
         "a3",
+        "a4",
         "a5",
         "a7",
         "a9",
         "a11",
+        "a21",
         "b1",
         "b2",
         "b3",
@@ -553,7 +561,10 @@ def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
         "b7",
         "b9",
         "b11",
+        "b21",
+        "c4",
         "c5",
+        "c21",
         "c7",
         "c9",
         "c11",
@@ -563,6 +574,7 @@ def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
         "d7",
         "d9",
         "d11",
+        "d21",
     ]
     return [k for k in keys if bool(enh.get(k, False))]
 
@@ -592,6 +604,8 @@ def _collect_patched(seq: Any) -> List[str]:
         "P4P3GateAlignFuse",
         "P3FuseChain",
         "SPDConvDownsample",
+        "A4DualDeltaSafe",
+        "A21DualDeltaSafe",
         "A5P3Residual",
         "A11GAMResidual",
         "C3HBHorNetSafe",
@@ -599,8 +613,11 @@ def _collect_patched(seq: Any) -> List[str]:
         "NASFPNLiteFuse",
         "B5GFPNFuse",
         "B11TinyP2Fuse",
+        "B21CARAFEUpsampleSafe",
         "CARAFEUpsampleSafe",
         "B9ImprovedCSPFuseSafe",
+        "C4C5C11Inject",
+        "C21C5C11Inject",
         "C5BRAInject",
         "C11HeadGateInject",
         "C7MCBAMInject",
@@ -610,6 +627,7 @@ def _collect_patched(seq: Any) -> List[str]:
         "P6Downsample",
         "D9HeadScoreCalib",
         "D11ClsScoreCalib",
+        "D21ClsScoreCalib",
     }
     out: List[str] = []
     for i, layer in enumerate(seq or []):
@@ -700,10 +718,12 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
     info: Dict[str, Any] = {}
     for key, attr in (
         ("a3", "_enhance241_a3_info"),
+        ("a4", "_enhance241_a4_info"),
         ("a5", "_enhance241_a5_info"),
         ("a7", "_enhance241_a7_info"),
         ("a9", "_enhance241_a9_info"),
         ("a11", "_enhance241_a11_info"),
+        ("a21", "_enhance241_a21_info"),
         ("b1", "_enhance241_b1_info"),
         ("b2", "_enhance241_b2_info"),
         ("b3", "_enhance241_b3_info"),
@@ -711,7 +731,10 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
         ("b7", "_enhance241_b7_info"),
         ("b9", "_enhance241_b9_info"),
         ("b11", "_enhance241_b11_info"),
+        ("b21", "_enhance241_b21_info"),
+        ("c4", "_enhance241_c4_info"),
         ("c5", "_enhance241_c5_info"),
+        ("c21", "_enhance241_c21_info"),
         ("c7", "_enhance241_c7_info"),
         ("c9", "_enhance241_c9_info"),
         ("c11", "_enhance241_c11_info"),
@@ -721,6 +744,7 @@ def _collect_enhance241_infos(model: Any) -> Dict[str, Any]:
         ("d7", "_enhance241_d7_info"),
         ("d9", "_enhance241_d9_info"),
         ("d11", "_enhance241_d11_info"),
+        ("d21", "_enhance241_d21_info"),
     ):
         val = getattr(model, attr, None)
         if val is None and hasattr(model, "model"):
@@ -746,6 +770,12 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         ok = replaced == 1
         checks.append({"name": "a3_replace_count", "ok": ok, "detail": f"count={replaced}"})
 
+    if "a4" in enabled:
+        a4 = info.get("a4", {}) if isinstance(info, dict) else {}
+        patched = int(a4.get("patched_count", 0)) + int(a4.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "a4_patch_count", "ok": ok, "detail": f"count={patched}"})
+
     if "a5" in enabled:
         a5 = info.get("a5", {}) if isinstance(info, dict) else {}
         patched = int(a5.get("patched_count", 0)) + int(a5.get("existing_count", 0))
@@ -769,6 +799,12 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         patched = int(a11.get("patched_count", 0)) + int(a11.get("existing_count", 0))
         ok = patched == 1
         checks.append({"name": "a11_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "a21" in enabled:
+        a21 = info.get("a21", {}) if isinstance(info, dict) else {}
+        patched = int(a21.get("patched_count", 0)) + int(a21.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "a21_patch_count", "ok": ok, "detail": f"count={patched}"})
 
     if "b3" in enabled:
         b3 = info.get("b3", {}) if isinstance(info, dict) else {}
@@ -807,11 +843,29 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
             }
         )
 
+    if "b21" in enabled:
+        b21 = info.get("b21", {}) if isinstance(info, dict) else {}
+        patched = int(b21.get("patched_count", 0)) + int(b21.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "b21_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "c4" in enabled:
+        c4 = info.get("c4", {}) if isinstance(info, dict) else {}
+        patched = int(c4.get("patched_count", 0)) + int(c4.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "c4_patch_count", "ok": ok, "detail": f"count={patched}"})
+
     if "c5" in enabled:
         c5 = info.get("c5", {}) if isinstance(info, dict) else {}
         patched = int(c5.get("patched_count", 0)) + int(c5.get("existing_count", 0))
         ok = patched == 1
         checks.append({"name": "c5_patch_count", "ok": ok, "detail": f"count={patched}"})
+
+    if "c21" in enabled:
+        c21 = info.get("c21", {}) if isinstance(info, dict) else {}
+        patched = int(c21.get("patched_count", 0)) + int(c21.get("existing_count", 0))
+        ok = patched == 1
+        checks.append({"name": "c21_patch_count", "ok": ok, "detail": f"count={patched}"})
 
     if "c7" in enabled:
         c7 = info.get("c7", {}) if isinstance(info, dict) else {}
@@ -908,6 +962,18 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
         checks.append(
             {
                 "name": "d11_score_calib_patch",
+                "ok": ok,
+                "detail": f"patched_or_existing={patched}",
+            }
+        )
+
+    if "d21" in enabled:
+        d21 = info.get("d21", {}) if isinstance(info, dict) else {}
+        patched = int(d21.get("patched_count", 0)) + int(d21.get("existing_count", 0))
+        ok = patched >= 1
+        checks.append(
+            {
+                "name": "d21_score_calib_patch",
                 "ok": ok,
                 "detail": f"patched_or_existing={patched}",
             }
@@ -1014,71 +1080,83 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
 
     enabled = _enhance241_enabled_keys(cfg)
     if enabled:
-        a_enabled = [k for k in ("a3", "a5", "a7", "a9", "a11") if k in enabled]
+        a_enabled = [k for k in ("a3", "a4", "a5", "a7", "a9", "a11", "a21") if k in enabled]
         if len(a_enabled) > 1:
-            raise RuntimeError(f"enhance241 A-class conflict: {a_enabled}; enable only one of a3/a5/a7/a9/a11.")
+            raise RuntimeError(f"enhance241 A-class conflict: {a_enabled}; enable only one of a3/a4/a5/a7/a9/a11/a21.")
 
-        b_enabled = [k for k in ("b1", "b2", "b3", "b5", "b7", "b9", "b11") if k in enabled]
+        b_enabled = [k for k in ("b1", "b2", "b3", "b5", "b7", "b9", "b11", "b21") if k in enabled]
         if len(b_enabled) > 1:
-            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5/b7/b9/b11.")
+            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5/b7/b9/b11/b21.")
 
-        c_enabled = [k for k in ("c5", "c7", "c9", "c11") if k in enabled]
+        c_enabled = [k for k in ("c4", "c5", "c7", "c9", "c11", "c21") if k in enabled]
         if len(c_enabled) > 1:
-            raise RuntimeError(f"enhance241 C-class conflict: {c_enabled}; enable only one of c5/c7/c9/c11.")
+            raise RuntimeError(f"enhance241 C-class conflict: {c_enabled}; enable only one of c4/c5/c7/c9/c11/c21.")
 
         d_enabled_norm = []
         for k in enabled:
             if k in ("d1", "d3"):
                 d_enabled_norm.append("d3")
-            elif k in ("d5", "d7", "d9", "d11"):
+            elif k in ("d5", "d7", "d9", "d11", "d21"):
                 d_enabled_norm.append(k)
         d_enabled_norm = sorted(set(d_enabled_norm))
         if len(d_enabled_norm) > 1:
-            raise RuntimeError(f"enhance241 D-class conflict: {d_enabled_norm}; enable only one of d3/d5/d7/d9/d11.")
+            raise RuntimeError(f"enhance241 D-class conflict: {d_enabled_norm}; enable only one of d3/d5/d7/d9/d11/d21.")
 
         if "b11" in enabled and "d5" in enabled:
             raise RuntimeError("enhance241 conflict: b11 and d5 both add stride=4 tiny head; enable only one.")
         from third_party.yolo11.enhance241 import (
             yolo11_241a3,
+            yolo11_241a4,
             yolo11_241a11,
+            yolo11_241a21,
             yolo11_241a5,
             yolo11_241a7,
             yolo11_241a9,
             yolo11_241b1,
             yolo11_241b11,
+            yolo11_241b21,
             yolo11_241b2,
             yolo11_241b3,
             yolo11_241b5,
             yolo11_241b7,
             yolo11_241b9,
+            yolo11_241c4,
+            yolo11_241c21,
             yolo11_241c5,
             yolo11_241c11,
             yolo11_241c7,
             yolo11_241c9,
             yolo11_241d3,
             yolo11_241d11,
+            yolo11_241d21,
             yolo11_241d5,
             yolo11_241d7,
             yolo11_241d9,
         )
 
         model = yolo11_241a3.apply(model, cfg)
+        model = yolo11_241a4.apply(model, cfg)
         model = yolo11_241a11.apply(model, cfg)
+        model = yolo11_241a21.apply(model, cfg)
         model = yolo11_241a5.apply(model, cfg)
         model = yolo11_241a7.apply(model, cfg)
         model = yolo11_241a9.apply(model, cfg)
         model = yolo11_241b1.apply(model, cfg)
         model = yolo11_241b11.apply(model, cfg)
+        model = yolo11_241b21.apply(model, cfg)
         model = yolo11_241b2.apply(model, cfg)
         model = yolo11_241b3.apply(model, cfg)
         model = yolo11_241b5.apply(model, cfg)
         model = yolo11_241b7.apply(model, cfg)
         model = yolo11_241b9.apply(model, cfg)
+        model = yolo11_241c4.apply(model, cfg)
+        model = yolo11_241c21.apply(model, cfg)
         model = yolo11_241c5.apply(model, cfg)
         model = yolo11_241c11.apply(model, cfg)
         model = yolo11_241c7.apply(model, cfg)
         model = yolo11_241c9.apply(model, cfg)
         model = yolo11_241d11.apply(model, cfg)
+        model = yolo11_241d21.apply(model, cfg)
         model = yolo11_241d5.apply(model, cfg)
         model = yolo11_241d7.apply(model, cfg)
         model = yolo11_241d9.apply(model, cfg)

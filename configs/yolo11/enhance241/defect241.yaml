@@ -61,7 +61,7 @@ threshold_sweep:
   curve: [0.01, 0.01, 1.00]   # start, step, end
   table: [0.00, 0.05, 1.00]   # start, step, end
 
-# enhance241 开关（实现 a3/a5/a7/a9/a11/b1/b2/b3/b5/b7/b9/b11/c5/c7/c9/c11/d3/d5/d7/d9/d11；d1 保留为 d3 兼容别名）
+# enhance241 开关（实现 a3/a4/a5/a7/a9/a11/a21/b1/b2/b3/b5/b7/b9/b11/b21/c4/c5/c7/c9/c11/c21/d3/d5/d7/d9/d11/d21；d1 保留为 d3 兼容别名）
 enhance241:
   a2: false
   a3: false
@@ -69,6 +69,14 @@ enhance241:
   a3_pre_div: 4
   a3_alpha_init: 0.05
   a3_alpha_cap: 0.5
+  a4: false
+  a4_refine: "dw"   # a4=fuse(a3,a7) dual-delta
+  a4_pre_div: 4
+  a4_order: 3
+  a4_alpha1_init: 0.05
+  a4_alpha1_cap: 0.5
+  a4_alpha2_init: 0.0
+  a4_alpha2_cap: 0.5
   a5: false
   a5_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
   a5_depth: 1
@@ -90,6 +98,14 @@ enhance241:
   a11_mode: "safe_residual"
   a11_alpha_init: 0.0
   a11_alpha_cap: 0.5
+  a21: false
+  a21_refine: "dw"  # a21 组合包：a3为主+a7弱注入
+  a21_pre_div: 4
+  a21_order: 3
+  a21_alpha1_init: 0.05
+  a21_alpha1_cap: 0.5
+  a21_alpha2_init: 0.0
+  a21_alpha2_cap: 0.5
   b1: false
   b2: false
   b1_version: "v3"
@@ -138,8 +154,26 @@ enhance241:
   b11_upsample: "nearest"
   b11_alpha_init: 0.0
   b11_alpha_cap: 0.5
+  b21: false
+  b21_kernel_size: 5
+  b21_compress: 64
+  b21_chunk_channels: 64
+  b21_alpha_init: 0.02
+  b21_alpha_cap: 0.3
   debug_stats: false
   c1: false
+  c4: false
+  c4_topk: 4
+  c4_window_size: 8
+  c4_num_heads: 4
+  c4_kv_downsample_mode: "avg"
+  c4_soft_routing: true
+  c4_gate_mode: "se"
+  c4_gate_reduction: 16
+  c4_alpha5_init: 0.05
+  c4_alpha5_cap: 0.5
+  c4_alpha11_init: 0.01
+  c4_alpha11_cap: 0.5
   c5: false
   c5_topk: 4
   c5_window_size: 8
@@ -165,6 +199,18 @@ enhance241:
   c11_apply_to: ["P3", "P2_new"]
   c11_alpha_init: 0.0
   c11_alpha_cap: 0.5
+  c21: false
+  c21_topk: 4
+  c21_window_size: 8
+  c21_num_heads: 4
+  c21_kv_downsample_mode: "avg"
+  c21_soft_routing: true
+  c21_gate_mode: "se"
+  c21_gate_reduction: 16
+  c21_alpha5_init: 0.05
+  c21_alpha5_cap: 0.5
+  c21_alpha11_init: 0.01
+  c21_alpha11_cap: 0.5
   d3: false
   d3_temp_init: 1.0
   d3_temp_min: 0.7
@@ -189,4 +235,12 @@ enhance241:
   d11_bias_shift_init: 0.0
   d11_alpha_init: 0.0
   d11_alpha_cap: 0.5
+  d21: false
+  d21_apply_to: ["P3", "P2_new"]
+  d21_temp_init: 1.0
+  d21_temp_min: 0.7
+  d21_temp_max: 2.0
+  d21_bias_shift_init: 0.0
+  d21_alpha_init: 0.0
+  d21_alpha_cap: 0.5
   d1: false               # legacy alias of d3

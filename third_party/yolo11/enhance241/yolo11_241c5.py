@@ -233,7 +233,12 @@ class C5BRAInject(torch.nn.Module):
 
         if recorder is not None:
             if step == 0:
-                recorder.record_module_compare(f"{prefix}.p3", patched=out, baseline=y_base, input_tensor=x)
+                recorder.record_module_compare(
+                    f"{prefix}.p3",
+                    patched=out,
+                    baseline=y_base,
+                    input_tensor=_to_input_tensor(x),
+                )
                 v_base = _safe_float(y_base.detach().float().var(unbiased=False).item(), 0.0)
                 v_out = _safe_float(out.detach().float().var(unbiased=False).item(), 0.0)
                 cos = _safe_float(
@@ -290,23 +295,46 @@ def _extract_model_seq(model: Any) -> Tuple[Any, Optional[Any]]:
     return yolo_obj, seq
 
 
+def _to_input_tensor(x: Any) -> Optional[torch.Tensor]:
+    if isinstance(x, torch.Tensor):
+        return x
+    if isinstance(x, (list, tuple)):
+        for item in x:
+            if isinstance(item, torch.Tensor):
+                return item
+    return None
+
+
+def _infer_p3_head_index(detect: Any) -> int:
+    f = getattr(detect, "f", [])
+    if isinstance(f, int):
+        return 0
+    if isinstance(f, (list, tuple)):
+        if len(f) >= 4:
+            return 1
+        if len(f) >= 1:
+            return 0
+    raise RuntimeError(f"Unable to locate P3 head index from Detect.f={f}")
+
+
 def _infer_p3_output_index(seq: Any) -> int:
     _, detect = _locate_detect(seq)
     f = getattr(detect, "f", [])
     if isinstance(f, int):
         return int(f)
     if isinstance(f, (list, tuple)) and f:
-        return int(f[0])
+        return int(f[_infer_p3_head_index(detect)])
     raise RuntimeError(f"Unable to locate P3 output index from Detect.f={f}")
 
 
 def _infer_p3_channels(detect: Any) -> int:
+    p3_head_idx = _infer_p3_head_index(detect)
     try:
-        return int(detect.cv2[0][0].conv.in_channels)  # type: ignore[index]
+        return int(detect.cv2[p3_head_idx][0].conv.in_channels)  # type: ignore[index]
     except Exception:
         pass
     try:
-        first = detect.cv3[0]  # type: ignore[index]
+        first = detect.cv3[p3_head_idx]  # type: ignore[index]
         for m in first.modules():
             if isinstance(m, torch.nn.Conv2d):
                 return int(m.in_channels)

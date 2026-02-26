@@ -4,6 +4,7 @@ from __future__ import annotations
 # Purpose: enhance241 a3 (SPDConvDownsample) module + apply hook + debug checks.
 
 import atexit
+import csv
 import datetime as dt
 import json
 import os
@@ -313,6 +314,12 @@ def _resolve_project_root(cfg: Any) -> Path:
 
 
 def _resolve_exp_dir(cfg: Any) -> Optional[Path]:
+    env_exp = str(os.environ.get("ENHANCE241_EXP_DIR", "")).strip()
+    if env_exp:
+        p = Path(env_exp).expanduser().resolve()
+        if p.exists():
+            return p
+
     project_root = _resolve_project_root(cfg)
     yolo_version = str(_deep_get(cfg, "yolo_version", default="yolo11"))
     exp_name = str(_deep_get(cfg, "exp_name", default="defect241"))
@@ -347,13 +354,14 @@ def _resolve_exp_dir(cfg: Any) -> Optional[Path]:
 
 def maybe_open_md(cfg: Any, exp_dir: Optional[Path], module_key: str = "a3") -> Optional[Path]:
     _ = cfg
+    _ = module_key
     if exp_dir is None:
         return None
     try:
-        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "train").mkdir(parents=True, exist_ok=True)
     except Exception:
         return None
-    return exp_dir / f"enhance241_check_{module_key}.md"
+    return exp_dir / "train" / "enhance241_check.md"
 
 
 def _git_hash(project_root: Path) -> str:
@@ -845,10 +853,124 @@ class Enhance241CheckRecorder:
                     "neg_count": int(len(neg_scores)),
                     "pos_max_conf": _vector_summary(pos_tensor),
                     "neg_max_conf": _vector_summary(neg_tensor),
+                    "pos_scores_raw": [float(v) for v in pos_scores[:5000]],
+                    "neg_scores_raw": [float(v) for v in neg_scores[:5000]],
                     "sample_rows": sample_rows,
                 }
         except Exception as exc:
             self.add_note(f"A3 predict failed: {exc}")
+
+    def _write_roc_overlay_artifacts(self) -> Dict[str, Any]:
+        pos_scores = self.a3.get("pos_scores_raw", []) if isinstance(self.a3, dict) else []
+        neg_scores = self.a3.get("neg_scores_raw", []) if isinstance(self.a3, dict) else []
+        if not isinstance(pos_scores, list) or not isinstance(neg_scores, list):
+            return {}
+        if len(pos_scores) == 0 or len(neg_scores) == 0:
+            return {}
+
+        train_dir = self.exp_dir / "train"
+        train_dir.mkdir(parents=True, exist_ok=True)
+        run_tag = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+        module_tag = str(self.module_key)
+
+        roc_rows: List[Dict[str, Any]] = []
+        thresholds = [i / 100.0 for i in range(101)]
+        n_pos = float(max(1, len(pos_scores)))
+        n_neg = float(max(1, len(neg_scores)))
+        for thr in thresholds:
+            tp = sum(1 for v in pos_scores if float(v) >= thr)
+            fp = sum(1 for v in neg_scores if float(v) >= thr)
+            recall = float(tp) / n_pos
+            fpr = float(fp) / n_neg
+            roc_rows.append(
+                {
+                    "module": module_tag,
+                    "run_tag": run_tag,
+                    "threshold": float(thr),
+                    "recall": float(recall),
+                    "fpr": float(fpr),
+                }
+            )
+
+        roc_csv = train_dir / "roc_overlay.csv"
+        new_file = not roc_csv.exists()
+        with roc_csv.open("a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["module", "run_tag", "threshold", "recall", "fpr"])
+            if new_file:
+                writer.writeheader()
+            writer.writerows(roc_rows)
+
+        targets = [0.05, 0.10, 0.30]
+        key_rows: List[Dict[str, Any]] = []
+        for target in targets:
+            best = min(roc_rows, key=lambda r: abs(float(r["fpr"]) - float(target)))
+            key_rows.append(
+                {
+                    "module": module_tag,
+                    "run_tag": run_tag,
+                    "target_fpr": float(target),
+                    "threshold": float(best["threshold"]),
+                    "fpr": float(best["fpr"]),
+                    "recall": float(best["recall"]),
+                }
+            )
+
+        key_csv = train_dir / "roc_keypoints.csv"
+        key_new = not key_csv.exists()
+        with key_csv.open("a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["module", "run_tag", "target_fpr", "threshold", "fpr", "recall"])
+            if key_new:
+                writer.writeheader()
+            writer.writerows(key_rows)
+
+        roc_png = train_dir / "roc_overlay.png"
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+
+            curves: Dict[str, List[Dict[str, Any]]] = {}
+            with roc_csv.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    mod = str(row.get("module", "")).strip()
+                    tag = str(row.get("run_tag", "")).strip()
+                    if not mod or not tag:
+                        continue
+                    k = f"{mod}:{tag}"
+                    curves.setdefault(k, []).append(row)
+
+            latest_by_module: Dict[str, str] = {}
+            for key in curves:
+                mod, _, tag = key.partition(":")
+                old_tag = latest_by_module.get(mod)
+                if old_tag is None or tag > old_tag:
+                    latest_by_module[mod] = tag
+
+            fig, ax = plt.subplots(figsize=(7.2, 5.0), dpi=150)
+            for mod, tag in sorted(latest_by_module.items()):
+                key = f"{mod}:{tag}"
+                rows = curves.get(key, [])
+                rows_sorted = sorted(rows, key=lambda r: float(r.get("fpr", 0.0)))
+                xs = [float(r.get("fpr", 0.0)) for r in rows_sorted]
+                ys = [float(r.get("recall", 0.0)) for r in rows_sorted]
+                ax.plot(xs, ys, linewidth=1.0, label=f"{mod}@{tag[-6:]}")
+            ax.set_xlabel("FPR")
+            ax.set_ylabel("Recall")
+            ax.set_title("enhance241 ROC overlay")
+            ax.grid(True, linewidth=0.4, alpha=0.4)
+            if latest_by_module:
+                ax.legend(fontsize=8)
+            fig.tight_layout()
+            fig.savefig(roc_png)
+            plt.close(fig)
+        except Exception as exc:
+            self.add_note(f"roc_overlay_plot_failed:{exc}")
+
+        return {
+            "roc_overlay_csv": str(roc_csv),
+            "roc_overlay_png": str(roc_png),
+            "roc_keypoints_csv": str(key_csv),
+            "roc_keypoints": key_rows,
+        }
 
     def _judge_conclusion(self) -> Tuple[str, List[str]]:
         reasons: List[str] = []
@@ -930,11 +1052,31 @@ class Enhance241CheckRecorder:
             self._flushed = True
 
         conclusion, reasons = self._judge_conclusion()
+        roc_artifacts = self._write_roc_overlay_artifacts()
 
         enabled_flags = []
         enh = _deep_get(self.cfg, "enhance241", default={}) or {}
         if isinstance(enh, dict):
             enabled_flags = [k for k, v in enh.items() if isinstance(v, bool) and v]
+
+        params_map = self.a2.get("params", {}) if isinstance(self.a2, dict) else {}
+        grad_map = self.a2.get("grad_l2", {}) if isinstance(self.a2, dict) else {}
+        delta_map = self.a2.get("delta_l2", {}) if isinstance(self.a2, dict) else {}
+        param_total = int(len(params_map)) if isinstance(params_map, dict) else 0
+        param_trainable = int(
+            sum(
+                1
+                for v in (params_map.values() if isinstance(params_map, dict) else [])
+                if isinstance(v, dict) and bool(v.get("requires_grad", False))
+            )
+        )
+        gate0_ok = bool(param_trainable > 0)
+        gate2_ok = bool(
+            isinstance(grad_map, dict)
+            and isinstance(delta_map, dict)
+            and any(abs(_to_float(v, 0.0)) > 0.0 for v in grad_map.values())
+            and any(abs(_to_float(v, 0.0)) > 0.0 for v in delta_map.values())
+        )
 
         lines: List[str] = []
         lines.append(f"\n## Run {dt.datetime.now().isoformat(timespec='seconds')}")
@@ -947,12 +1089,18 @@ class Enhance241CheckRecorder:
         lines.append(json.dumps(self.patch_info, ensure_ascii=False, indent=2))
         lines.append("```")
 
+        lines.append("### Gate-0 Optimizer Registration")
+        lines.append(f"- pass: `{gate0_ok}`")
+        lines.append(f"- params_total: `{param_total}`")
+        lines.append(f"- params_trainable: `{param_trainable}`")
+
         lines.append("### Gate-1 Step0 Equivalence (legacy: A1)")
         lines.append("```json")
         lines.append(json.dumps(self.a1, ensure_ascii=False, indent=2))
         lines.append("```")
 
         lines.append("### Gate-2 Trainability (legacy: A2)")
+        lines.append(f"- pass: `{gate2_ok}`")
         lines.append("```json")
         lines.append(json.dumps(self.a2, ensure_ascii=False, indent=2))
         lines.append("```")
@@ -966,6 +1114,15 @@ class Enhance241CheckRecorder:
             lines.append("### B-Specific")
             lines.append("```json")
             lines.append(json.dumps(self.b_specific, ensure_ascii=False, indent=2))
+            lines.append("```")
+
+        if roc_artifacts:
+            lines.append("### ROC Overlay")
+            lines.append(f"- roc_overlay_png: `{roc_artifacts.get('roc_overlay_png', '')}`")
+            lines.append(f"- roc_overlay_csv: `{roc_artifacts.get('roc_overlay_csv', '')}`")
+            lines.append(f"- roc_keypoints_csv: `{roc_artifacts.get('roc_keypoints_csv', '')}`")
+            lines.append("```json")
+            lines.append(json.dumps(roc_artifacts.get("roc_keypoints", []), ensure_ascii=False, indent=2))
             lines.append("```")
 
         if self.notes:

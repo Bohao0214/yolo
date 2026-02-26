@@ -404,6 +404,17 @@ def apply(model: Any, cfg: Any) -> Any:
     detect_f_after = [int(detect_idx)] + [int(x) for x in old_f]
     detect.f = detect_f_after
 
+    # Ensure source feature indices used by B11TinyP2Fuse/Detect are cached in det_model.save.
+    if hasattr(det_model, "save"):
+        try:
+            save = list(getattr(det_model, "save", []))
+            for idx in detect_f_after + [p2_idx, p3_idx]:
+                if int(idx) >= 0:
+                    save.append(int(idx))
+            det_model.save = sorted(set(save))
+        except Exception:
+            pass
+
     detect.cv2 = _prepend_branch(detect.cv2)
     detect.cv3 = _prepend_branch(detect.cv3)
     if hasattr(detect, "one2one_cv2") and isinstance(detect.one2one_cv2, torch.nn.ModuleList) and len(detect.one2one_cv2):
