@@ -93,7 +93,6 @@ class HorNetC3HBDelta(torch.nn.Module):
         refine = str(refine).lower()
 
         self.pre = torch.nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=True)
-        self.base_gate = torch.nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=True)
         self.gate = torch.nn.Conv2d(
             self.channels, self.channels * self.order, kernel_size=1, stride=1, padding=0, bias=True
         )
@@ -101,23 +100,16 @@ class HorNetC3HBDelta(torch.nn.Module):
         self.blocks = torch.nn.ModuleList([block_cls(self.channels) for _ in range(self.order)])
         self.out = torch.nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=True)
 
-        # Safe interaction start: base gate starts near 0.5 so it does not over-suppress at step-0.
-        torch.nn.init.zeros_(self.base_gate.weight)
-        if self.base_gate.bias is not None:
-            torch.nn.init.zeros_(self.base_gate.bias)
         # Safe start: delta branch final projection starts from zero.
         torch.nn.init.zeros_(self.out.weight)
         if self.out.bias is not None:
             torch.nn.init.zeros_(self.out.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        p0 = self.pre(x)
-        base_gate = torch.sigmoid(self.base_gate(x))
-        p = p0
+        p = self.pre(x)
         gates = torch.chunk(self.gate(x), self.order, dim=1)
         for i, blk in enumerate(self.blocks):
-            stage_gate = torch.sigmoid(gates[i]) * base_gate
-            p = blk(p) * stage_gate
+            p = blk(p * torch.sigmoid(gates[i]))
         return self.out(p)
 
 

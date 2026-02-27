@@ -142,6 +142,9 @@ enhance241:
   b7_kernel_size: 5
   b7_compress: 64
   b7_chunk_channels: 64   # CARAFE 重组分块通道数，减小显存峰值
+  b7_use_hf: true         # 高频残差辅助核预测
+  b7_hf_kernel: 3
+  b7_hf_gain_init: 0.1
   b7_alpha_init: 0.02
   b7_alpha_cap: 0.3
   b9: false
@@ -185,6 +188,9 @@ enhance241:
   c5_num_heads: 4
   c5_kv_downsample_mode: "avg"  # avg | max | identity
   c5_soft_routing: true
+  c5_alpha_by_conf: true        # 根据路由置信度自适应缩放 alpha
+  c5_conf_floor: 0.2
+  c5_conf_detach: false
   c5_alpha_init: 0.05
   c5_alpha_cap: 0.5
   c7: false
@@ -238,6 +244,11 @@ enhance241:
   d11_temp_min: 0.5
   d11_temp_max: 4.0
   d11_bias_shift_init: 0.0
+  d11_scale_beta: 0.0
+  d11_scale_lambda: 32.0
+  d11_scale_threshold: 64.0
+  d11_stride_gamma_mul: 4.0
+  d11_score_domain: true
   d11_alpha_init: 0.0
   d11_alpha_cap: 0.5
   d21: false

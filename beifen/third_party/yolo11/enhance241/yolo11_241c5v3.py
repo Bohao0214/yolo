@@ -112,7 +112,7 @@ class BRACore(torch.nn.Module):
         hp, wp = x.shape[-2:]
         return x, h, w, hp, wp
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_pad, h, w, hp, wp = self._prepare(x)
         qkv = self.enhance241_c5_qkv(x_pad)
         q, k, v = torch.chunk(qkv, 3, dim=1)
@@ -142,13 +142,9 @@ class BRACore(torch.nn.Module):
         topv, topi = torch.topk(routing_logits, k=topk, dim=-1)  # [B, Nw, K]
 
         routing_w: Optional[torch.Tensor] = None
-        routing_conf: torch.Tensor
         if self.soft_routing:
             topv = topv - topv.amax(dim=-1, keepdim=True)
             routing_w = torch.softmax(topv, dim=-1).to(dtype=q_w.dtype)
-            routing_conf = routing_w.amax(dim=-1).mean()
-        else:
-            routing_conf = torch.sigmoid(topv.float()).mean().to(dtype=q_w.dtype)
 
         bsz, nwin, tq, c = q_w.shape
         tk = int(k_tok.shape[2])
@@ -187,7 +183,7 @@ class BRACore(torch.nn.Module):
         out = _window_reverse(out_w, ws, hp, wp)
         out = out[..., :h, :w]
         out = self.enhance241_c5_proj(out)
-        return out, routing_conf.to(dtype=out.dtype, device=out.device)
+        return out
 
 
 class C5BRAInject(torch.nn.Module):
@@ -202,9 +198,6 @@ class C5BRAInject(torch.nn.Module):
         topk: int = 4,
         kv_downsample_mode: str = "avg",
         soft_routing: bool = True,
-        alpha_by_conf: bool = True,
-        conf_floor: float = 0.2,
-        conf_detach: bool = False,
         alpha_init: float = 0.05,
         alpha_cap: float = 0.5,
     ) -> None:
@@ -219,9 +212,6 @@ class C5BRAInject(torch.nn.Module):
             kv_downsample_mode=kv_downsample_mode,
             soft_routing=soft_routing,
         )
-        self.alpha_by_conf = bool(alpha_by_conf)
-        self.conf_floor = float(max(0.0, min(1.0, conf_floor)))
-        self.conf_detach = bool(conf_detach)
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
         alpha_ratio = alpha_init / self.alpha_cap
         alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
@@ -236,17 +226,10 @@ class C5BRAInject(torch.nn.Module):
             recorder.capture_param_before(self, prefix)
 
         y_base = self.enhance241_c5_base(x)
-        delta, routing_conf = self.enhance241_c5_bra(y_base)
+        delta = self.enhance241_c5_bra(y_base)
         alpha_raw = self.enhance241_c5_alpha.to(dtype=y_base.dtype, device=y_base.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
-        routing_conf_used = routing_conf.detach() if self.conf_detach else routing_conf
-        if self.alpha_by_conf:
-            conf_scale = torch.clamp(routing_conf_used, min=self.conf_floor, max=1.0)
-            alpha_eff = alpha * conf_scale
-        else:
-            conf_scale = torch.ones_like(alpha)
-            alpha_eff = alpha
-        out = y_base + alpha_eff * delta
+        out = y_base + alpha * delta
 
         if recorder is not None:
             if step == 0:
@@ -276,12 +259,6 @@ class C5BRAInject(torch.nn.Module):
                         "pass": gate1_ok,
                         "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
-                        "alpha_effective": _to_float(alpha_eff.item()),
-                        "routing_confidence": _to_float(routing_conf.item()),
-                        "conf_scale": _to_float(conf_scale.item()),
-                        "alpha_by_conf": bool(self.alpha_by_conf),
-                        "conf_floor": _to_float(self.conf_floor),
-                        "conf_detach": bool(self.conf_detach),
                         "alpha_cap": _to_float(self.alpha_cap),
                         "base_stats": _tensor_stats(y_base),
                         "delta_stats": _tensor_stats(delta),
@@ -292,10 +269,6 @@ class C5BRAInject(torch.nn.Module):
                     recorder.add_note(f"{prefix}: Gate-1 failed (cos={cos:.4f}, var_ratio={v_out/(v_base+1e-12):.4f})")
                 recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=100)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=100)
-                recorder.record_scalar_curve(f"{prefix}.alpha_effective", _to_float(alpha_eff.item()), step, max_steps=100)
-                recorder.record_scalar_curve(
-                    f"{prefix}.routing_confidence", _to_float(routing_conf.item()), step, max_steps=100
-                )
                 if out.requires_grad:
                     try:
                         out.register_hook(lambda g, n=f"{prefix}.p3": recorder.record_output_grad(n, g))
@@ -304,10 +277,6 @@ class C5BRAInject(torch.nn.Module):
             elif step <= 100:
                 recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=100)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=100)
-                recorder.record_scalar_curve(f"{prefix}.alpha_effective", _to_float(alpha_eff.item()), step, max_steps=100)
-                recorder.record_scalar_curve(
-                    f"{prefix}.routing_confidence", _to_float(routing_conf.item()), step, max_steps=100
-                )
             if _should_capture_delta(step):
                 recorder.capture_param_delta(self, prefix)
 
@@ -414,9 +383,6 @@ def apply(model: Any, cfg: Any) -> Any:
     topk = _safe_int(_deep_get(cfg, "enhance241", "c5_topk", default=4), 4)
     kv_mode = str(_deep_get(cfg, "enhance241", "c5_kv_downsample_mode", default="avg")).lower()
     soft_routing = bool(_deep_get(cfg, "enhance241", "c5_soft_routing", default=True))
-    alpha_by_conf = bool(_deep_get(cfg, "enhance241", "c5_alpha_by_conf", default=True))
-    conf_floor = _safe_float(_deep_get(cfg, "enhance241", "c5_conf_floor", default=0.2), 0.2)
-    conf_detach = bool(_deep_get(cfg, "enhance241", "c5_conf_detach", default=False))
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c5_alpha_init", default=0.05), 0.05)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c5_alpha_cap", default=0.5), 0.5)
 
@@ -428,9 +394,6 @@ def apply(model: Any, cfg: Any) -> Any:
         topk=topk,
         kv_downsample_mode=kv_mode,
         soft_routing=soft_routing,
-        alpha_by_conf=alpha_by_conf,
-        conf_floor=conf_floor,
-        conf_detach=conf_detach,
         alpha_init=alpha_init,
         alpha_cap=alpha_cap,
     )
@@ -462,9 +425,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "topk": int(topk),
         "kv_downsample_mode": str(kv_mode),
         "soft_routing": bool(soft_routing),
-        "alpha_by_conf": bool(alpha_by_conf),
-        "conf_floor": _to_float(conf_floor),
-        "conf_detach": bool(conf_detach),
         "alpha_init": _to_float(alpha_init),
         "alpha_cap": _to_float(alpha_cap),
         "params_old": int(old_params),

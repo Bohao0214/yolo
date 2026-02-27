@@ -41,20 +41,6 @@ def _safe_float(x: Any, default: float) -> float:
         return float(default)
 
 
-def _safe_bool(x: Any, default: bool) -> bool:
-    if isinstance(x, bool):
-        return x
-    if isinstance(x, (int, float)):
-        return bool(x)
-    if isinstance(x, str):
-        token = x.strip().lower()
-        if token in {"1", "true", "yes", "on"}:
-            return True
-        if token in {"0", "false", "no", "off"}:
-            return False
-    return bool(default)
-
-
 class D11ClsScoreCalib(torch.nn.Module):
     """Residual-safe score calibration:
     logits' = logits + alpha * ((logits / T + b) - logits)
@@ -67,12 +53,6 @@ class D11ClsScoreCalib(torch.nn.Module):
         t_min: float = 0.5,
         t_max: float = 4.0,
         bias_init: float = 0.0,
-        head_stride: float = 8.0,
-        scale_beta: float = 0.0,
-        scale_lambda: float = 32.0,
-        scale_threshold: float = 64.0,
-        stride_gamma_mul: float = 4.0,
-        score_domain: bool = True,
         alpha_init: float = 0.0,
         alpha_cap: float = 0.5,
     ) -> None:
@@ -82,12 +62,6 @@ class D11ClsScoreCalib(torch.nn.Module):
         self.enhance241_d11_bias = torch.nn.Parameter(torch.tensor(float(bias_init), dtype=torch.float32))
         self.t_min = float(t_min)
         self.t_max = float(t_max)
-        self.head_stride = float(max(1.0, head_stride))
-        self.scale_beta = float(scale_beta)
-        self.scale_lambda = float(max(1e-6, scale_lambda))
-        self.scale_threshold = float(max(1e-6, scale_threshold))
-        self.stride_gamma_mul = float(max(1e-6, stride_gamma_mul))
-        self.score_domain = bool(score_domain)
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
         alpha_ratio = alpha_init / self.alpha_cap
@@ -107,26 +81,13 @@ class D11ClsScoreCalib(torch.nn.Module):
         b = self.enhance241_d11_bias.to(dtype=logits.dtype, device=logits.device)
         alpha_raw = self.enhance241_d11_alpha_raw.to(dtype=logits.dtype, device=logits.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
-        gamma = logits.new_tensor(self.head_stride * self.stride_gamma_mul)
-        if float(gamma.item()) < self.scale_threshold:
-            scale_bias = logits.new_tensor(self.scale_beta) * torch.exp(-gamma / self.scale_lambda)
-        else:
-            scale_bias = logits.new_tensor(0.0)
-        logits_calib = logits / t + (b + scale_bias)
-        if self.score_domain:
-            score_base = torch.sigmoid(logits)
-            score_calib = torch.sigmoid(logits_calib)
-            score_out = score_base + alpha * (score_calib - score_base)
-            score_out = torch.clamp(score_out, min=1e-5, max=1.0 - 1e-5)
-            out = torch.log(score_out / (1.0 - score_out))
-        else:
-            out = logits + alpha * (logits_calib - logits)
+        logits_calib = logits / t + b
+        out = logits + alpha * (logits_calib - logits)
 
         if recorder is not None:
             recorder.record_scalar_curve(f"{prefix}.temperature", float(t.item()), step, max_steps=100)
             recorder.record_scalar_curve(f"{prefix}.bias", float(b.item()), step, max_steps=100)
             recorder.record_scalar_curve(f"{prefix}.alpha", float(alpha.item()), step, max_steps=100)
-            recorder.record_scalar_curve(f"{prefix}.scale_bias", float(scale_bias.item()), step, max_steps=100)
             if step == 0:
                 recorder.record_a1_payload(
                     f"{prefix}.cfg",
@@ -135,14 +96,6 @@ class D11ClsScoreCalib(torch.nn.Module):
                         "temp_min": _to_float(self.t_min),
                         "temp_max": _to_float(self.t_max),
                         "bias_init": _to_float(self.enhance241_d11_bias.detach().item()),
-                        "head_stride": _to_float(self.head_stride),
-                        "stride_gamma_mul": _to_float(self.stride_gamma_mul),
-                        "gamma_proxy": _to_float(gamma.item()),
-                        "scale_beta": _to_float(self.scale_beta),
-                        "scale_lambda": _to_float(self.scale_lambda),
-                        "scale_threshold": _to_float(self.scale_threshold),
-                        "scale_bias": _to_float(scale_bias.item()),
-                        "score_domain": bool(self.score_domain),
                         "alpha": _to_float(alpha.item()),
                         "alpha_cap": _to_float(self.alpha_cap),
                     },
@@ -213,25 +166,6 @@ def _cast_like_module(module: torch.nn.Module, wrapped: torch.nn.Module) -> torc
         return wrapped
 
 
-def _infer_head_stride(detect: Any, head_idx: int, default: float = 8.0) -> float:
-    stride = getattr(detect, "stride", None)
-    if stride is None:
-        return float(default)
-    try:
-        if isinstance(stride, torch.Tensor):
-            if stride.numel() > int(head_idx):
-                return float(stride[int(head_idx)].item())
-            return float(stride.reshape(-1)[-1].item())
-        if isinstance(stride, (list, tuple)):
-            if len(stride) > int(head_idx):
-                return float(stride[int(head_idx)])
-            if len(stride) > 0:
-                return float(stride[-1])
-        return float(stride)
-    except Exception:
-        return float(default)
-
-
 def apply(model: Any, cfg: Any) -> Any:
     enable_d11 = bool(_deep_get(cfg, "enhance241", "d11", default=False))
     if not enable_d11:
@@ -255,11 +189,6 @@ def apply(model: Any, cfg: Any) -> Any:
     t_min = _safe_float(_deep_get(cfg, "enhance241", "d11_temp_min", default=0.5), 0.5)
     t_max = _safe_float(_deep_get(cfg, "enhance241", "d11_temp_max", default=4.0), 4.0)
     bias_init = _safe_float(_deep_get(cfg, "enhance241", "d11_bias_shift_init", default=0.0), 0.0)
-    scale_beta = _safe_float(_deep_get(cfg, "enhance241", "d11_scale_beta", default=0.0), 0.0)
-    scale_lambda = _safe_float(_deep_get(cfg, "enhance241", "d11_scale_lambda", default=32.0), 32.0)
-    scale_threshold = _safe_float(_deep_get(cfg, "enhance241", "d11_scale_threshold", default=64.0), 64.0)
-    stride_gamma_mul = _safe_float(_deep_get(cfg, "enhance241", "d11_stride_gamma_mul", default=4.0), 4.0)
-    score_domain = _safe_bool(_deep_get(cfg, "enhance241", "d11_score_domain", default=True), True)
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "d11_alpha_init", default=0.0), 0.0)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "d11_alpha_cap", default=0.5), 0.5)
 
@@ -278,12 +207,6 @@ def apply(model: Any, cfg: Any) -> Any:
             t_min=t_min,
             t_max=t_max,
             bias_init=bias_init,
-            head_stride=_infer_head_stride(detect, head_idx=head_idx, default=8.0),
-            scale_beta=scale_beta,
-            scale_lambda=scale_lambda,
-            scale_threshold=scale_threshold,
-            stride_gamma_mul=stride_gamma_mul,
-            score_domain=score_domain,
             alpha_init=alpha_init,
             alpha_cap=alpha_cap,
         )
@@ -308,12 +231,6 @@ def apply(model: Any, cfg: Any) -> Any:
                     t_min=t_min,
                     t_max=t_max,
                     bias_init=bias_init,
-                    head_stride=_infer_head_stride(detect, head_idx=head_idx, default=8.0),
-                    scale_beta=scale_beta,
-                    scale_lambda=scale_lambda,
-                    scale_threshold=scale_threshold,
-                    stride_gamma_mul=stride_gamma_mul,
-                    score_domain=score_domain,
                     alpha_init=alpha_init,
                     alpha_cap=alpha_cap,
                 )
@@ -329,20 +246,13 @@ def apply(model: Any, cfg: Any) -> Any:
         "temp_init": _to_float(temp_init),
         "temp_range": [_to_float(t_min), _to_float(t_max)],
         "bias_init": _to_float(bias_init),
-        "scale_beta": _to_float(scale_beta),
-        "scale_lambda": _to_float(scale_lambda),
-        "scale_threshold": _to_float(scale_threshold),
-        "stride_gamma_mul": _to_float(stride_gamma_mul),
-        "score_domain": bool(score_domain),
-        "head_strides": [_to_float(_infer_head_stride(detect, head_idx=x, default=8.0)) for x in target_heads],
         "alpha_init": _to_float(alpha_init),
         "alpha_cap": _to_float(alpha_cap),
     }
     setattr(yolo_obj, "_enhance241_d11_info", info)
     print(
         f"[enhance241] d11 enabled: patched cls heads={patched_heads or 'none(new)'} "
-        f"target_heads={target_heads} temp=[{t_min:.3f},{t_max:.3f}] bias_init={bias_init:.3f} "
-        f"scale_beta={scale_beta:.3f}"
+        f"target_heads={target_heads} temp=[{t_min:.3f},{t_max:.3f}] bias_init={bias_init:.3f}"
     )
 
     if recorder is not None:

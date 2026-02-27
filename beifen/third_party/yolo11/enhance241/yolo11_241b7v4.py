@@ -134,9 +134,6 @@ class CARAFECore(torch.nn.Module):
         kernel_size: int = 5,
         compress: int = 64,
         chunk_channels: int = 64,
-        use_hf: bool = True,
-        hf_kernel: int = 3,
-        hf_gain_init: float = 0.1,
     ) -> None:
         super().__init__()
         c = int(channels)
@@ -151,22 +148,11 @@ class CARAFECore(torch.nn.Module):
         self.kernel_size = k
         self.compress = cm
         self.chunk_channels = max(8, int(chunk_channels))
-        self.use_hf = bool(use_hf)
-        self.hf_kernel = max(3, int(hf_kernel))
-        if self.hf_kernel % 2 == 0:
-            self.hf_kernel += 1
 
         self.comp = torch.nn.Conv2d(c, cm, kernel_size=1, stride=1, padding=0, bias=True)
         self.encoder = torch.nn.Conv2d(cm, (k * k) * (s * s), kernel_size=3, stride=1, padding=1, bias=True)
-        self.hf_comp = torch.nn.Conv2d(c, cm, kernel_size=1, stride=1, padding=0, bias=True)
-        self.hf_encoder = torch.nn.Conv2d(cm, (k * k) * (s * s), kernel_size=3, stride=1, padding=1, bias=True)
         self.out_proj = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
-        self.enhance241_b7_hf_gain = torch.nn.Parameter(torch.tensor(float(hf_gain_init), dtype=torch.float32))
 
-        # Safe-start for HF fusion: no perturbation until the gate learns.
-        torch.nn.init.zeros_(self.hf_encoder.weight)
-        if self.hf_encoder.bias is not None:
-            torch.nn.init.zeros_(self.hf_encoder.bias)
         # Safe start: CARAFE branch initially produces near-zero residual.
         torch.nn.init.zeros_(self.out_proj.weight)
         if self.out_proj.bias is not None:
@@ -179,19 +165,6 @@ class CARAFECore(torch.nn.Module):
         hs, ws = h * s, w * s
 
         kernel_logits = self.encoder(self.comp(x))
-        hf_gate = torch.tanh(self.enhance241_b7_hf_gain.to(dtype=x.dtype, device=x.device))
-        if self.use_hf:
-            blur = F.avg_pool2d(
-                x,
-                kernel_size=self.hf_kernel,
-                stride=1,
-                padding=self.hf_kernel // 2,
-                count_include_pad=False,
-            )
-            hf = x - blur
-            hf_logits = self.hf_encoder(self.hf_comp(hf))
-            kernel_logits = kernel_logits + hf_gate * hf_logits
-
         kernel = F.pixel_shuffle(kernel_logits, upscale_factor=s)  # [B, k*k, H*s, W*s]
         kernel = kernel.float()
         kernel = kernel - kernel.amax(dim=1, keepdim=True)
@@ -225,9 +198,6 @@ class CARAFEUpsampleSafe(torch.nn.Module):
         kernel_size: int = 5,
         compress: int = 64,
         chunk_channels: int = 64,
-        use_hf: bool = True,
-        hf_kernel: int = 3,
-        hf_gain_init: float = 0.1,
         alpha_init: float = 0.0,
         alpha_cap: float = 0.5,
         tag: str = "",
@@ -240,9 +210,6 @@ class CARAFEUpsampleSafe(torch.nn.Module):
             kernel_size=int(kernel_size),
             compress=int(compress),
             chunk_channels=int(chunk_channels),
-            use_hf=bool(use_hf),
-            hf_kernel=int(hf_kernel),
-            hf_gain_init=float(hf_gain_init),
         )
         self.tag = str(tag)
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
@@ -299,13 +266,6 @@ class CARAFEUpsampleSafe(torch.nn.Module):
                         "carafe_stats": _tensor_stats(y_carafe),
                         "delta_stats": _tensor_stats(delta),
                         "out_stats": _tensor_stats(out),
-                        "hf_gate": _to_float(
-                            torch.tanh(
-                                self.enhance241_b7_carafe.enhance241_b7_hf_gain.to(
-                                    dtype=y_base.dtype, device=y_base.device
-                                )
-                            ).item()
-                        ),
                     },
                 )
                 if not gate1_ok:
@@ -377,9 +337,6 @@ def apply(model: Any, cfg: Any) -> Any:
     kernel_size = _safe_int(_deep_get(cfg, "enhance241", "b7_kernel_size", default=5), 5)
     compress = _safe_int(_deep_get(cfg, "enhance241", "b7_compress", default=64), 64)
     chunk_channels = _safe_int(_deep_get(cfg, "enhance241", "b7_chunk_channels", default=64), 64)
-    use_hf = bool(_deep_get(cfg, "enhance241", "b7_use_hf", default=True))
-    hf_kernel = _safe_int(_deep_get(cfg, "enhance241", "b7_hf_kernel", default=3), 3)
-    hf_gain_init = _safe_float(_deep_get(cfg, "enhance241", "b7_hf_gain_init", default=0.1), 0.1)
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_init", default=0.02), 0.02)
     alpha_auto_fallback = False
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "b7_alpha_cap", default=0.3), 0.3)
@@ -407,9 +364,6 @@ def apply(model: Any, cfg: Any) -> Any:
             kernel_size=kernel_size,
             compress=compress,
             chunk_channels=chunk_channels,
-            use_hf=use_hf,
-            hf_kernel=hf_kernel,
-            hf_gain_init=hf_gain_init,
             alpha_init=alpha_init,
             alpha_cap=alpha_cap,
             tag=tag,
@@ -446,9 +400,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "kernel_size": int(kernel_size),
         "compress": int(compress),
         "chunk_channels": int(chunk_channels),
-        "use_hf": bool(use_hf),
-        "hf_kernel": int(hf_kernel),
-        "hf_gain_init": _to_float(hf_gain_init),
         "alpha_init": _to_float(alpha_init),
         "alpha_auto_fallback": bool(alpha_auto_fallback),
         "alpha_cap": _to_float(alpha_cap),

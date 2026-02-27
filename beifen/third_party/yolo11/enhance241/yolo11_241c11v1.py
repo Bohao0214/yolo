@@ -84,7 +84,6 @@ class C11HeadGateInject(torch.nn.Module):
         base_module: torch.nn.Module,
         channels: int,
         mode: str = "se",
-        gate_reduction: int = 16,
         alpha_init: float = 0.0,
         alpha_cap: float = 0.5,
     ) -> None:
@@ -94,11 +93,9 @@ class C11HeadGateInject(torch.nn.Module):
         if mode in {"reuse_c5", "1x1_gate", "conv1x1"}:
             self.enhance241_c11_gate = _Conv1x1Gate(channels)
             self.mode = "1x1_gate"
-            self.gate_reduction = 1
         else:
-            self.enhance241_c11_gate = _SEGate(channels, reduction=int(max(1, gate_reduction)))
+            self.enhance241_c11_gate = _SEGate(channels, reduction=16)
             self.mode = "se"
-            self.gate_reduction = int(max(1, gate_reduction))
 
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
@@ -128,7 +125,6 @@ class C11HeadGateInject(torch.nn.Module):
                     f"{prefix}.gate0",
                     {
                         "mode": self.mode,
-                        "gate_reduction": int(self.gate_reduction),
                         "alpha": _to_float(alpha.item()),
                         "alpha_cap": _to_float(self.alpha_cap),
                         "gate_stats": _tensor_stats(gate),
@@ -236,7 +232,6 @@ def apply(model: Any, cfg: Any) -> Any:
         raise RuntimeError(f"enhance241.c11 apply_to={apply_to} matched no valid detect heads.")
 
     mode = str(_deep_get(cfg, "enhance241", "c11_mode", default="se"))
-    gate_reduction = int(max(1, _safe_float(_deep_get(cfg, "enhance241", "c11_gate_reduction", default=16), 16)))
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c11_alpha_init", default=0.0), 0.0)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c11_alpha_cap", default=0.5), 0.5)
 
@@ -257,7 +252,6 @@ def apply(model: Any, cfg: Any) -> Any:
             base_module=old,
             channels=channels,
             mode=mode,
-            gate_reduction=gate_reduction,
             alpha_init=alpha_init,
             alpha_cap=alpha_cap,
         )
@@ -287,7 +281,6 @@ def apply(model: Any, cfg: Any) -> Any:
         "target_heads": [int(x) for x in target_heads],
         "patched_indices": [int(x) for x in patched_idxs],
         "mode": str(mode),
-        "gate_reduction": int(gate_reduction),
         "alpha_init": _to_float(alpha_init),
         "alpha_cap": _to_float(alpha_cap),
     }
