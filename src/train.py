@@ -688,7 +688,7 @@ def _build_epoch_image_metrics_callback(
     audit_state: Dict[str, Any],
 ) -> Optional[Callable[[Any], None]]:
     record_epoch_metrics = bool(cfg.get("record_epoch_image_metrics", False))
-    metric_norm = str(best_select_metric or "mAP").strip().lower()
+    metric_norm = str(best_select_metric or "fitness").strip().lower()
     custom_best = metric_norm in {"ifn", "iauroc@fpr0.5"}
     if not (record_epoch_metrics or custom_best):
         return None
@@ -1632,7 +1632,7 @@ def main() -> None:
         "enhance241_enabled": _enhance241_enabled_keys(cfg),
         "enhance241_cfg": _enhance241_cfg(cfg),
         "threshold_sweep": cfg.get("threshold_sweep", {}),
-        "best_select_metric": str(cfg.get("best_select_metric", "mAP")),
+        "best_select_metric": str(cfg.get("best_select_metric", "fitness")),
         "eval_weights": "",
         "env_probe": _collect_env_probe(),
         "file_hashes": _collect_file_hashes(project_root),
@@ -1665,7 +1665,10 @@ def main() -> None:
     max_det = int(cfg.get("max_det", 300))
     match_iou = float(cfg.get("match_iou", 0.5))
     image_conf = float(cfg.get("image_conf", conf))
-    best_select_metric = str(cfg.get("best_select_metric", "mAP")).strip() or "mAP"
+    best_select_metric = str(cfg.get("best_select_metric", "fitness")).strip() or "fitness"
+    if best_select_metric.lower() in {"default", "默认", "map", "m_ap"}:
+        best_select_metric = "fitness"
+        cfg["best_select_metric"] = "fitness"
     metric_norm = best_select_metric.lower()
     if metric_norm in {"ifn", "iauroc@fpr0.5"}:
         cfg["record_epoch_image_metrics"] = True

@@ -52,6 +52,17 @@ def parse_list(raw: str, cast_fn) -> List[Any]:
     return out
 
 
+def normalize_best_rule(raw: str) -> str:
+    token = str(raw).strip().lower()
+    if token in {"fitness", "default", "默认", "map", "m_ap"}:
+        return "fitness"
+    if token in {"ifn"}:
+        return "iFN"
+    if token in {"iauroc@fpr0.5"}:
+        return "iAUROC@fpr0.5"
+    raise ValueError(f"Unsupported best rule: {raw}. Allowed: fitness(default/默认), iFN, iAUROC@fpr0.5")
+
+
 def make_report_dir(out_root: Path) -> Path:
     out_root.mkdir(parents=True, exist_ok=True)
     ts = dt.datetime.now().strftime("report_%y%m%d%H%M")
@@ -174,7 +185,7 @@ def main() -> None:
     parser.add_argument("--out-root", type=str, default=str(DEFAULT_OUT_ROOT))
     parser.add_argument("--epochs", type=str, default="100,150")
     parser.add_argument("--batches", type=str, default="6,10")
-    parser.add_argument("--best-rules", type=str, default="iFN,iAUROC@fpr0.5")
+    parser.add_argument("--best-rules", type=str, default="fitness,iFN,iAUROC@fpr0.5")
     parser.add_argument("--patience", type=int, default=0)
     parser.add_argument("--grad-accum", type=int, default=1)
     parser.add_argument("--lr0", type=float, default=0.012)
@@ -193,11 +204,7 @@ def main() -> None:
     rules = [x.strip() for x in str(args.best_rules).split(",") if x.strip()]
     if not rules:
         raise ValueError("best-rules is empty")
-
-    allowed = {"ifn", "iauroc@fpr0.5"}
-    for r in rules:
-        if r.lower() not in allowed:
-            raise ValueError(f"Unsupported best rule: {r}. Allowed: iFN, iAUROC@fpr0.5")
+    rules = [normalize_best_rule(x) for x in rules]
 
     report_dir = make_report_dir(Path(args.out_root).resolve())
     cfg_dir = report_dir / "tmp_cfgs"
@@ -300,7 +307,11 @@ def main() -> None:
         run_records.append(rec)
 
         if status != 0 or exp_dir is None:
-            fail_count += 1
+            if (not args.dry_run) and (status != 0 or exp_dir is None):
+                fail_count += 1
+            note = "run_failed_or_missing_exp_dir"
+            if args.dry_run and status == 0 and exp_dir is None:
+                note = "dry_run_no_training"
             summary_rows.append(
                 {
                     "case_name": case.case_name,
@@ -308,7 +319,7 @@ def main() -> None:
                     "dry_run": bool(args.dry_run),
                     "best_select_metric_cfg": case.best_select_metric,
                     "exp_dir": str(exp_dir) if exp_dir is not None else "",
-                    "note": "run_failed_or_missing_exp_dir",
+                    "note": note,
                 }
             )
             continue

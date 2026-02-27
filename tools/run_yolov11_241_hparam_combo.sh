@@ -321,10 +321,10 @@ def parse_value(key: str, raw_value: str):
         return float(v)
     if key in STR_KEYS:
         vl = v.lower()
-        if vl not in {"map", "ifn", "iauroc@fpr0.5"}:
-            raise SystemExit(f"Unsupported best_select_metric '{v}', expected: mAP | iFN | iAUROC@fpr0.5")
-        if vl == "map":
-            return "mAP"
+        if vl not in {"fitness", "map", "ifn", "iauroc@fpr0.5", "default", "默认"}:
+            raise SystemExit(f"Unsupported best_select_metric '{v}', expected: fitness(default/默认) | iFN | iAUROC@fpr0.5")
+        if vl in {"fitness", "map", "default", "默认"}:
+            return "fitness"
         if vl == "ifn":
             return "iFN"
         return "iAUROC@fpr0.5"
@@ -374,7 +374,7 @@ base_defaults = {
     "lr0": float(cfg.get("lr0", 0.01)),
     "lrf": float(cfg.get("lrf", 0.1)),
     "warmup_epochs": float(cfg.get("warmup_epochs", 3.0)),
-    "best_select_metric": str(cfg.get("best_select_metric", "mAP")),
+    "best_select_metric": parse_value("best_select_metric", str(cfg.get("best_select_metric", "fitness"))),
 }
 
 if epochs_override:
@@ -433,7 +433,7 @@ for case in raw_cases:
         raise SystemExit(f"lrf must be >= 0, got {merged['lrf']}")
     if merged["warmup_epochs"] < 0:
         raise SystemExit(f"warmup_epochs must be >= 0, got {merged['warmup_epochs']}")
-    if str(merged["best_select_metric"]).lower() not in {"map", "ifn", "iauroc@fpr0.5"}:
+    if str(merged["best_select_metric"]).lower() not in {"fitness", "map", "ifn", "iauroc@fpr0.5", "default", "默认"}:
         raise SystemExit(f"best_select_metric invalid: {merged['best_select_metric']}")
 
     sig = tuple(merged[k] for k in ALL_KEYS)
@@ -567,7 +567,7 @@ cfg["grad_accum"] = int(hparams["grad_accum"])
 cfg["lr0"] = float(hparams["lr0"])
 cfg["lrf"] = float(hparams["lrf"])
 cfg["warmup_epochs"] = float(hparams["warmup_epochs"])
-cfg["best_select_metric"] = str(hparams.get("best_select_metric", cfg.get("best_select_metric", "mAP")))
+cfg["best_select_metric"] = str(hparams.get("best_select_metric", cfg.get("best_select_metric", "fitness")))
 if str(cfg["best_select_metric"]).lower() in {"ifn", "iauroc@fpr0.5"}:
     cfg["record_epoch_image_metrics"] = True
 
