@@ -394,6 +394,20 @@ def main() -> None:
     (report_dir / "report.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
     if (not args.dry_run) and fail_count > 0:
         print(f"[failed] report_dir={report_dir} fail_count={fail_count}")
+        first_failed = next((r for r in run_records if int(r.get("status", 0)) != 0), None)
+        if first_failed is not None:
+            log_path = Path(str(first_failed.get("log_path", "")))
+            print(f"[failed] first_failed_case={first_failed.get('case_name')} log={log_path}")
+            if log_path.exists():
+                try:
+                    lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+                    tail = lines[-30:] if len(lines) > 30 else lines
+                    print("[failed] ---- log tail ----")
+                    for line in tail:
+                        print(line)
+                    print("[failed] ------------------")
+                except Exception:
+                    pass
         raise SystemExit(2)
     print(f"[ok] report_dir={report_dir} fail_count={fail_count}")
 
