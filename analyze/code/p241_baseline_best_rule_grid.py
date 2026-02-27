@@ -14,6 +14,7 @@ import csv
 import datetime as dt
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -179,7 +180,7 @@ def main() -> None:
     parser.add_argument("--lr0", type=float, default=0.012)
     parser.add_argument("--lrf", type=float, default=0.12)
     parser.add_argument("--warmup-epochs", type=float, default=0.0)
-    parser.add_argument("--python-bin", type=str, default="python")
+    parser.add_argument("--python-bin", type=str, default=sys.executable)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -235,6 +236,13 @@ def main() -> None:
     run_records: List[Dict[str, Any]] = []
     merged_all: List[Dict[str, Any]] = []
     summary_rows: List[Dict[str, Any]] = []
+    fail_count = 0
+
+    print(
+        "[run] "
+        f"report_dir={report_dir} cases={len(cases)} dry_run={args.dry_run} "
+        f"base_config={base_cfg_path}"
+    )
 
     for case in cases:
         cfg = dict(base_cfg)
@@ -280,6 +288,7 @@ def main() -> None:
         rec = {
             "case_name": case.case_name,
             "status": status,
+            "dry_run": bool(args.dry_run),
             "started_at": started,
             "ended_at": ended,
             "run_name": run_name,
@@ -291,10 +300,12 @@ def main() -> None:
         run_records.append(rec)
 
         if status != 0 or exp_dir is None:
+            fail_count += 1
             summary_rows.append(
                 {
                     "case_name": case.case_name,
                     "status": status,
+                    "dry_run": bool(args.dry_run),
                     "best_select_metric_cfg": case.best_select_metric,
                     "exp_dir": str(exp_dir) if exp_dir is not None else "",
                     "note": "run_failed_or_missing_exp_dir",
@@ -331,6 +342,7 @@ def main() -> None:
             {
                 "case_name": case.case_name,
                 "status": status,
+                "dry_run": bool(args.dry_run),
                 "best_select_metric_cfg": case.best_select_metric,
                 "exp_dir": str(exp_dir),
                 "epochs_cfg": case.epochs,
@@ -353,6 +365,7 @@ def main() -> None:
         f"- base_config: `{base_cfg_path}`",
         f"- cases: `{len(cases)}`",
         f"- dry_run: `{args.dry_run}`",
+        f"- fail_count: `{fail_count}`",
         "- fixed_hparams:",
         f"  - patience={args.patience}",
         f"  - grad_accum={args.grad_accum}",
@@ -368,7 +381,10 @@ def main() -> None:
         f"- `{case_table_dir}`",
     ]
     (report_dir / "report.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
-    print(f"[ok] report_dir={report_dir}")
+    if (not args.dry_run) and fail_count > 0:
+        print(f"[failed] report_dir={report_dir} fail_count={fail_count}")
+        raise SystemExit(2)
+    print(f"[ok] report_dir={report_dir} fail_count={fail_count}")
 
 
 if __name__ == "__main__":
