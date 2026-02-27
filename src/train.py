@@ -666,7 +666,20 @@ def _partial_auc_recall_fpr(fpr: np.ndarray, recall: np.ndarray, fpr_max: float 
         y = np.concatenate((y[keep], [y_cap]))
     if x.size < 2:
         return 0.0
-    return float(np.trapz(y, x))
+    return float(np.trapezoid(y, x))
+
+
+def _module_first_device(module: Any) -> Optional[Any]:
+    if module is None:
+        return None
+    try:
+        return next(module.parameters()).device
+    except Exception:
+        pass
+    try:
+        return next(module.buffers()).device
+    except Exception:
+        return None
 
 
 def _build_epoch_image_metrics_callback(
@@ -791,11 +804,16 @@ def _build_epoch_image_metrics_callback(
 
         model_backup = getattr(yolo_model, "model", None)
         predictor_backup = getattr(yolo_model, "predictor", None)
+        eval_model_ref = None
+        eval_model_device = None
         try:
+            # `model.predict(..., device="cpu")` may move module tensors across devices.
+            # Record original device and restore it in `finally` to avoid mixed-device EMA updates.
+            eval_model_ref = trainer.model
             if hasattr(trainer, "ema") and getattr(trainer.ema, "ema", None) is not None:
-                yolo_model.model = trainer.ema.ema
-            else:
-                yolo_model.model = trainer.model
+                eval_model_ref = trainer.ema.ema
+            eval_model_device = _module_first_device(eval_model_ref)
+            yolo_model.model = eval_model_ref
             try:
                 yolo_model.predictor = None
             except Exception:
@@ -902,6 +920,14 @@ def _build_epoch_image_metrics_callback(
                 yolo_model.predictor = predictor_backup
             except Exception:
                 pass
+            if eval_model_ref is not None and eval_model_device is not None:
+                try:
+                    eval_model_ref.to(device=eval_model_device)
+                except Exception as exc:
+                    print(
+                        f"[epoch_metrics] warning epoch={epoch}: failed to restore eval model to "
+                        f"{eval_model_device}: {exc}"
+                    )
 
     audit_state["epoch_image_metrics_csv"] = str(csv_path)
     return on_fit_epoch_end
