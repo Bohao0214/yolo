@@ -38,7 +38,7 @@ import hashlib
 import json
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -522,6 +522,389 @@ def copy_weights(exp_dir: Path, model_dir: Path) -> None:
         dst = model_dir / exp_name / "last"
         dst.mkdir(parents=True, exist_ok=True)
         shutil.copy2(last, dst / "last.pt")
+
+
+def resolve_eval_sources(data_yaml: Path, data_root_default: Path, cfg: Dict[str, Any]) -> Tuple[List[Path], List[Path]]:
+    """Resolve val/test sources with support for one or multiple data roots."""
+    data_info = load_yaml(data_yaml)
+    train_entry = data_info.get("train", "images/train")
+    val_entry = data_info.get("val", "images/val") or train_entry
+    test_entry = data_info.get("test", "")
+
+    data_root_cfg = cfg.get("data_root", "")
+    data_roots: List[Path] = []
+    if isinstance(data_root_cfg, (list, tuple)):
+        data_roots = [Path(str(p)).resolve() for p in data_root_cfg if str(p).strip()]
+    else:
+        data_root_str = str(data_root_cfg or "").strip()
+        if data_root_str:
+            data_roots = [Path(data_root_str).resolve()]
+    if not data_roots:
+        data_roots = [data_root_default]
+
+    val_sources: List[Path] = []
+    test_sources: List[Path] = []
+    for dr in data_roots:
+        val_p = resolve_data_entry(str(val_entry), dr)
+        if val_p.exists():
+            val_sources.append(val_p)
+        if test_entry:
+            test_p = resolve_data_entry(str(test_entry), dr)
+            if test_p.exists():
+                test_sources.append(test_p)
+    return val_sources, test_sources
+
+
+def _concat_nonempty(arrays: List[np.ndarray], dtype: np.dtype) -> np.ndarray:
+    arrays = [a for a in arrays if isinstance(a, np.ndarray) and a.size]
+    if not arrays:
+        return np.array([], dtype=dtype)
+    return np.concatenate(arrays, axis=0)
+
+
+def _compute_image_scores_all_sources(
+    model: Any,
+    sources: List[Path],
+    conf: float,
+    batch: int,
+    device: str,
+    nms_iou: float,
+    max_det: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    labels_all: List[np.ndarray] = []
+    scores_all: List[np.ndarray] = []
+    for src in sources:
+        try:
+            labels_i, scores_i = compute_image_scores(model, src, conf, batch, device, nms_iou, max_det)
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            gc.collect()
+            labels_i, scores_i = compute_image_scores(model, src, conf, 1, "cpu", nms_iou, max_det)
+        labels_all.append(labels_i)
+        scores_all.append(scores_i)
+    return _concat_nonempty(labels_all, np.int32), _concat_nonempty(scores_all, np.float32)
+
+
+def _compute_image_scores_iou_all_sources(
+    model: Any,
+    sources: List[Path],
+    conf: float,
+    iou_match: float,
+    batch: int,
+    device: str,
+    nms_iou: float,
+    max_det: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    labels_all: List[np.ndarray] = []
+    scores_all: List[np.ndarray] = []
+    for src in sources:
+        try:
+            labels_i, scores_i = compute_image_scores_iou(model, src, conf, iou_match, batch, device, nms_iou, max_det)
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            gc.collect()
+            labels_i, scores_i = compute_image_scores_iou(model, src, conf, iou_match, 1, "cpu", nms_iou, max_det)
+        labels_all.append(labels_i)
+        scores_all.append(scores_i)
+    return _concat_nonempty(labels_all, np.int32), _concat_nonempty(scores_all, np.float32)
+
+
+def _image_level_confusion_from_scores(labels: np.ndarray, scores: np.ndarray, threshold: float) -> Dict[str, int]:
+    if labels.size == 0:
+        return {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "n": 0, "pos": 0, "neg": 0}
+    preds = (scores >= float(threshold)).astype(np.int32)
+    tp = int(((preds == 1) & (labels == 1)).sum())
+    fp = int(((preds == 1) & (labels == 0)).sum())
+    fn = int(((preds == 0) & (labels == 1)).sum())
+    tn = int(((preds == 0) & (labels == 0)).sum())
+    return {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "n": int(labels.size),
+        "pos": int(labels.sum()),
+        "neg": int(labels.size - labels.sum()),
+    }
+
+
+def _partial_auc_recall_fpr(fpr: np.ndarray, recall: np.ndarray, fpr_max: float = 0.5) -> float:
+    if fpr.size == 0 or recall.size == 0:
+        return 0.0
+    order = np.argsort(fpr)
+    x = fpr[order].astype(np.float64)
+    y = recall[order].astype(np.float64)
+    cap = float(max(0.0, fpr_max))
+    if cap <= 0:
+        return 0.0
+    if x[0] > 0.0:
+        x = np.concatenate(([0.0], x))
+        y = np.concatenate(([y[0]], y))
+    if x[-1] < cap:
+        x = np.concatenate((x, [cap]))
+        y = np.concatenate((y, [y[-1]]))
+    else:
+        y_cap = float(np.interp(cap, x, y))
+        keep = x < cap
+        x = np.concatenate((x[keep], [cap]))
+        y = np.concatenate((y[keep], [y_cap]))
+    if x.size < 2:
+        return 0.0
+    return float(np.trapz(y, x))
+
+
+def _build_epoch_image_metrics_callback(
+    *,
+    yolo_model: Any,
+    cfg: Dict[str, Any],
+    exp_dir: Path,
+    val_sources: List[Path],
+    test_sources: List[Path],
+    image_conf: float,
+    match_iou: float,
+    metric_conf: float,
+    eval_batch: int,
+    eval_device: str,
+    nms_iou: float,
+    max_det: int,
+    curve_vals: np.ndarray,
+    best_select_metric: str,
+    audit_state: Dict[str, Any],
+) -> Optional[Callable[[Any], None]]:
+    record_epoch_metrics = bool(cfg.get("record_epoch_image_metrics", False))
+    metric_norm = str(best_select_metric or "mAP").strip().lower()
+    custom_best = metric_norm in {"ifn", "iauroc@fpr0.5"}
+    if not (record_epoch_metrics or custom_best):
+        return None
+    if not val_sources:
+        print("[best_select] skipped epoch image metrics: no val sources found")
+        return None
+
+    csv_path = exp_dir / "train" / "epoch_image_metrics.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    rule_slug = metric_norm.replace("@", "_").replace(".", "p").replace("/", "_")
+
+    state: Dict[str, Any] = {
+        "best_key": None,
+        "best_epoch": None,
+        "best_ckpt": "",
+        "best_ifn": None,
+        "best_iauroc_fpr0p5": None,
+        "best_fp": None,
+        "best_tp": None,
+    }
+
+    fieldnames = [
+        "epoch",
+        "best_rule",
+        "is_best_by_rule",
+        "best_ckpt",
+        "metrics/mAP50(B)",
+        "metrics/mAP50-95(B)",
+        "metrics/precision(B)",
+        "metrics/recall(B)",
+        "train/box_loss",
+        "train/cls_loss",
+        "train/dfl_loss",
+        "val_iTP",
+        "val_iFP",
+        "val_iFN",
+        "val_iTN",
+        "val_iAUROC_fpr0p5",
+        "test_iTP",
+        "test_iFP",
+        "test_iFN",
+        "test_iTN",
+        "test_iAUROC_fpr0p5",
+    ]
+    wrote_header = csv_path.exists() and csv_path.stat().st_size > 0
+
+    def _extract_core_metrics(trainer: Any) -> Dict[str, float]:
+        metrics = getattr(trainer, "metrics", {}) or {}
+        tloss = getattr(trainer, "tloss", None)
+        train_box = train_cls = train_dfl = float("nan")
+        try:
+            if tloss is not None:
+                arr = np.array(tloss, dtype=np.float64).reshape(-1)
+                if arr.size >= 1:
+                    train_box = float(arr[0])
+                if arr.size >= 2:
+                    train_cls = float(arr[1])
+                if arr.size >= 3:
+                    train_dfl = float(arr[2])
+        except Exception:
+            pass
+        map50 = _safe_float(metrics.get("metrics/mAP50(B)"))
+        map5095 = _safe_float(metrics.get("metrics/mAP50-95(B)"))
+        precision = _safe_float(metrics.get("metrics/precision(B)"))
+        recall = _safe_float(metrics.get("metrics/recall(B)"))
+        return {
+            "metrics/mAP50(B)": float("nan") if map50 is None else float(map50),
+            "metrics/mAP50-95(B)": float("nan") if map5095 is None else float(map5095),
+            "metrics/precision(B)": float("nan") if precision is None else float(precision),
+            "metrics/recall(B)": float("nan") if recall is None else float(recall),
+            "train/box_loss": train_box,
+            "train/cls_loss": train_cls,
+            "train/dfl_loss": train_dfl,
+        }
+
+    def _maybe_enforce_best(trainer: Any, is_better: bool) -> str:
+        last_path = Path(str(getattr(trainer, "last", ""))).resolve()
+        best_path = Path(str(getattr(trainer, "best", ""))).resolve()
+        if not best_path.name:
+            return ""
+        custom_best_path = best_path.with_name(f"best_{rule_slug}.pt")
+        try:
+            custom_best_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        if is_better and last_path.exists():
+            shutil.copy2(last_path, custom_best_path)
+            shutil.copy2(custom_best_path, best_path)
+            return str(custom_best_path)
+        if custom_best_path.exists() and best_path.exists():
+            shutil.copy2(custom_best_path, best_path)
+            return str(custom_best_path)
+        return str(custom_best_path) if custom_best_path.exists() else ""
+
+    def on_fit_epoch_end(trainer: Any) -> None:
+        nonlocal wrote_header
+        epoch = int(getattr(trainer, "epoch", -1)) + 1
+        if epoch <= 0:
+            return
+
+        model_backup = getattr(yolo_model, "model", None)
+        predictor_backup = getattr(yolo_model, "predictor", None)
+        try:
+            if hasattr(trainer, "ema") and getattr(trainer.ema, "ema", None) is not None:
+                yolo_model.model = trainer.ema.ema
+            else:
+                yolo_model.model = trainer.model
+            try:
+                yolo_model.predictor = None
+            except Exception:
+                pass
+
+            val_labels, val_scores = _compute_image_scores_iou_all_sources(
+                yolo_model,
+                val_sources,
+                metric_conf,
+                float(match_iou),
+                eval_batch,
+                eval_device,
+                nms_iou,
+                max_det,
+            )
+            val_conf = _image_level_confusion_from_scores(val_labels, val_scores, image_conf)
+            if val_labels.size:
+                val_recall_curve, _, val_fpr_curve = compute_threshold_metrics(val_labels, val_scores, curve_vals)
+                val_iauroc = _partial_auc_recall_fpr(val_fpr_curve, val_recall_curve, fpr_max=0.5)
+            else:
+                val_iauroc = 0.0
+
+            test_conf = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
+            test_iauroc = 0.0
+            if test_sources:
+                test_labels, test_scores = _compute_image_scores_iou_all_sources(
+                    yolo_model,
+                    test_sources,
+                    metric_conf,
+                    float(match_iou),
+                    eval_batch,
+                    eval_device,
+                    nms_iou,
+                    max_det,
+                )
+                test_conf = _image_level_confusion_from_scores(test_labels, test_scores, image_conf)
+                if test_labels.size:
+                    test_recall_curve, _, test_fpr_curve = compute_threshold_metrics(test_labels, test_scores, curve_vals)
+                    test_iauroc = _partial_auc_recall_fpr(test_fpr_curve, test_recall_curve, fpr_max=0.5)
+
+            core = _extract_core_metrics(trainer)
+            row: Dict[str, Any] = {
+                "epoch": epoch,
+                "best_rule": best_select_metric,
+                "is_best_by_rule": 0,
+                "best_ckpt": state.get("best_ckpt", ""),
+                **core,
+                "val_iTP": val_conf["tp"],
+                "val_iFP": val_conf["fp"],
+                "val_iFN": val_conf["fn"],
+                "val_iTN": val_conf["tn"],
+                "val_iAUROC_fpr0p5": float(val_iauroc),
+                "test_iTP": test_conf["tp"],
+                "test_iFP": test_conf["fp"],
+                "test_iFN": test_conf["fn"],
+                "test_iTN": test_conf["tn"],
+                "test_iAUROC_fpr0p5": float(test_iauroc),
+            }
+
+            is_better = False
+            if custom_best:
+                if metric_norm == "ifn":
+                    key = (int(val_conf["fn"]), -float(val_iauroc), int(val_conf["fp"]))
+                    prev = state.get("best_key")
+                    if prev is None or key < prev:
+                        is_better = True
+                        state["best_key"] = key
+                else:  # iauroc@fpr0.5
+                    key = (float(val_iauroc), -int(val_conf["fn"]), -int(val_conf["tp"]))
+                    prev = state.get("best_key")
+                    if prev is None or key > prev:
+                        is_better = True
+                        state["best_key"] = key
+
+                best_ckpt = _maybe_enforce_best(trainer, is_better)
+                if is_better:
+                    state["best_epoch"] = epoch
+                    state["best_ifn"] = int(val_conf["fn"])
+                    state["best_fp"] = int(val_conf["fp"])
+                    state["best_tp"] = int(val_conf["tp"])
+                    state["best_iauroc_fpr0p5"] = float(val_iauroc)
+                    state["best_ckpt"] = best_ckpt
+                    print(
+                        f"[best_select:{best_select_metric}] epoch={epoch} improved "
+                        f"val_iFN={val_conf['fn']} val_iAUROC@fpr0.5={val_iauroc:.6f}"
+                    )
+                row["is_best_by_rule"] = int(is_better)
+                row["best_ckpt"] = state.get("best_ckpt", "")
+
+            with csv_path.open("a", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if not wrote_header:
+                    writer.writeheader()
+                    wrote_header = True
+                writer.writerow(row)
+        except Exception as exc:
+            print(f"[epoch_metrics] failed at epoch={epoch}: {exc}")
+        finally:
+            try:
+                yolo_model.model = model_backup
+            except Exception:
+                pass
+            try:
+                yolo_model.predictor = predictor_backup
+            except Exception:
+                pass
+
+    audit_state["epoch_image_metrics_csv"] = str(csv_path)
+    return on_fit_epoch_end
 
 
 def _deep_get(mapping: Any, *keys: str, default: Any = None) -> Any:
@@ -1036,6 +1419,7 @@ def _format_enhance241_audit(audit_state: Dict[str, Any]) -> str:
         _append_stage_snapshot(lines, audit_state, stage)
 
     lines.append(f"- eval_weights: {audit_state.get('eval_weights', '')}")
+    lines.append(f"- best_select_metric: {audit_state.get('best_select_metric', '')}")
     lines.append(f"- ckpt_keyword_hits: {audit_state.get('ckpt_keyword_hits', {})}")
     lines.append(f"- threshold_sweep: {audit_state.get('threshold_sweep', {})}")
 
@@ -1248,6 +1632,7 @@ def main() -> None:
         "enhance241_enabled": _enhance241_enabled_keys(cfg),
         "enhance241_cfg": _enhance241_cfg(cfg),
         "threshold_sweep": cfg.get("threshold_sweep", {}),
+        "best_select_metric": str(cfg.get("best_select_metric", "mAP")),
         "eval_weights": "",
         "env_probe": _collect_env_probe(),
         "file_hashes": _collect_file_hashes(project_root),
@@ -1270,6 +1655,9 @@ def main() -> None:
     save_train_pic = bool(cfg.get("save_train_pic", False))
     save_val_pic = bool(cfg.get("save_val_pic", True))
     save_test_pic = bool(cfg.get("save_test_pic", True))
+    save_weights = bool(cfg.get("save_weights", True))
+    skip_eval_visuals = bool(cfg.get("skip_eval_visuals", False))
+    skip_post_eval_metrics = bool(cfg.get("skip_post_eval_metrics", False))
     metric_conf = float(cfg.get("metric_conf", 0.001))
     eval_batch = int(cfg.get("eval_batch", 1))
     eval_device = str(cfg.get("eval_device", device))
@@ -1277,6 +1665,13 @@ def main() -> None:
     max_det = int(cfg.get("max_det", 300))
     match_iou = float(cfg.get("match_iou", 0.5))
     image_conf = float(cfg.get("image_conf", conf))
+    best_select_metric = str(cfg.get("best_select_metric", "mAP")).strip() or "mAP"
+    metric_norm = best_select_metric.lower()
+    if metric_norm in {"ifn", "iauroc@fpr0.5"}:
+        cfg["record_epoch_image_metrics"] = True
+    if skip_eval_visuals:
+        save_val_pic = False
+        save_test_pic = False
 
     # Persist a minimal, reproducible run meta for traceability.
     try:
@@ -1295,6 +1690,10 @@ def main() -> None:
             },
             "eval_iou": match_iou,
             "match_iou": match_iou,
+            "best_select_metric": best_select_metric,
+            "record_epoch_image_metrics": bool(cfg.get("record_epoch_image_metrics", False)),
+            "skip_post_eval_metrics": bool(skip_post_eval_metrics),
+            "save_weights": bool(save_weights),
         }
         (exp_dir / "config_dump.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -1307,6 +1706,8 @@ def main() -> None:
         f"[eval_std:P2.3.0] conf_threshold={image_conf:.2f} eval_iou={match_iou:.2f} (IoU=交并比) "
         f"nms_iou={nms_iou:.2f} (NMS=非极大值抑制) max_det={max_det}"
     )
+    if metric_norm in {"ifn", "iauroc@fpr0.5"}:
+        print(f"[best_select] rule={best_select_metric} (val image-level)")
 
     from ultralytics import YOLO
     configure_ultralytics_weight_cache(project_root)
@@ -1332,8 +1733,43 @@ def main() -> None:
             print(f"Downloading to: {cache_path}")
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             init_weights = str(cache_path)
+
+    # Prepare eval sources + threshold curve before train for custom best selection callback.
+    val_sources, test_sources = resolve_eval_sources(run_data_yaml, data_root, cfg)
+    sweep_cfg_pre = cfg.get("threshold_sweep", {})
+    if not isinstance(sweep_cfg_pre, dict):
+        sweep_cfg_pre = {}
+    curve_range_pre = sweep_cfg_pre.get("curve", [0.01, 0.01, 1.00])
+    try:
+        curve_vals_for_epoch = np.round(
+            np.arange(float(curve_range_pre[0]), float(curve_range_pre[2]) + 1e-9, float(curve_range_pre[1])), 2
+        )
+    except Exception:
+        curve_vals_for_epoch = np.round(np.arange(0.01, 1.0 + 1e-9, 0.01), 2)
+    if curve_vals_for_epoch.size == 0:
+        curve_vals_for_epoch = np.round(np.arange(0.01, 1.0 + 1e-9, 0.01), 2)
+
     model = YOLO(init_weights)
     model = _apply_enhance241_patches(model, cfg, stage="train", audit_state=audit_state)
+    epoch_metrics_cb = _build_epoch_image_metrics_callback(
+        yolo_model=model,
+        cfg=cfg,
+        exp_dir=exp_dir,
+        val_sources=val_sources,
+        test_sources=test_sources,
+        image_conf=image_conf,
+        match_iou=match_iou,
+        metric_conf=metric_conf,
+        eval_batch=eval_batch,
+        eval_device=eval_device,
+        nms_iou=nms_iou,
+        max_det=max_det,
+        curve_vals=curve_vals_for_epoch,
+        best_select_metric=best_select_metric,
+        audit_state=audit_state,
+    )
+    if epoch_metrics_cb is not None:
+        model.add_callback("on_fit_epoch_end", epoch_metrics_cb)
     if mode in {"train_test", "finetune_test"}:
         train_kwargs = dict(
             data=str(run_data_yaml),
@@ -1349,6 +1785,7 @@ def main() -> None:
             project=str(exp_dir),
             name="train",
             exist_ok=True,
+            save=True,
         )
         trainer_cls = _build_enhance241_trainer_cls(model, cfg, audit_state)
         if trainer_cls is not None:
@@ -1365,27 +1802,40 @@ def main() -> None:
             )
 
     best_weights = exp_dir / "train" / "weights" / "best.pt"
+    last_weights = exp_dir / "train" / "weights" / "last.pt"
     if mode in {"train_test", "finetune_test"}:
-        eval_weights = best_weights if best_weights.exists() else (exp_dir / "train" / "weights" / "last.pt")
-        audit_state["eval_weights"] = str(eval_weights)
-        # Release training model before evaluation to reduce GPU memory pressure.
-        try:
-            del model
-        except Exception:
-            pass
-        try:
-            import torch
+        eval_weights = best_weights if best_weights.exists() else last_weights
+        if skip_post_eval_metrics:
+            audit_state["eval_weights"] = str(eval_weights) if eval_weights.exists() else ""
+            print("[post_eval] reload skipped before eval stage: skip_post_eval_metrics=true")
+        elif eval_weights.exists():
+            audit_state["eval_weights"] = str(eval_weights)
+            # Release training model before evaluation to reduce GPU memory pressure.
+            try:
+                del model
+            except Exception:
+                pass
+            try:
+                import torch
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        gc.collect()
-        model = YOLO(str(eval_weights))
-        model = _apply_enhance241_patches(model, cfg, stage="eval", audit_state=audit_state)
-        status, checks = _evaluate_enhance241_checks(audit_state)
-        if status == "FAIL":
-            raise RuntimeError(f"enhance241 structure check failed: {checks}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            gc.collect()
+            model = YOLO(str(eval_weights))
+            model = _apply_enhance241_patches(model, cfg, stage="eval", audit_state=audit_state)
+            status, checks = _evaluate_enhance241_checks(audit_state)
+            if status == "FAIL":
+                raise RuntimeError(f"enhance241 structure check failed: {checks}")
+        else:
+            audit_state["eval_weights"] = ""
+            if skip_post_eval_metrics:
+                print("[post_eval] skipped: no best/last checkpoint and skip_post_eval_metrics=true")
+            else:
+                raise FileNotFoundError(
+                    f"Neither best.pt nor last.pt found under: {(exp_dir / 'train' / 'weights').resolve()}"
+                )
     elif mode == "test":
         test_weight = Path(weights_path)
         if test_weight.exists():
@@ -1400,33 +1850,7 @@ def main() -> None:
         if status == "FAIL":
             raise RuntimeError(f"enhance241 structure check failed: {checks}")
 
-    # Resolve split sources across one or multiple dataset roots.
-    data_info_cfg = load_yaml(data_yaml)
-    train_entry = data_info_cfg.get("train", "images/train")
-    val_entry = data_info_cfg.get("val", "images/val") or train_entry
-    test_entry = data_info_cfg.get("test", "")
-
-    data_root_cfg = cfg.get("data_root", "")
-    data_roots: List[Path] = []
-    if isinstance(data_root_cfg, (list, tuple)):
-        data_roots = [Path(str(p)).resolve() for p in data_root_cfg if str(p).strip()]
-    else:
-        data_root_str = str(data_root_cfg or "").strip()
-        if data_root_str:
-            data_roots = [Path(data_root_str).resolve()]
-    if not data_roots:
-        data_roots = [data_root]
-
-    val_sources: List[Path] = []
-    test_sources: List[Path] = []
-    for dr in data_roots:
-        val_p = resolve_data_entry(str(val_entry), dr)
-        if val_p.exists():
-            val_sources.append(val_p)
-        if test_entry:
-            test_p = resolve_data_entry(str(test_entry), dr)
-            if test_p.exists():
-                test_sources.append(test_p)
+    # val_sources/test_sources are resolved before training and reused here.
 
 
     metrics_dir = exp_dir / "metrics"
@@ -1566,16 +1990,21 @@ def main() -> None:
             all_items.extend(items)
         return all_items
 
+    eval_val_sources = val_sources if not skip_post_eval_metrics else []
+    eval_test_sources = test_sources if not skip_post_eval_metrics else []
+    if skip_post_eval_metrics:
+        print("[post_eval] skipped by config: skip_post_eval_metrics=true")
+
     # 1) Per-split error visualizations (kept separate)
     val_items: List[Dict[str, object]] = []
     test_items: List[Dict[str, object]] = []
     if save_val_pic:
-        val_items = eval_visuals("val", val_sources)
+        val_items = eval_visuals("val", eval_val_sources)
     if save_test_pic:
-        test_items = eval_visuals("test", test_sources)
+        test_items = eval_visuals("test", eval_test_sources)
 
     # 2) Combined metrics/curves/tables (val+test merged, and multiple roots merged)
-    all_sources = val_sources + test_sources
+    all_sources = eval_val_sources + eval_test_sources
     run_auroc = 0.0
     run_ap = 0.0
     run_label_count = 0
@@ -2051,7 +2480,17 @@ def main() -> None:
     except Exception:
         pass
 
-    # Keep weights only under exp_dir/train/weights for baseline workflow.
+    if not save_weights:
+        weights_dir = exp_dir / "train" / "weights"
+        removed = 0
+        if weights_dir.exists():
+            for pt in weights_dir.glob("*.pt"):
+                try:
+                    pt.unlink()
+                    removed += 1
+                except Exception:
+                    pass
+        print(f"[artifact] save_weights=false: removed {removed} checkpoint files from {weights_dir}")
 
 
 if __name__ == "__main__":

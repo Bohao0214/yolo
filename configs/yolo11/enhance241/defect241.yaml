@@ -49,6 +49,11 @@ warmup_epochs: 0  # 较长的 warmup 有助于稳定初期训练；0 表示关�
 save_train_pic: false
 save_val_pic: true
 save_test_pic: true
+save_weights: true  # false 时不保存 best.pt/last.pt（轻量探索用）
+skip_eval_visuals: false  # true 时关闭 val/test 可视化输出
+skip_post_eval_metrics: false  # true 时跳过训练后综合评估曲线与诊断
+best_select_metric: "mAP"  # mAP | iFN | iAUROC@fpr0.5
+record_epoch_image_metrics: false  # true 时逐 epoch 记录 val/test 图像级 FN/FP 等
 val_split: 0.0
 seed: 42
 metric_conf: 0.01

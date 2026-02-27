@@ -32,7 +32,7 @@ Purpose:
   combinations for vertical batch experiments.
 
 Hyperparameters supported in each case:
-  epochs, patience, batch, grad_accum, lr0, lrf, warmup_epochs
+  epochs, patience, batch, grad_accum, lr0, lrf, warmup_epochs, best_select_metric
 
 Input forms (choose one):
   1) --hparams CASES
@@ -40,14 +40,14 @@ Input forms (choose one):
      each case format: key=value,key=value,...
 
      Example:
-       --hparams "epochs=150,patience=0,batch=6,grad_accum=1,lr0=0.012,lrf=0.12,warmup_epochs=0|epochs=180,patience=20,batch=6,grad_accum=1,lr0=0.01,lrf=0.1,warmup_epochs=2"
+       --hparams "epochs=150,patience=0,batch=6,grad_accum=1,lr0=0.012,lrf=0.12,warmup_epochs=0,best_select_metric=iFN|epochs=180,patience=20,batch=6,grad_accum=1,lr0=0.01,lrf=0.1,warmup_epochs=2,best_select_metric=iAUROC@fpr0.5"
 
   2) --grid GRID
      GRID format: key=v1,v2;key=v1,v2;...
      script expands cartesian product.
 
      Example:
-       --grid "epochs=120,150;patience=0,20;batch=6;grad_accum=1,2;lr0=0.010,0.012;lrf=0.10,0.12;warmup_epochs=0,2"
+       --grid "epochs=120,150;patience=0,20;batch=6;grad_accum=1,2;lr0=0.010,0.012;lrf=0.10,0.12;warmup_epochs=0,2;best_select_metric=iFN,iAUROC@fpr0.5"
 
 Module expression:
   --modules supports baseline, hmc7/abcd7, pdd9/abcd9, and raw combinations like
@@ -298,7 +298,8 @@ import yaml
 
 INT_KEYS = ("epochs", "patience", "batch", "grad_accum")
 FLOAT_KEYS = ("lr0", "lrf", "warmup_epochs")
-ALL_KEYS = INT_KEYS + FLOAT_KEYS
+STR_KEYS = ("best_select_metric",)
+ALL_KEYS = INT_KEYS + FLOAT_KEYS + STR_KEYS
 
 base_cfg = Path(os.environ["_HP_BASE_CONFIG"]).resolve()
 hparams_raw = os.environ.get("_HP_HPARAMS_RAW", "").strip()
@@ -318,6 +319,15 @@ def parse_value(key: str, raw_value: str):
         return int(v)
     if key in FLOAT_KEYS:
         return float(v)
+    if key in STR_KEYS:
+        vl = v.lower()
+        if vl not in {"map", "ifn", "iauroc@fpr0.5"}:
+            raise SystemExit(f"Unsupported best_select_metric '{v}', expected: mAP | iFN | iAUROC@fpr0.5")
+        if vl == "map":
+            return "mAP"
+        if vl == "ifn":
+            return "iFN"
+        return "iAUROC@fpr0.5"
     raise SystemExit(f"Unsupported key: {key}")
 
 def parse_case(case_raw: str):
@@ -345,6 +355,10 @@ def normalize_float(v: float) -> str:
     return text
 
 def slug_num(v) -> str:
+    if isinstance(v, str):
+        s = v.strip().lower()
+        s = s.replace("@", "at").replace(".", "p").replace("/", "_").replace("-", "_")
+        return s
     if isinstance(v, int):
         s = str(v)
     else:
@@ -360,6 +374,7 @@ base_defaults = {
     "lr0": float(cfg.get("lr0", 0.01)),
     "lrf": float(cfg.get("lrf", 0.1)),
     "warmup_epochs": float(cfg.get("warmup_epochs", 3.0)),
+    "best_select_metric": str(cfg.get("best_select_metric", "mAP")),
 }
 
 if epochs_override:
@@ -418,6 +433,8 @@ for case in raw_cases:
         raise SystemExit(f"lrf must be >= 0, got {merged['lrf']}")
     if merged["warmup_epochs"] < 0:
         raise SystemExit(f"warmup_epochs must be >= 0, got {merged['warmup_epochs']}")
+    if str(merged["best_select_metric"]).lower() not in {"map", "ifn", "iauroc@fpr0.5"}:
+        raise SystemExit(f"best_select_metric invalid: {merged['best_select_metric']}")
 
     sig = tuple(merged[k] for k in ALL_KEYS)
     if sig in seen:
@@ -442,7 +459,8 @@ for idx, case in enumerate(resolved, start=1):
         f"ga{slug_num(case['grad_accum'])}_"
         f"lr{slug_num(case['lr0'])}_"
         f"lrf{slug_num(case['lrf'])}_"
-        f"wu{slug_num(case['warmup_epochs'])}"
+        f"wu{slug_num(case['warmup_epochs'])}_"
+        f"br{slug_num(case['best_select_metric'])}"
     )
     text = ",".join(
         [
@@ -453,6 +471,7 @@ for idx, case in enumerate(resolved, start=1):
             f"lr0={normalize_float(case['lr0'])}",
             f"lrf={normalize_float(case['lrf'])}",
             f"warmup_epochs={normalize_float(case['warmup_epochs'])}",
+            f"best_select_metric={case['best_select_metric']}",
         ]
     )
     print(case_tag + "\t" + json.dumps(case, ensure_ascii=True, separators=(",", ":")) + "\t" + text)
@@ -548,6 +567,9 @@ cfg["grad_accum"] = int(hparams["grad_accum"])
 cfg["lr0"] = float(hparams["lr0"])
 cfg["lrf"] = float(hparams["lrf"])
 cfg["warmup_epochs"] = float(hparams["warmup_epochs"])
+cfg["best_select_metric"] = str(hparams.get("best_select_metric", cfg.get("best_select_metric", "mAP")))
+if str(cfg["best_select_metric"]).lower() in {"ifn", "iauroc@fpr0.5"}:
+    cfg["record_epoch_image_metrics"] = True
 
 if force_mode:
     cfg["mode"] = force_mode
@@ -570,7 +592,8 @@ hparam_text = (
     f"grad_accum={cfg['grad_accum']},"
     f"lr0={cfg['lr0']:g},"
     f"lrf={cfg['lrf']:g},"
-    f"warmup_epochs={cfg['warmup_epochs']:g}"
+    f"warmup_epochs={cfg['warmup_epochs']:g},"
+    f"best_select_metric={cfg['best_select_metric']}"
 )
 
 print(f"{cfg['exp_name']}\t{yolo_version}\t{hparam_text}")
