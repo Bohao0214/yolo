@@ -108,15 +108,6 @@ def _to_float(v: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _should_capture_delta(step: int) -> bool:
-    """Compatibility helper for newer enhance241 modules importing from a3."""
-    try:
-        s = int(step)
-    except Exception:
-        return False
-    return s in {0, 1, 2, 5, 10, 20, 50, 100}
-
-
 def _vector_summary(vec: Optional[torch.Tensor]) -> Dict[str, Any]:
     if vec is None:
         return {"count": 0}
@@ -135,6 +126,18 @@ def _vector_summary(vec: Optional[torch.Tensor]) -> Dict[str, Any]:
         "p90": _to_float(q[1].item()),
         "p99": _to_float(q[2].item()),
     }
+
+
+def _is_nonzero_map(values: Dict[str, Any], eps: float = 1e-12) -> bool:
+    for v in values.values():
+        if abs(_to_float(v, 0.0)) > float(eps):
+            return True
+    return False
+
+
+def _should_capture_delta(step: int) -> bool:
+    # Sparse schedule to survive grad-accumulate setups (e.g., nbs=64, batch=6 => accumulate~11).
+    return int(step) in {1, 2, 4, 8, 12, 16, 24, 32, 48, 64}
 
 
 def _tensor_stats(tensor: Optional[torch.Tensor]) -> Dict[str, Any]:
@@ -591,7 +594,8 @@ class Enhance241CheckRecorder:
 
     def capture_param_delta(self, module: torch.nn.Module, prefix: str) -> None:
         with self.lock:
-            if self.a2["delta_l2"]:
+            # Keep re-sampling until we observe non-zero updates; this avoids false zeros under grad accumulation.
+            if self.a2["delta_l2"] and _is_nonzero_map(self.a2["delta_l2"]):
                 return
         delta: Dict[str, float] = {}
         for name, p in module.named_parameters():
@@ -606,7 +610,7 @@ class Enhance241CheckRecorder:
             except Exception:
                 continue
         with self.lock:
-            self.a2["delta_l2"].update(delta)
+            self.a2["delta_l2"] = delta
 
     def record_output_grad(self, name: str, grad: Optional[torch.Tensor]) -> None:
         if grad is None:
@@ -849,6 +853,9 @@ class Enhance241CheckRecorder:
     def _judge_conclusion(self) -> Tuple[str, List[str]]:
         reasons: List[str] = []
         structure = False
+        a1_bad = False
+        a2_bad = False
+        a3_bad = False
 
         a1_items = [v for v in self.a1.values() if isinstance(v, dict)]
         for item in a1_items:
@@ -856,44 +863,61 @@ class Enhance241CheckRecorder:
             if isinstance(patched, dict):
                 if int(patched.get("nan_count", 0)) > 0 or int(patched.get("inf_count", 0)) > 0:
                     structure = True
+                    a1_bad = True
                     reasons.append("A1 patched tensor contains NaN/Inf.")
             comp = item.get("patched_vs_baseline") if isinstance(item, dict) else None
             if isinstance(comp, dict):
                 vr = _to_float(comp.get("var_ratio", 1.0), 1.0)
                 if (vr > 4.0) or (vr < 0.25):
                     structure = True
+                    a1_bad = True
                     reasons.append(f"A1 variance ratio abnormal ({vr:.4f}).")
 
         grad_map = self.a2.get("grad_l2", {}) if isinstance(self.a2, dict) else {}
         delta_map = self.a2.get("delta_l2", {}) if isinstance(self.a2, dict) else {}
         if grad_map and all(_to_float(v, 0.0) == 0.0 for v in grad_map.values()):
             structure = True
+            a2_bad = True
             reasons.append("A2 gradients are all zero.")
         if delta_map and all(_to_float(v, 0.0) == 0.0 for v in delta_map.values()):
-            structure = True
-            reasons.append("A2 parameter update deltas are all zero.")
+            if grad_map and _is_nonzero_map(grad_map):
+                reasons.append("A2 deltas sampled before optimizer step (gradients are non-zero; check accumulate schedule).")
+            else:
+                structure = True
+                a2_bad = True
+                reasons.append("A2 parameter update deltas are all zero.")
 
         pos = self.a3.get("pos_max_conf", {}) if isinstance(self.a3, dict) else {}
         neg = self.a3.get("neg_max_conf", {}) if isinstance(self.a3, dict) else {}
         if isinstance(pos, dict) and isinstance(neg, dict) and pos.get("count", 0) and neg.get("count", 0):
             if _to_float(pos.get("p90", 0.0)) <= _to_float(neg.get("p90", 0.0)):
-                structure = True
+                a3_bad = True
                 reasons.append("A3 positive/negative max_conf not separable (pos p90 <= neg p90).")
+                reasons.append("A3 is a patch-time snapshot on pretrain weights; verify post-train sweep before final judgment.")
+
+        # Treat A3 as supporting evidence; avoid hard-failing solely on pretrain separability.
+        if a3_bad and (a1_bad or a2_bad):
+            structure = True
 
         if not reasons:
             reasons.append("No hard structural anomaly detected from A1/A2/A3; likely hyper-parameter mismatch.")
 
         if structure:
-            if self.module_key == "a3":
-                reasons.append(
-                    "Next action: use residual-safe a3 (baseline_downsample + alpha*spd_branch, alpha init 0, "
-                    "last conv zero-init), then rerun >=10 epochs."
-                )
-            elif self.module_key == "b3":
-                reasons.append(
-                    "Next action: use residual-safe b3 (lo + alpha*refine(weighted-hi/lo - lo), alpha init 0, "
-                    "refine last conv zero-init), then rerun >=10 epochs."
-                )
+            next_actions = {
+                "a3": "Next action: use gradient-safe residual a3 (baseline_downsample + alpha*spd_branch, alpha small non-zero init with bounded tanh, last conv zero-init), then rerun >=10 epochs.",
+                "a9": "Next action: keep a9 SE-SAM residual-safe with non-zero alpha warm start, verify Gate-2 delta after first effective optimizer step, then rerun >=10 epochs.",
+                "a7": "Next action: keep HorNet delta residual-safe and non-zero alpha init (>=0.03), verify first effective optimizer-step delta>0, then rerun >=10 epochs.",
+                "b3": "Next action: use residual-safe b3 (lo + alpha*refine(weighted-hi/lo - lo), alpha init 0, refine last conv zero-init), then rerun >=10 epochs.",
+                "b9": "Next action: keep b9 improved_CSP fusion residual-safe, confirm P4->P3 fusion delta is non-zero and low-FPR recall does not regress, then rerun >=10 epochs.",
+                "b7": "Next action: keep CARAFE residual-safe with non-zero alpha init and chunked reassembly, then rerun >=10 epochs.",
+                "c5": "Next action: use gradient-safe c5 (out=x+alpha*BRA(x), alpha small non-zero init, BRA proj zero-init), then rerun >=10 epochs.",
+                "c9": "Next action: use c9 as post-fusion SE-SAM guardrail; compare `full/channel/spatial` modes for FP suppression without low-FPR recall drop.",
+                "c7": "Next action: keep MCBAM residual-safe with non-zero alpha init and validate channel/spatial mode separately, then rerun >=10 epochs.",
+                "d7": "Next action: keep P3-only d7 with TAL-compatible stride and tuned cls bias shift, then rerun >=10 epochs and inspect low-FPR recall.",
+                "d9": "Next action: keep d9 score-calib residual branch conservative (small alpha, zero-init tail), then rerun >=10 epochs and inspect FPR=0.05/0.1 recall.",
+            }
+            if self.module_key in next_actions:
+                reasons.append(next_actions[self.module_key])
             return "结构问题", reasons
 
         reasons.append("Next action: keep structure, try lr0 down 3x + warmup_epochs=3 then rerun >=10 epochs.")
@@ -923,17 +947,17 @@ class Enhance241CheckRecorder:
         lines.append(json.dumps(self.patch_info, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### A1 Step0 Stats")
+        lines.append("### Gate-1 Step0 Equivalence (legacy: A1)")
         lines.append("```json")
         lines.append(json.dumps(self.a1, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### A2 Params / Grad / Delta")
+        lines.append("### Gate-2 Trainability (legacy: A2)")
         lines.append("```json")
         lines.append(json.dumps(self.a2, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### A3 Pos/Neg MaxConf")
+        lines.append("### Gate-3 Score Separability Snapshot (legacy: A3)")
         lines.append("```json")
         lines.append(json.dumps(self.a3, ensure_ascii=False, indent=2))
         lines.append("```")
@@ -948,6 +972,11 @@ class Enhance241CheckRecorder:
             lines.append("### Notes")
             for n in self.notes:
                 lines.append(f"- {n}")
+
+        lines.append("### Gate Legend")
+        lines.append("- `Gate-1`: patch 后 step0 的数值稳定性/等价启动检查。")
+        lines.append("- `Gate-2`: 参数是否进 optimizer、梯度是否有效、是否观察到参数更新。")
+        lines.append("- `Gate-3`: val 快照上正负样本 max_conf 可分性（用于早期诊断，非最终指标结论）。")
 
         lines.append(f"### 结论: {conclusion}")
         for r in reasons:
@@ -1079,12 +1108,15 @@ class SPDConvDownsample(torch.nn.Module):
         out_ch: int,
         pre_div: int = 4,
         refine: str = "dw",
+        alpha_init: float = 0.05,
+        alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
         self.enhance241_a3_base = base_downsample
         self.in_ch = int(in_ch)
         self.out_ch = int(out_ch)
         self.pre_div = int(max(1, pre_div))
+        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         refine = str(refine).lower()
 
         if self.out_ch > 0 and self.out_ch % self.pre_div == 0:
@@ -1108,7 +1140,11 @@ class SPDConvDownsample(torch.nn.Module):
         if self.enhance241_a3_post.bias is not None:
             torch.nn.init.zeros_(self.enhance241_a3_post.bias)
 
-        self.enhance241_a3_alpha = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+        # Use bounded alpha = alpha_cap * tanh(alpha_raw): keeps residual stable while allowing non-zero init.
+        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
+        alpha_ratio = alpha_init / self.alpha_cap
+        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
+        self.enhance241_a3_alpha = torch.nn.Parameter(alpha_raw)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -1127,7 +1163,8 @@ class SPDConvDownsample(torch.nn.Module):
         if y_spd.shape[-2:] != y_base.shape[-2:]:
             y_spd = torch.nn.functional.interpolate(y_spd, size=y_base.shape[-2:], mode="nearest")
 
-        alpha = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        alpha_raw = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        alpha = torch.tanh(alpha_raw) * self.alpha_cap
         delta = alpha * y_spd
         out = y_base + delta
 
@@ -1146,7 +1183,9 @@ class SPDConvDownsample(torch.nn.Module):
                 recorder.record_a1_payload(
                     f"{prefix}.residual_safe",
                     {
+                        "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
+                        "alpha_cap": _to_float(self.alpha_cap),
                         "var_ratio_alpha_spd_vs_base": v_delta / (v_base + 1e-12),
                         "target_var_ratio": [0.01, 0.3],
                         "y_base": _tensor_stats(y_base),
@@ -1155,6 +1194,7 @@ class SPDConvDownsample(torch.nn.Module):
                         "out_vs_base_cosine": cos,
                     },
                 )
+                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
                 if out.requires_grad:
                     try:
@@ -1162,8 +1202,9 @@ class SPDConvDownsample(torch.nn.Module):
                     except Exception:
                         pass
             elif step <= 30:
+                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
-            if step == 1:
+            if _should_capture_delta(step):
                 recorder.capture_param_delta(self, prefix)
 
         setattr(self, "_enhance241_fwd_step", step + 1)
@@ -1239,8 +1280,18 @@ def apply(model: Any, cfg: Any) -> Any:
     out_ch = int(conv.out_channels)
     pre_div = _safe_int(_deep_get(cfg, "enhance241", "a3_pre_div", default=4), 4)
     refine = str(_deep_get(cfg, "enhance241", "a3_refine", default="dw"))
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_init", default=0.05), 0.05)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_cap", default=0.5), 0.5)
 
-    fuse = SPDConvDownsample(base_downsample=old, in_ch=in_ch, out_ch=out_ch, pre_div=pre_div, refine=refine)
+    fuse = SPDConvDownsample(
+        base_downsample=old,
+        in_ch=in_ch,
+        out_ch=out_ch,
+        pre_div=pre_div,
+        refine=refine,
+        alpha_init=alpha_init,
+        alpha_cap=alpha_cap,
+    )
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
             setattr(fuse, attr, getattr(old, attr))
@@ -1271,7 +1322,8 @@ def apply(model: Any, cfg: Any) -> Any:
         "pre_div": int(pre_div),
         "refine": str(refine),
         "mode": "residual_safe",
-        "alpha_init": 0.0,
+        "alpha_init": _to_float(alpha_init),
+        "alpha_cap": _to_float(alpha_cap),
     }
     setattr(yolo_obj, "_enhance241_a3_info", info)
 

@@ -14,6 +14,7 @@ from .yolo11_241a3 import (
     _get_module_recorder,
     _infer_device_dtype,
     _locate_detect,
+    _should_capture_delta,
     _tensor_stats,
     _to_float,
     get_check_recorder,
@@ -197,9 +198,12 @@ class C5BRAInject(torch.nn.Module):
         topk: int = 4,
         kv_downsample_mode: str = "avg",
         soft_routing: bool = True,
+        alpha_init: float = 0.05,
+        alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
         self.enhance241_c5_base = base_module
+        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         self.enhance241_c5_bra = BRACore(
             channels=channels,
             num_heads=num_heads,
@@ -208,7 +212,10 @@ class C5BRAInject(torch.nn.Module):
             kv_downsample_mode=kv_downsample_mode,
             soft_routing=soft_routing,
         )
-        self.enhance241_c5_alpha = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
+        alpha_ratio = alpha_init / self.alpha_cap
+        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
+        self.enhance241_c5_alpha = torch.nn.Parameter(alpha_raw)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -220,12 +227,18 @@ class C5BRAInject(torch.nn.Module):
 
         y_base = self.enhance241_c5_base(x)
         delta = self.enhance241_c5_bra(y_base)
-        alpha = self.enhance241_c5_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        alpha_raw = self.enhance241_c5_alpha.to(dtype=y_base.dtype, device=y_base.device)
+        alpha = torch.tanh(alpha_raw) * self.alpha_cap
         out = y_base + alpha * delta
 
         if recorder is not None:
             if step == 0:
-                recorder.record_module_compare(f"{prefix}.p3", patched=out, baseline=y_base, input_tensor=x)
+                recorder.record_module_compare(
+                    f"{prefix}.p3",
+                    patched=out,
+                    baseline=y_base,
+                    input_tensor=_to_input_tensor(x),
+                )
                 v_base = _safe_float(y_base.detach().float().var(unbiased=False).item(), 0.0)
                 v_out = _safe_float(out.detach().float().var(unbiased=False).item(), 0.0)
                 cos = _safe_float(
@@ -244,7 +257,9 @@ class C5BRAInject(torch.nn.Module):
                         "var_ratio_out_over_base": v_out / (v_base + 1e-12),
                         "thresholds": {"cosine_min": 0.98, "var_ratio_min": 0.5},
                         "pass": gate1_ok,
+                        "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
+                        "alpha_cap": _to_float(self.alpha_cap),
                         "base_stats": _tensor_stats(y_base),
                         "delta_stats": _tensor_stats(delta),
                         "out_stats": _tensor_stats(out),
@@ -252,6 +267,7 @@ class C5BRAInject(torch.nn.Module):
                 )
                 if not gate1_ok:
                     recorder.add_note(f"{prefix}: Gate-1 failed (cos={cos:.4f}, var_ratio={v_out/(v_base+1e-12):.4f})")
+                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=100)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=100)
                 if out.requires_grad:
                     try:
@@ -259,8 +275,9 @@ class C5BRAInject(torch.nn.Module):
                     except Exception:
                         pass
             elif step <= 100:
+                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=100)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=100)
-            if step == 1:
+            if _should_capture_delta(step):
                 recorder.capture_param_delta(self, prefix)
 
         setattr(self, "_enhance241_fwd_step", step + 1)
@@ -278,23 +295,46 @@ def _extract_model_seq(model: Any) -> Tuple[Any, Optional[Any]]:
     return yolo_obj, seq
 
 
+def _to_input_tensor(x: Any) -> Optional[torch.Tensor]:
+    if isinstance(x, torch.Tensor):
+        return x
+    if isinstance(x, (list, tuple)):
+        for item in x:
+            if isinstance(item, torch.Tensor):
+                return item
+    return None
+
+
+def _infer_p3_head_index(detect: Any) -> int:
+    f = getattr(detect, "f", [])
+    if isinstance(f, int):
+        return 0
+    if isinstance(f, (list, tuple)):
+        if len(f) >= 4:
+            return 1
+        if len(f) >= 1:
+            return 0
+    raise RuntimeError(f"Unable to locate P3 head index from Detect.f={f}")
+
+
 def _infer_p3_output_index(seq: Any) -> int:
     _, detect = _locate_detect(seq)
     f = getattr(detect, "f", [])
     if isinstance(f, int):
         return int(f)
     if isinstance(f, (list, tuple)) and f:
-        return int(f[0])
+        return int(f[_infer_p3_head_index(detect)])
     raise RuntimeError(f"Unable to locate P3 output index from Detect.f={f}")
 
 
 def _infer_p3_channels(detect: Any) -> int:
+    p3_head_idx = _infer_p3_head_index(detect)
     try:
-        return int(detect.cv2[0][0].conv.in_channels)  # type: ignore[index]
+        return int(detect.cv2[p3_head_idx][0].conv.in_channels)  # type: ignore[index]
     except Exception:
         pass
     try:
-        first = detect.cv3[0]  # type: ignore[index]
+        first = detect.cv3[p3_head_idx]  # type: ignore[index]
         for m in first.modules():
             if isinstance(m, torch.nn.Conv2d):
                 return int(m.in_channels)
@@ -343,6 +383,8 @@ def apply(model: Any, cfg: Any) -> Any:
     topk = _safe_int(_deep_get(cfg, "enhance241", "c5_topk", default=4), 4)
     kv_mode = str(_deep_get(cfg, "enhance241", "c5_kv_downsample_mode", default="avg")).lower()
     soft_routing = bool(_deep_get(cfg, "enhance241", "c5_soft_routing", default=True))
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c5_alpha_init", default=0.05), 0.05)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c5_alpha_cap", default=0.5), 0.5)
 
     wrapped = C5BRAInject(
         old,
@@ -352,6 +394,8 @@ def apply(model: Any, cfg: Any) -> Any:
         topk=topk,
         kv_downsample_mode=kv_mode,
         soft_routing=soft_routing,
+        alpha_init=alpha_init,
+        alpha_cap=alpha_cap,
     )
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
@@ -381,7 +425,8 @@ def apply(model: Any, cfg: Any) -> Any:
         "topk": int(topk),
         "kv_downsample_mode": str(kv_mode),
         "soft_routing": bool(soft_routing),
-        "alpha_init": 0.0,
+        "alpha_init": _to_float(alpha_init),
+        "alpha_cap": _to_float(alpha_cap),
         "params_old": int(old_params),
         "params_new": int(new_params),
         "delta_params": int(new_params - old_params),
