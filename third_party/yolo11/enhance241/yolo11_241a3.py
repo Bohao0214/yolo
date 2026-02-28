@@ -108,6 +108,15 @@ def _to_float(v: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _should_capture_delta(step: int) -> bool:
+    """Compatibility helper for newer enhance241 modules importing from a3."""
+    try:
+        s = int(step)
+    except Exception:
+        return False
+    return s in {0, 1, 2, 5, 10, 20, 50, 100}
+
+
 def _vector_summary(vec: Optional[torch.Tensor]) -> Dict[str, Any]:
     if vec is None:
         return {"count": 0}
