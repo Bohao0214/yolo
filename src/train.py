@@ -1655,12 +1655,15 @@ def main() -> None:
     cfg["enhance241_exp_dir"] = str(exp_dir)
     os.environ["ENHANCE241_EXP_DIR"] = str(exp_dir)
 
+    train_artifact_dir = exp_dir / "train"
+    train_artifact_dir.mkdir(parents=True, exist_ok=True)
+
     data_yaml = Path(cfg.get("data", project_root / "configs" / "data" / "defect.yaml")).resolve()
     data_root_override = str(cfg.get("data_root", ""))
     val_split = float(cfg.get("val_split", 0.0))
     seed = int(cfg.get("seed", 42))
     run_data_yaml, data_root = build_data_yaml(
-        data_yaml, exp_dir, val_split, seed, data_root_override
+        data_yaml, train_artifact_dir, val_split, seed, data_root_override
     )
 
     audit_state: Dict[str, Any] = {
@@ -1720,7 +1723,7 @@ def main() -> None:
 
     # Persist a minimal, reproducible run meta for traceability.
     try:
-        shutil.copy2(cfg_path, exp_dir / "config.yaml")
+        shutil.copy2(cfg_path, train_artifact_dir / "config.yaml")
     except Exception:
         pass
     try:
@@ -1740,7 +1743,7 @@ def main() -> None:
             "skip_post_eval_metrics": bool(skip_post_eval_metrics),
             "save_weights": bool(save_weights),
         }
-        (exp_dir / "config_dump.json").write_text(
+        (train_artifact_dir / "config_dump.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except Exception:
