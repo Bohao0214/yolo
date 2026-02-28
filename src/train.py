@@ -31,6 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import argparse
 import atexit
+import copy
 import csv
 import datetime as dt
 import gc
@@ -669,19 +670,6 @@ def _partial_auc_recall_fpr(fpr: np.ndarray, recall: np.ndarray, fpr_max: float 
     return float(np.trapezoid(y, x))
 
 
-def _module_first_device(module: Any) -> Optional[Any]:
-    if module is None:
-        return None
-    try:
-        return next(module.parameters()).device
-    except Exception:
-        pass
-    try:
-        return next(module.buffers()).device
-    except Exception:
-        return None
-
-
 def _build_epoch_image_metrics_callback(
     *,
     yolo_model: Any,
@@ -701,6 +689,7 @@ def _build_epoch_image_metrics_callback(
     audit_state: Dict[str, Any],
 ) -> Optional[Callable[[Any], None]]:
     record_epoch_metrics = bool(cfg.get("record_epoch_image_metrics", False))
+    allow_best_ckpt_write = bool(cfg.get("save_weights", True))
     metric_norm = str(best_select_metric or "fitness").strip().lower()
     custom_best = metric_norm in {"ifn", "iauroc@fpr0.5"}
     if not (record_epoch_metrics or custom_best):
@@ -721,6 +710,9 @@ def _build_epoch_image_metrics_callback(
         "best_iauroc_fpr0p5": None,
         "best_fp": None,
         "best_tp": None,
+        "best_default_fitness": None,
+        "best_ifn_key": None,
+        "best_iauroc_key": None,
     }
 
     fieldnames = [
@@ -728,6 +720,10 @@ def _build_epoch_image_metrics_callback(
         "best_rule",
         "is_best_by_rule",
         "best_ckpt",
+        "train_fitness",
+        "is_best_default",
+        "is_best_ifn",
+        "is_best_iauroc_fpr0p5",
         "metrics/mAP50(B)",
         "metrics/mAP50-95(B)",
         "metrics/precision(B)",
@@ -778,6 +774,8 @@ def _build_epoch_image_metrics_callback(
         }
 
     def _maybe_enforce_best(trainer: Any, is_better: bool) -> str:
+        if not allow_best_ckpt_write:
+            return ""
         last_path = Path(str(getattr(trainer, "last", ""))).resolve()
         best_path = Path(str(getattr(trainer, "best", ""))).resolve()
         if not best_path.name:
@@ -804,16 +802,16 @@ def _build_epoch_image_metrics_callback(
 
         model_backup = getattr(yolo_model, "model", None)
         predictor_backup = getattr(yolo_model, "predictor", None)
-        eval_model_ref = None
-        eval_model_device = None
+        eval_model = None
         try:
-            # `model.predict(..., device="cpu")` may move module tensors across devices.
-            # Record original device and restore it in `finally` to avoid mixed-device EMA updates.
-            eval_model_ref = trainer.model
+            # `YOLO.predict()` internally builds an AutoBackend with `fuse=True`, which mutates
+            # the provided module in-place (e.g. Conv+BN fusion adds conv.bias keys). Never pass
+            # trainer.model or trainer.ema.ema directly, or EMA state_dict keys will diverge.
+            model_for_eval = trainer.model
             if hasattr(trainer, "ema") and getattr(trainer.ema, "ema", None) is not None:
-                eval_model_ref = trainer.ema.ema
-            eval_model_device = _module_first_device(eval_model_ref)
-            yolo_model.model = eval_model_ref
+                model_for_eval = trainer.ema.ema
+            eval_model = copy.deepcopy(model_for_eval)
+            yolo_model.model = eval_model
             try:
                 yolo_model.predictor = None
             except Exception:
@@ -855,11 +853,44 @@ def _build_epoch_image_metrics_callback(
                     test_iauroc = _partial_auc_recall_fpr(test_fpr_curve, test_recall_curve, fpr_max=0.5)
 
             core = _extract_core_metrics(trainer)
+            fitness = _safe_float(getattr(trainer, "fitness", None))
+
+            is_best_default = 0
+            if fitness is not None and np.isfinite(fitness):
+                prev_default = state.get("best_default_fitness")
+                if prev_default is None or float(fitness) >= float(prev_default):
+                    is_best_default = 1
+                    state["best_default_fitness"] = float(fitness)
+
+            ifn_key = (int(val_conf["fn"]), -float(val_iauroc), int(val_conf["fp"]))
+            is_best_ifn = 0
+            prev_ifn = state.get("best_ifn_key")
+            if prev_ifn is None or ifn_key < prev_ifn:
+                is_best_ifn = 1
+                state["best_ifn_key"] = ifn_key
+
+            iauroc_key = (float(val_iauroc), -int(val_conf["fn"]), -int(val_conf["tp"]))
+            is_best_iauroc = 0
+            prev_iauroc = state.get("best_iauroc_key")
+            if prev_iauroc is None or iauroc_key > prev_iauroc:
+                is_best_iauroc = 1
+                state["best_iauroc_key"] = iauroc_key
+
+            selected_best_map = {
+                "fitness": is_best_default,
+                "ifn": is_best_ifn,
+                "iauroc@fpr0.5": is_best_iauroc,
+            }
+            selected_is_best = int(selected_best_map.get(metric_norm, 0))
             row: Dict[str, Any] = {
                 "epoch": epoch,
                 "best_rule": best_select_metric,
-                "is_best_by_rule": 0,
+                "is_best_by_rule": selected_is_best,
                 "best_ckpt": state.get("best_ckpt", ""),
+                "train_fitness": float("nan") if fitness is None else float(fitness),
+                "is_best_default": int(is_best_default),
+                "is_best_ifn": int(is_best_ifn),
+                "is_best_iauroc_fpr0p5": int(is_best_iauroc),
                 **core,
                 "val_iTP": val_conf["tp"],
                 "val_iFP": val_conf["fp"],
@@ -875,18 +906,8 @@ def _build_epoch_image_metrics_callback(
 
             is_better = False
             if custom_best:
-                if metric_norm == "ifn":
-                    key = (int(val_conf["fn"]), -float(val_iauroc), int(val_conf["fp"]))
-                    prev = state.get("best_key")
-                    if prev is None or key < prev:
-                        is_better = True
-                        state["best_key"] = key
-                else:  # iauroc@fpr0.5
-                    key = (float(val_iauroc), -int(val_conf["fn"]), -int(val_conf["tp"]))
-                    prev = state.get("best_key")
-                    if prev is None or key > prev:
-                        is_better = True
-                        state["best_key"] = key
+                is_better = bool(selected_is_best)
+                state["best_key"] = ifn_key if metric_norm == "ifn" else iauroc_key
 
                 best_ckpt = _maybe_enforce_best(trainer, is_better)
                 if is_better:
@@ -900,7 +921,6 @@ def _build_epoch_image_metrics_callback(
                         f"[best_select:{best_select_metric}] epoch={epoch} improved "
                         f"val_iFN={val_conf['fn']} val_iAUROC@fpr0.5={val_iauroc:.6f}"
                     )
-                row["is_best_by_rule"] = int(is_better)
                 row["best_ckpt"] = state.get("best_ckpt", "")
 
             with csv_path.open("a", encoding="utf-8", newline="") as f:
@@ -920,14 +940,10 @@ def _build_epoch_image_metrics_callback(
                 yolo_model.predictor = predictor_backup
             except Exception:
                 pass
-            if eval_model_ref is not None and eval_model_device is not None:
-                try:
-                    eval_model_ref.to(device=eval_model_device)
-                except Exception as exc:
-                    print(
-                        f"[epoch_metrics] warning epoch={epoch}: failed to restore eval model to "
-                        f"{eval_model_device}: {exc}"
-                    )
+            try:
+                del eval_model
+            except Exception:
+                pass
 
     audit_state["epoch_image_metrics_csv"] = str(csv_path)
     return on_fit_epoch_end

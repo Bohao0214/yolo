@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Baseline grid runner with custom best-selection rules.
+"""Baseline runner with per-epoch multi-rule best tracking.
 
 目标：
-- 运行 baseline 2x2x2 网格（epochs x batch x best_select_metric）。
+- 运行 baseline 网格（默认只跑 epochs=150, batch=6/10）。
+- 单次训练同时记录 default/iFN/iAUROC@fpr0.5 三套 best 标记。
 - 不保存权重/可视化/后评估曲线，只保留训练曲线与逐 epoch 指标表。
 - 结果写入 analyze/result/report_*/。
 """
@@ -17,7 +18,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import yaml  # type: ignore
 
@@ -26,18 +27,22 @@ ROOT = Path("/home/ubuntu/hpproject/yolo").resolve()
 DEFAULT_BASE_CFG = ROOT / "configs" / "yolo11" / "defect.yaml"
 DEFAULT_OUT_ROOT = ROOT / "analyze" / "result"
 
+RULE_FLAG_COLUMNS = {
+    "fitness": "is_best_default",
+    "iFN": "is_best_ifn",
+    "iAUROC@fpr0.5": "is_best_iauroc_fpr0p5",
+}
+
 
 @dataclass
 class Case:
     case_id: int
     epochs: int
     batch: int
-    best_select_metric: str
 
     @property
     def case_name(self) -> str:
-        rule = self.best_select_metric.lower().replace("@", "at").replace(".", "p").replace("/", "_")
-        return f"baseline_c{self.case_id:03d}_e{self.epochs}_b{self.batch}_{rule}"
+        return f"baseline_c{self.case_id:03d}_e{self.epochs}_b{self.batch}"
 
 
 def parse_list(raw: str, cast_fn) -> List[Any]:
@@ -61,6 +66,22 @@ def normalize_best_rule(raw: str) -> str:
     if token in {"iauroc@fpr0.5"}:
         return "iAUROC@fpr0.5"
     raise ValueError(f"Unsupported best rule: {raw}. Allowed: fitness(default/默认), iFN, iAUROC@fpr0.5")
+
+
+def unique_keep_order(items: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    for item in items:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def rule_slug(rule: str) -> str:
+    if rule == "fitness":
+        return "default"
+    if rule == "iFN":
+        return "ifn"
+    return "iauroc_fpr0p5"
 
 
 def make_report_dir(out_root: Path) -> Path:
@@ -119,6 +140,17 @@ def to_epoch_key(v: Any) -> Optional[int]:
         return None
 
 
+def flag_is_true(v: Any) -> bool:
+    token = str(v).strip().lower()
+    return token in {"1", "1.0", "true", "yes"}
+
+
+def best_epoch_by_flag(rows: Sequence[Dict[str, Any]], flag_col: str) -> Optional[int]:
+    epochs = [to_epoch_key(r.get("epoch")) for r in rows if flag_is_true(r.get(flag_col, ""))]
+    epochs = [e for e in epochs if e is not None]
+    return max(epochs) if epochs else None
+
+
 def merge_epoch_rows(
     case: Case,
     exp_dir: Path,
@@ -144,7 +176,6 @@ def merge_epoch_rows(
             "case_name": case.case_name,
             "epochs_cfg": case.epochs,
             "batch_cfg": case.batch,
-            "best_select_metric_cfg": case.best_select_metric,
             "exp_dir": str(exp_dir),
             "epoch": e,
         }
@@ -179,13 +210,38 @@ def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
             w.writerow(r)
 
 
+def collect_metric_extrema(rows: Sequence[Dict[str, str]]) -> Dict[str, Any]:
+    val_ifn_values: List[float] = []
+    val_iauroc_values: List[float] = []
+    for r in rows:
+        try:
+            val_ifn_values.append(float(r.get("val_iFN", "nan")))
+        except Exception:
+            pass
+        try:
+            val_iauroc_values.append(float(r.get("val_iAUROC_fpr0p5", "nan")))
+        except Exception:
+            pass
+    val_ifn_values = [x for x in val_ifn_values if x == x]
+    val_iauroc_values = [x for x in val_iauroc_values if x == x]
+    return {
+        "val_iFN_min": min(val_ifn_values) if val_ifn_values else "",
+        "val_iAUROC_fpr0p5_max": max(val_iauroc_values) if val_iauroc_values else "",
+    }
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Baseline 2x2x2 grid runner with custom best rule.")
+    parser = argparse.ArgumentParser(description="Baseline runner with shared per-epoch best-rule tracking.")
     parser.add_argument("--base-config", type=str, default=str(DEFAULT_BASE_CFG))
     parser.add_argument("--out-root", type=str, default=str(DEFAULT_OUT_ROOT))
-    parser.add_argument("--epochs", type=str, default="100,150")
+    parser.add_argument("--epochs", type=str, default="150")
     parser.add_argument("--batches", type=str, default="6,10")
-    parser.add_argument("--best-rules", type=str, default="fitness,iFN,iAUROC@fpr0.5")
+    parser.add_argument(
+        "--best-rules",
+        type=str,
+        default="default,iFN,iAUROC@fpr0.5",
+        help="Tracked rules in reports only. Does not increase training run count.",
+    )
     parser.add_argument("--patience", type=int, default=0)
     parser.add_argument("--grad-accum", type=int, default=1)
     parser.add_argument("--lr0", type=float, default=0.012)
@@ -201,10 +257,10 @@ def main() -> None:
 
     epochs_list = parse_list(args.epochs, int)
     batch_list = parse_list(args.batches, int)
-    rules = [x.strip() for x in str(args.best_rules).split(",") if x.strip()]
-    if not rules:
+    tracked_rules_raw = [x.strip() for x in str(args.best_rules).split(",") if x.strip()]
+    if not tracked_rules_raw:
         raise ValueError("best-rules is empty")
-    rules = [normalize_best_rule(x) for x in rules]
+    tracked_rules = unique_keep_order([normalize_best_rule(x) for x in tracked_rules_raw])
 
     report_dir = make_report_dir(Path(args.out_root).resolve())
     cfg_dir = report_dir / "tmp_cfgs"
@@ -223,15 +279,15 @@ def main() -> None:
     cid = 1
     for ep in epochs_list:
         for bt in batch_list:
-            for rule in rules:
-                cases.append(Case(case_id=cid, epochs=int(ep), batch=int(bt), best_select_metric=rule))
-                cid += 1
+            cases.append(Case(case_id=cid, epochs=int(ep), batch=int(bt)))
+            cid += 1
 
     write_csv(report_dir / "plan.csv", [case.__dict__ | {"case_name": case.case_name} for case in cases])
     (report_dir / "plan.json").write_text(
         json.dumps(
             {
                 "base_config": str(base_cfg_path),
+                "tracked_rules": tracked_rules,
                 "cases": [case.__dict__ | {"case_name": case.case_name} for case in cases],
             },
             ensure_ascii=False,
@@ -248,7 +304,7 @@ def main() -> None:
     print(
         "[run] "
         f"report_dir={report_dir} cases={len(cases)} dry_run={args.dry_run} "
-        f"base_config={base_cfg_path}"
+        f"tracked_rules={','.join(tracked_rules)} base_config={base_cfg_path}"
     )
 
     for case in cases:
@@ -263,7 +319,7 @@ def main() -> None:
         cfg["lr0"] = float(args.lr0)
         cfg["lrf"] = float(args.lrf)
         cfg["warmup_epochs"] = float(args.warmup_epochs)
-        cfg["best_select_metric"] = str(case.best_select_metric)
+        cfg["best_select_metric"] = "fitness"
         cfg["record_epoch_image_metrics"] = True
         cfg["save_weights"] = False
         cfg["save_val_pic"] = False
@@ -296,6 +352,7 @@ def main() -> None:
             "case_name": case.case_name,
             "status": status,
             "dry_run": bool(args.dry_run),
+            "tracked_rules": ",".join(tracked_rules),
             "started_at": started,
             "ended_at": ended,
             "run_name": run_name,
@@ -317,7 +374,7 @@ def main() -> None:
                     "case_name": case.case_name,
                     "status": status,
                     "dry_run": bool(args.dry_run),
-                    "best_select_metric_cfg": case.best_select_metric,
+                    "tracked_rules": ",".join(tracked_rules),
                     "exp_dir": str(exp_dir) if exp_dir is not None else "",
                     "note": note,
                 }
@@ -332,49 +389,34 @@ def main() -> None:
         merged_all.extend(merged_rows)
         write_csv(case_table_dir / f"{case.case_name}_epoch_metrics.csv", merged_rows)
 
-        best_epochs = [to_epoch_key(r.get("epoch")) for r in image_rows if str(r.get("is_best_by_rule", "")) in {"1", "1.0"}]
-        best_epochs = [x for x in best_epochs if x is not None]
-        best_epoch = max(best_epochs) if best_epochs else None
-        val_ifn_values = []
-        val_iauroc_values = []
-        for r in image_rows:
-            try:
-                val_ifn_values.append(float(r.get("val_iFN", "nan")))
-            except Exception:
-                pass
-            try:
-                val_iauroc_values.append(float(r.get("val_iAUROC_fpr0p5", "nan")))
-            except Exception:
-                pass
-        val_ifn_values = [x for x in val_ifn_values if x == x]
-        val_iauroc_values = [x for x in val_iauroc_values if x == x]
-
-        summary_rows.append(
-            {
-                "case_name": case.case_name,
-                "status": status,
-                "dry_run": bool(args.dry_run),
-                "best_select_metric_cfg": case.best_select_metric,
-                "exp_dir": str(exp_dir),
-                "epochs_cfg": case.epochs,
-                "batch_cfg": case.batch,
-                "epoch_rows": len(merged_rows),
-                "best_epoch_by_rule": best_epoch if best_epoch is not None else "",
-                "val_iFN_min": min(val_ifn_values) if val_ifn_values else "",
-                "val_iAUROC_fpr0p5_max": max(val_iauroc_values) if val_iauroc_values else "",
-            }
-        )
+        summary: Dict[str, Any] = {
+            "case_name": case.case_name,
+            "status": status,
+            "dry_run": bool(args.dry_run),
+            "tracked_rules": ",".join(tracked_rules),
+            "exp_dir": str(exp_dir),
+            "epochs_cfg": case.epochs,
+            "batch_cfg": case.batch,
+            "epoch_rows": len(merged_rows),
+            "last_epoch_recorded": max([r["epoch"] for r in merged_rows], default=""),
+        }
+        summary.update(collect_metric_extrema(image_rows))
+        for rule in tracked_rules:
+            flag_col = RULE_FLAG_COLUMNS[rule]
+            summary[f"best_epoch_{rule_slug(rule)}"] = best_epoch_by_flag(image_rows, flag_col) or ""
+        summary_rows.append(summary)
 
     write_csv(report_dir / "run_records.csv", run_records)
     write_csv(report_dir / "epoch_metrics_all.csv", merged_all)
     write_csv(report_dir / "run_summary.csv", summary_rows)
 
     md_lines = [
-        f"# Baseline Grid Report ({dt.datetime.now().isoformat(timespec='seconds')})",
+        f"# Baseline Report ({dt.datetime.now().isoformat(timespec='seconds')})",
         "",
         f"- report_dir: `{report_dir}`",
         f"- base_config: `{base_cfg_path}`",
         f"- cases: `{len(cases)}`",
+        f"- tracked_rules: `{','.join(tracked_rules)}`",
         f"- dry_run: `{args.dry_run}`",
         f"- fail_count: `{fail_count}`",
         "- fixed_hparams:",
