@@ -4,7 +4,6 @@ from __future__ import annotations
 # Purpose: enhance241 a3 (SPDConvDownsample) module + apply hook + debug checks.
 
 import atexit
-import csv
 import datetime as dt
 import json
 import os
@@ -127,18 +126,6 @@ def _vector_summary(vec: Optional[torch.Tensor]) -> Dict[str, Any]:
         "p90": _to_float(q[1].item()),
         "p99": _to_float(q[2].item()),
     }
-
-
-def _is_nonzero_map(values: Dict[str, Any], eps: float = 1e-12) -> bool:
-    for v in values.values():
-        if abs(_to_float(v, 0.0)) > float(eps):
-            return True
-    return False
-
-
-def _should_capture_delta(step: int) -> bool:
-    # Sparse schedule to survive grad-accumulate setups (e.g., nbs=64, batch=6 => accumulate~11).
-    return int(step) in {1, 2, 4, 8, 12, 16, 24, 32, 48, 64}
 
 
 def _tensor_stats(tensor: Optional[torch.Tensor]) -> Dict[str, Any]:
@@ -314,12 +301,6 @@ def _resolve_project_root(cfg: Any) -> Path:
 
 
 def _resolve_exp_dir(cfg: Any) -> Optional[Path]:
-    env_exp = str(os.environ.get("ENHANCE241_EXP_DIR", "")).strip()
-    if env_exp:
-        p = Path(env_exp).expanduser().resolve()
-        if p.exists():
-            return p
-
     project_root = _resolve_project_root(cfg)
     yolo_version = str(_deep_get(cfg, "yolo_version", default="yolo11"))
     exp_name = str(_deep_get(cfg, "exp_name", default="defect241"))
@@ -354,14 +335,13 @@ def _resolve_exp_dir(cfg: Any) -> Optional[Path]:
 
 def maybe_open_md(cfg: Any, exp_dir: Optional[Path], module_key: str = "a3") -> Optional[Path]:
     _ = cfg
-    _ = module_key
     if exp_dir is None:
         return None
     try:
-        (exp_dir / "train").mkdir(parents=True, exist_ok=True)
+        exp_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
         return None
-    return exp_dir / "train" / "enhance241_check.md"
+    return exp_dir / f"enhance241_check_{module_key}.md"
 
 
 def _git_hash(project_root: Path) -> str:
@@ -602,8 +582,7 @@ class Enhance241CheckRecorder:
 
     def capture_param_delta(self, module: torch.nn.Module, prefix: str) -> None:
         with self.lock:
-            # Keep re-sampling until we observe non-zero updates; this avoids false zeros under grad accumulation.
-            if self.a2["delta_l2"] and _is_nonzero_map(self.a2["delta_l2"]):
+            if self.a2["delta_l2"]:
                 return
         delta: Dict[str, float] = {}
         for name, p in module.named_parameters():
@@ -618,7 +597,7 @@ class Enhance241CheckRecorder:
             except Exception:
                 continue
         with self.lock:
-            self.a2["delta_l2"] = delta
+            self.a2["delta_l2"].update(delta)
 
     def record_output_grad(self, name: str, grad: Optional[torch.Tensor]) -> None:
         if grad is None:
@@ -853,131 +832,14 @@ class Enhance241CheckRecorder:
                     "neg_count": int(len(neg_scores)),
                     "pos_max_conf": _vector_summary(pos_tensor),
                     "neg_max_conf": _vector_summary(neg_tensor),
-                    "pos_scores_raw": [float(v) for v in pos_scores[:5000]],
-                    "neg_scores_raw": [float(v) for v in neg_scores[:5000]],
                     "sample_rows": sample_rows,
                 }
         except Exception as exc:
             self.add_note(f"A3 predict failed: {exc}")
 
-    def _write_roc_overlay_artifacts(self) -> Dict[str, Any]:
-        pos_scores = self.a3.get("pos_scores_raw", []) if isinstance(self.a3, dict) else []
-        neg_scores = self.a3.get("neg_scores_raw", []) if isinstance(self.a3, dict) else []
-        if not isinstance(pos_scores, list) or not isinstance(neg_scores, list):
-            return {}
-        if len(pos_scores) == 0 or len(neg_scores) == 0:
-            return {}
-
-        train_dir = self.exp_dir / "train"
-        train_dir.mkdir(parents=True, exist_ok=True)
-        run_tag = dt.datetime.now().strftime("%Y%m%d%H%M%S")
-        module_tag = str(self.module_key)
-
-        roc_rows: List[Dict[str, Any]] = []
-        thresholds = [i / 100.0 for i in range(101)]
-        n_pos = float(max(1, len(pos_scores)))
-        n_neg = float(max(1, len(neg_scores)))
-        for thr in thresholds:
-            tp = sum(1 for v in pos_scores if float(v) >= thr)
-            fp = sum(1 for v in neg_scores if float(v) >= thr)
-            recall = float(tp) / n_pos
-            fpr = float(fp) / n_neg
-            roc_rows.append(
-                {
-                    "module": module_tag,
-                    "run_tag": run_tag,
-                    "threshold": float(thr),
-                    "recall": float(recall),
-                    "fpr": float(fpr),
-                }
-            )
-
-        roc_csv = train_dir / "roc_overlay.csv"
-        new_file = not roc_csv.exists()
-        with roc_csv.open("a", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["module", "run_tag", "threshold", "recall", "fpr"])
-            if new_file:
-                writer.writeheader()
-            writer.writerows(roc_rows)
-
-        targets = [0.05, 0.10, 0.30]
-        key_rows: List[Dict[str, Any]] = []
-        for target in targets:
-            best = min(roc_rows, key=lambda r: abs(float(r["fpr"]) - float(target)))
-            key_rows.append(
-                {
-                    "module": module_tag,
-                    "run_tag": run_tag,
-                    "target_fpr": float(target),
-                    "threshold": float(best["threshold"]),
-                    "fpr": float(best["fpr"]),
-                    "recall": float(best["recall"]),
-                }
-            )
-
-        key_csv = train_dir / "roc_keypoints.csv"
-        key_new = not key_csv.exists()
-        with key_csv.open("a", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["module", "run_tag", "target_fpr", "threshold", "fpr", "recall"])
-            if key_new:
-                writer.writeheader()
-            writer.writerows(key_rows)
-
-        roc_png = train_dir / "roc_overlay.png"
-        try:
-            import matplotlib.pyplot as plt  # type: ignore
-
-            curves: Dict[str, List[Dict[str, Any]]] = {}
-            with roc_csv.open("r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    mod = str(row.get("module", "")).strip()
-                    tag = str(row.get("run_tag", "")).strip()
-                    if not mod or not tag:
-                        continue
-                    k = f"{mod}:{tag}"
-                    curves.setdefault(k, []).append(row)
-
-            latest_by_module: Dict[str, str] = {}
-            for key in curves:
-                mod, _, tag = key.partition(":")
-                old_tag = latest_by_module.get(mod)
-                if old_tag is None or tag > old_tag:
-                    latest_by_module[mod] = tag
-
-            fig, ax = plt.subplots(figsize=(7.2, 5.0), dpi=150)
-            for mod, tag in sorted(latest_by_module.items()):
-                key = f"{mod}:{tag}"
-                rows = curves.get(key, [])
-                rows_sorted = sorted(rows, key=lambda r: float(r.get("fpr", 0.0)))
-                xs = [float(r.get("fpr", 0.0)) for r in rows_sorted]
-                ys = [float(r.get("recall", 0.0)) for r in rows_sorted]
-                ax.plot(xs, ys, linewidth=1.0, label=f"{mod}@{tag[-6:]}")
-            ax.set_xlabel("FPR")
-            ax.set_ylabel("Recall")
-            ax.set_title("enhance241 ROC overlay")
-            ax.grid(True, linewidth=0.4, alpha=0.4)
-            if latest_by_module:
-                ax.legend(fontsize=8)
-            fig.tight_layout()
-            fig.savefig(roc_png)
-            plt.close(fig)
-        except Exception as exc:
-            self.add_note(f"roc_overlay_plot_failed:{exc}")
-
-        return {
-            "roc_overlay_csv": str(roc_csv),
-            "roc_overlay_png": str(roc_png),
-            "roc_keypoints_csv": str(key_csv),
-            "roc_keypoints": key_rows,
-        }
-
     def _judge_conclusion(self) -> Tuple[str, List[str]]:
         reasons: List[str] = []
         structure = False
-        a1_bad = False
-        a2_bad = False
-        a3_bad = False
 
         a1_items = [v for v in self.a1.values() if isinstance(v, dict)]
         for item in a1_items:
@@ -985,61 +847,44 @@ class Enhance241CheckRecorder:
             if isinstance(patched, dict):
                 if int(patched.get("nan_count", 0)) > 0 or int(patched.get("inf_count", 0)) > 0:
                     structure = True
-                    a1_bad = True
                     reasons.append("A1 patched tensor contains NaN/Inf.")
             comp = item.get("patched_vs_baseline") if isinstance(item, dict) else None
             if isinstance(comp, dict):
                 vr = _to_float(comp.get("var_ratio", 1.0), 1.0)
                 if (vr > 4.0) or (vr < 0.25):
                     structure = True
-                    a1_bad = True
                     reasons.append(f"A1 variance ratio abnormal ({vr:.4f}).")
 
         grad_map = self.a2.get("grad_l2", {}) if isinstance(self.a2, dict) else {}
         delta_map = self.a2.get("delta_l2", {}) if isinstance(self.a2, dict) else {}
         if grad_map and all(_to_float(v, 0.0) == 0.0 for v in grad_map.values()):
             structure = True
-            a2_bad = True
             reasons.append("A2 gradients are all zero.")
         if delta_map and all(_to_float(v, 0.0) == 0.0 for v in delta_map.values()):
-            if grad_map and _is_nonzero_map(grad_map):
-                reasons.append("A2 deltas sampled before optimizer step (gradients are non-zero; check accumulate schedule).")
-            else:
-                structure = True
-                a2_bad = True
-                reasons.append("A2 parameter update deltas are all zero.")
+            structure = True
+            reasons.append("A2 parameter update deltas are all zero.")
 
         pos = self.a3.get("pos_max_conf", {}) if isinstance(self.a3, dict) else {}
         neg = self.a3.get("neg_max_conf", {}) if isinstance(self.a3, dict) else {}
         if isinstance(pos, dict) and isinstance(neg, dict) and pos.get("count", 0) and neg.get("count", 0):
             if _to_float(pos.get("p90", 0.0)) <= _to_float(neg.get("p90", 0.0)):
-                a3_bad = True
+                structure = True
                 reasons.append("A3 positive/negative max_conf not separable (pos p90 <= neg p90).")
-                reasons.append("A3 is a patch-time snapshot on pretrain weights; verify post-train sweep before final judgment.")
-
-        # Treat A3 as supporting evidence; avoid hard-failing solely on pretrain separability.
-        if a3_bad and (a1_bad or a2_bad):
-            structure = True
 
         if not reasons:
             reasons.append("No hard structural anomaly detected from A1/A2/A3; likely hyper-parameter mismatch.")
 
         if structure:
-            next_actions = {
-                "a3": "Next action: use gradient-safe residual a3 (baseline_downsample + alpha*spd_branch, alpha small non-zero init with bounded tanh, last conv zero-init), then rerun >=10 epochs.",
-                "a9": "Next action: keep a9 SE-SAM residual-safe with non-zero alpha warm start, verify Gate-2 delta after first effective optimizer step, then rerun >=10 epochs.",
-                "a7": "Next action: keep HorNet delta residual-safe and non-zero alpha init (>=0.03), verify first effective optimizer-step delta>0, then rerun >=10 epochs.",
-                "b3": "Next action: use residual-safe b3 (lo + alpha*refine(weighted-hi/lo - lo), alpha init 0, refine last conv zero-init), then rerun >=10 epochs.",
-                "b9": "Next action: keep b9 improved_CSP fusion residual-safe, confirm P4->P3 fusion delta is non-zero and low-FPR recall does not regress, then rerun >=10 epochs.",
-                "b7": "Next action: keep CARAFE residual-safe with non-zero alpha init and chunked reassembly, then rerun >=10 epochs.",
-                "c5": "Next action: use gradient-safe c5 (out=x+alpha*BRA(x), alpha small non-zero init, BRA proj zero-init), then rerun >=10 epochs.",
-                "c9": "Next action: use c9 as post-fusion SE-SAM guardrail; compare `full/channel/spatial` modes for FP suppression without low-FPR recall drop.",
-                "c7": "Next action: keep MCBAM residual-safe with non-zero alpha init and validate channel/spatial mode separately, then rerun >=10 epochs.",
-                "d7": "Next action: keep P3-only d7 with TAL-compatible stride and tuned cls bias shift, then rerun >=10 epochs and inspect low-FPR recall.",
-                "d9": "Next action: keep d9 score-calib residual branch conservative (small alpha, zero-init tail), then rerun >=10 epochs and inspect FPR=0.05/0.1 recall.",
-            }
-            if self.module_key in next_actions:
-                reasons.append(next_actions[self.module_key])
+            if self.module_key == "a3":
+                reasons.append(
+                    "Next action: use residual-safe a3 (baseline_downsample + alpha*spd_branch, alpha init 0, "
+                    "last conv zero-init), then rerun >=10 epochs."
+                )
+            elif self.module_key == "b3":
+                reasons.append(
+                    "Next action: use residual-safe b3 (lo + alpha*refine(weighted-hi/lo - lo), alpha init 0, "
+                    "refine last conv zero-init), then rerun >=10 epochs."
+                )
             return "结构问题", reasons
 
         reasons.append("Next action: keep structure, try lr0 down 3x + warmup_epochs=3 then rerun >=10 epochs.")
@@ -1052,31 +897,11 @@ class Enhance241CheckRecorder:
             self._flushed = True
 
         conclusion, reasons = self._judge_conclusion()
-        roc_artifacts = self._write_roc_overlay_artifacts()
 
         enabled_flags = []
         enh = _deep_get(self.cfg, "enhance241", default={}) or {}
         if isinstance(enh, dict):
             enabled_flags = [k for k, v in enh.items() if isinstance(v, bool) and v]
-
-        params_map = self.a2.get("params", {}) if isinstance(self.a2, dict) else {}
-        grad_map = self.a2.get("grad_l2", {}) if isinstance(self.a2, dict) else {}
-        delta_map = self.a2.get("delta_l2", {}) if isinstance(self.a2, dict) else {}
-        param_total = int(len(params_map)) if isinstance(params_map, dict) else 0
-        param_trainable = int(
-            sum(
-                1
-                for v in (params_map.values() if isinstance(params_map, dict) else [])
-                if isinstance(v, dict) and bool(v.get("requires_grad", False))
-            )
-        )
-        gate0_ok = bool(param_trainable > 0)
-        gate2_ok = bool(
-            isinstance(grad_map, dict)
-            and isinstance(delta_map, dict)
-            and any(abs(_to_float(v, 0.0)) > 0.0 for v in grad_map.values())
-            and any(abs(_to_float(v, 0.0)) > 0.0 for v in delta_map.values())
-        )
 
         lines: List[str] = []
         lines.append(f"\n## Run {dt.datetime.now().isoformat(timespec='seconds')}")
@@ -1089,23 +914,17 @@ class Enhance241CheckRecorder:
         lines.append(json.dumps(self.patch_info, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### Gate-0 Optimizer Registration")
-        lines.append(f"- pass: `{gate0_ok}`")
-        lines.append(f"- params_total: `{param_total}`")
-        lines.append(f"- params_trainable: `{param_trainable}`")
-
-        lines.append("### Gate-1 Step0 Equivalence (legacy: A1)")
+        lines.append("### A1 Step0 Stats")
         lines.append("```json")
         lines.append(json.dumps(self.a1, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### Gate-2 Trainability (legacy: A2)")
-        lines.append(f"- pass: `{gate2_ok}`")
+        lines.append("### A2 Params / Grad / Delta")
         lines.append("```json")
         lines.append(json.dumps(self.a2, ensure_ascii=False, indent=2))
         lines.append("```")
 
-        lines.append("### Gate-3 Score Separability Snapshot (legacy: A3)")
+        lines.append("### A3 Pos/Neg MaxConf")
         lines.append("```json")
         lines.append(json.dumps(self.a3, ensure_ascii=False, indent=2))
         lines.append("```")
@@ -1116,24 +935,10 @@ class Enhance241CheckRecorder:
             lines.append(json.dumps(self.b_specific, ensure_ascii=False, indent=2))
             lines.append("```")
 
-        if roc_artifacts:
-            lines.append("### ROC Overlay")
-            lines.append(f"- roc_overlay_png: `{roc_artifacts.get('roc_overlay_png', '')}`")
-            lines.append(f"- roc_overlay_csv: `{roc_artifacts.get('roc_overlay_csv', '')}`")
-            lines.append(f"- roc_keypoints_csv: `{roc_artifacts.get('roc_keypoints_csv', '')}`")
-            lines.append("```json")
-            lines.append(json.dumps(roc_artifacts.get("roc_keypoints", []), ensure_ascii=False, indent=2))
-            lines.append("```")
-
         if self.notes:
             lines.append("### Notes")
             for n in self.notes:
                 lines.append(f"- {n}")
-
-        lines.append("### Gate Legend")
-        lines.append("- `Gate-1`: patch 后 step0 的数值稳定性/等价启动检查。")
-        lines.append("- `Gate-2`: 参数是否进 optimizer、梯度是否有效、是否观察到参数更新。")
-        lines.append("- `Gate-3`: val 快照上正负样本 max_conf 可分性（用于早期诊断，非最终指标结论）。")
 
         lines.append(f"### 结论: {conclusion}")
         for r in reasons:
@@ -1265,15 +1070,12 @@ class SPDConvDownsample(torch.nn.Module):
         out_ch: int,
         pre_div: int = 4,
         refine: str = "dw",
-        alpha_init: float = 0.05,
-        alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
         self.enhance241_a3_base = base_downsample
         self.in_ch = int(in_ch)
         self.out_ch = int(out_ch)
         self.pre_div = int(max(1, pre_div))
-        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         refine = str(refine).lower()
 
         if self.out_ch > 0 and self.out_ch % self.pre_div == 0:
@@ -1297,11 +1099,7 @@ class SPDConvDownsample(torch.nn.Module):
         if self.enhance241_a3_post.bias is not None:
             torch.nn.init.zeros_(self.enhance241_a3_post.bias)
 
-        # Use bounded alpha = alpha_cap * tanh(alpha_raw): keeps residual stable while allowing non-zero init.
-        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
-        alpha_ratio = alpha_init / self.alpha_cap
-        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
-        self.enhance241_a3_alpha = torch.nn.Parameter(alpha_raw)
+        self.enhance241_a3_alpha = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -1320,8 +1118,7 @@ class SPDConvDownsample(torch.nn.Module):
         if y_spd.shape[-2:] != y_base.shape[-2:]:
             y_spd = torch.nn.functional.interpolate(y_spd, size=y_base.shape[-2:], mode="nearest")
 
-        alpha_raw = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
-        alpha = torch.tanh(alpha_raw) * self.alpha_cap
+        alpha = self.enhance241_a3_alpha.to(dtype=y_base.dtype, device=y_base.device)
         delta = alpha * y_spd
         out = y_base + delta
 
@@ -1340,9 +1137,7 @@ class SPDConvDownsample(torch.nn.Module):
                 recorder.record_a1_payload(
                     f"{prefix}.residual_safe",
                     {
-                        "alpha_raw": _to_float(alpha_raw.item()),
                         "alpha": _to_float(alpha.item()),
-                        "alpha_cap": _to_float(self.alpha_cap),
                         "var_ratio_alpha_spd_vs_base": v_delta / (v_base + 1e-12),
                         "target_var_ratio": [0.01, 0.3],
                         "y_base": _tensor_stats(y_base),
@@ -1351,7 +1146,6 @@ class SPDConvDownsample(torch.nn.Module):
                         "out_vs_base_cosine": cos,
                     },
                 )
-                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
                 if out.requires_grad:
                     try:
@@ -1359,9 +1153,8 @@ class SPDConvDownsample(torch.nn.Module):
                     except Exception:
                         pass
             elif step <= 30:
-                recorder.record_scalar_curve(f"{prefix}.alpha_raw", _to_float(alpha_raw.item()), step, max_steps=30)
                 recorder.record_scalar_curve(f"{prefix}.alpha", _to_float(alpha.item()), step, max_steps=30)
-            if _should_capture_delta(step):
+            if step == 1:
                 recorder.capture_param_delta(self, prefix)
 
         setattr(self, "_enhance241_fwd_step", step + 1)
@@ -1437,18 +1230,8 @@ def apply(model: Any, cfg: Any) -> Any:
     out_ch = int(conv.out_channels)
     pre_div = _safe_int(_deep_get(cfg, "enhance241", "a3_pre_div", default=4), 4)
     refine = str(_deep_get(cfg, "enhance241", "a3_refine", default="dw"))
-    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_init", default=0.05), 0.05)
-    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a3_alpha_cap", default=0.5), 0.5)
 
-    fuse = SPDConvDownsample(
-        base_downsample=old,
-        in_ch=in_ch,
-        out_ch=out_ch,
-        pre_div=pre_div,
-        refine=refine,
-        alpha_init=alpha_init,
-        alpha_cap=alpha_cap,
-    )
+    fuse = SPDConvDownsample(base_downsample=old, in_ch=in_ch, out_ch=out_ch, pre_div=pre_div, refine=refine)
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
             setattr(fuse, attr, getattr(old, attr))
@@ -1479,8 +1262,7 @@ def apply(model: Any, cfg: Any) -> Any:
         "pre_div": int(pre_div),
         "refine": str(refine),
         "mode": "residual_safe",
-        "alpha_init": _to_float(alpha_init),
-        "alpha_cap": _to_float(alpha_cap),
+        "alpha_init": 0.0,
     }
     setattr(yolo_obj, "_enhance241_a3_info", info)
 
