@@ -28,7 +28,7 @@ Usage:
 
 Runs S2 quick A/B matrix with identical seed/data/epochs:
   baseline, a3, b3, d3, a3+b3, a3+d3, b3+d3, a3+b3+d3
-  plus added singles: a4, a5, a7, a9, a11, a21, b5, b7, b9, b11, b21, c4, c5, c7, c9, c11, c21, d5, d7, d9, d11, d21
+  plus added singles: a4, a5, a6, a7, a9, a11, a21, b5, b6, b7, b9, b11, b21, c4, c5, c6, c7, c9, c11, c21, d5, d6, d7, d9, d11, d21
   (d1 is legacy alias of d3)
 
 Behavior:
@@ -44,10 +44,11 @@ Options:
   --batch-size N
                Override batch size for all cases
   --combos L   Comma-separated cases, e.g.:
-               baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a4,c4,a21,b21,c21,d21
+               baseline,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,a4,a6,c4,c6,a21,b21,c21,d21
                Built-in aliases:
                hmc7/abcd7 => a7+b7+c7+d7
                pdd9/abcd9 => a9+b9+c9+d9
+               abcd6 => a6+b6+c6+d6
                abcd11 => a11+b11+c11+d11
                abcd21/pack21 => a21+b21+c21+d21
                b1237 => b1,b2,b3,b7 (expanded to four single cases)
@@ -172,7 +173,7 @@ fi
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
 
 # 默认组合：原有 S2 主线 + 新增模块单开 + 21 组合包
-DEFAULT_COMBOS="baseline,hmc7,pdd9,abcd11,abcd21,a11,b11,c11,d11,a21,b21,c21,d21,a9,b9,c9,d9,a5,a7,b5,b7,c5,c7,d5,d7,a4,c4,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,b5+c5,c5+d5,b5+d5,b5+c5+d5"
+DEFAULT_COMBOS="baseline,abcd6,hmc7,pdd9,abcd11,abcd21,a6,b6,c6,d6,a11,b11,c11,d11,a21,b21,c21,d21,a9,b9,c9,d9,a5,a7,b5,b7,c5,c7,d5,d7,a4,c4,a3,b3,d3,a3+b3,a3+d3,b3+d3,a3+b3+d3,b5+c5,c5+d5,b5+d5,b5+c5+d5"
 if [[ -z "${COMBOS_RAW}" ]]; then
   COMBOS_RAW="${DEFAULT_COMBOS}"
 fi
@@ -217,6 +218,10 @@ normalize_and_add_case() {
       add_case "a9_b9_c9_d9" "a9 b9 c9 d9"
       return
       ;;
+    abcd6|a6_b6_c6_d6|a6+b6+c6+d6)
+      add_case "a6_b6_c6_d6" "a6 b6 c6 d6"
+      return
+      ;;
     abcd11|a11_b11_c11_d11|a11+b11+c11+d11)
       add_case "a11_b11_c11_d11" "a11 b11 c11 d11"
       return
@@ -239,7 +244,7 @@ normalize_and_add_case() {
       add_case "d9" "d9"
       return
       ;;
-    a3|a4|a5|a7|a9|a11|a21|b1|b2|b3|b5|b7|b9|b11|b21|c4|c5|c7|c9|c11|c21|d1|d3|d5|d7|d9|d11|d21)
+    a3|a4|a5|a6|a7|a9|a11|a21|b1|b2|b3|b5|b6|b7|b9|b11|b21|c4|c5|c6|c7|c9|c11|c21|d1|d3|d5|d6|d7|d9|d11|d21)
       add_case "${token}" "${token}"
       return
       ;;
@@ -272,9 +277,9 @@ normalize_and_add_case() {
     [[ -z "${part}" ]] && continue
     case "${part}" in
       baseline|base|none) continue ;;
-      a3|a4|a5|a7|a9|a11|a21|b1|b2|b3|b5|b7|b9|b11|b21|c4|c5|c7|c9|c11|c21|d1|d3|d5|d7|d9|d11|d21) ;;
+      a3|a4|a5|a6|a7|a9|a11|a21|b1|b2|b3|b5|b6|b7|b9|b11|b21|c4|c5|c6|c7|c9|c11|c21|d1|d3|d5|d6|d7|d9|d11|d21) ;;
       *)
-        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,hmc7/pdd9/abcd11/abcd21,b1237,d1579,a3,a4,a5,a7,a9,a11,a21,b1,b2,b3,b5,b7,b9,b11,b21,c4,c5,c7,c9,c11,c21,d1,d3,d5,d7,d9,d11,d21)" >&2
+        echo "[error] Unsupported combo token '${part}' in '${raw}' (allowed: baseline,abcd6,hmc7/pdd9/abcd11/abcd21,b1237,d1579,a3,a4,a5,a6,a7,a9,a11,a21,b1,b2,b3,b5,b6,b7,b9,b11,b21,c4,c5,c6,c7,c9,c11,c21,d1,d3,d5,d6,d7,d9,d11,d21)" >&2
         exit 2
         ;;
     esac
@@ -349,10 +354,10 @@ enh = cfg.setdefault("enhance241", {})
 if not isinstance(enh, dict):
     raise SystemExit("enhance241 must be a mapping in base config.")
 
-for key in ("a3", "a4", "a5", "a7", "a9", "a11", "a21", "b1", "b2", "b3", "b5", "b7", "b9", "b11", "b21", "c4", "c5", "c7", "c9", "c11", "c21", "d1", "d3", "d5", "d7", "d9", "d11", "d21"):
+for key in ("a3", "a4", "a5", "a6", "a7", "a9", "a11", "a21", "b1", "b2", "b3", "b5", "b6", "b7", "b9", "b11", "b21", "c4", "c5", "c6", "c7", "c9", "c11", "c21", "d1", "d3", "d5", "d6", "d7", "d9", "d11", "d21"):
     enh[key] = False
 for key in switches:
-    if key not in {"a3", "a4", "a5", "a7", "a9", "a11", "a21", "b1", "b2", "b3", "b5", "b7", "b9", "b11", "b21", "c4", "c5", "c7", "c9", "c11", "c21", "d1", "d3", "d5", "d7", "d9", "d11", "d21"}:
+    if key not in {"a3", "a4", "a5", "a6", "a7", "a9", "a11", "a21", "b1", "b2", "b3", "b5", "b6", "b7", "b9", "b11", "b21", "c4", "c5", "c6", "c7", "c9", "c11", "c21", "d1", "d3", "d5", "d6", "d7", "d9", "d11", "d21"}:
         raise SystemExit(f"Unsupported matrix switch: {key}")
     if key == "d1":
         enh["d1"] = True

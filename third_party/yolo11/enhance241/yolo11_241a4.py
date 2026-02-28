@@ -1368,6 +1368,37 @@ class SPDConvDownsample(torch.nn.Module):
         return out
 
 
+class A4DualDeltaSafe(SPDConvDownsample):
+    """Compatibility wrapper for modules that still import the old a4 class name."""
+
+    def __init__(
+        self,
+        base_downsample: torch.nn.Module,
+        in_ch: int,
+        out_ch: int,
+        a3_pre_div: int = 4,
+        a4_refine: str = "dw",
+        a4_order: int = 3,
+        a4_alpha1_init: float = 0.05,
+        a4_alpha1_cap: float = 0.5,
+        a4_alpha2_init: float = 0.0,
+        a4_alpha2_cap: float = 0.5,
+        **_: Any,
+    ) -> None:
+        super().__init__(
+            base_downsample=base_downsample,
+            in_ch=in_ch,
+            out_ch=out_ch,
+            pre_div=a3_pre_div,
+            refine=a4_refine,
+            alpha_init=a4_alpha1_init,
+            alpha_cap=a4_alpha1_cap,
+        )
+        self.a4_order = int(a4_order)
+        self.a4_alpha2_init = float(a4_alpha2_init)
+        self.a4_alpha2_cap = float(a4_alpha2_cap)
+
+
 def apply(model: Any, cfg: Any) -> Any:
     """Apply enhance241 a4 SPDConvDownsample at the P3 downsample point."""
 

@@ -32,6 +32,7 @@ Usage:
 Switches (implemented):
   hmc7  Alias of: a7 b7 c7 d7 (YOLO-HMC group)
   pdd9  Alias of: a9 b9 c9 d9 (PDD group)
+  abcd6 Alias of: a6 b6 c6 d6 (geometry-semantic-sparse-safe group)
   abcd11 Alias of: a11 b11 c11 d11 (ATL11 group)
   abcd21 Alias of: a21 b21 c21 d21 (Combo-safe group)
   b1237 Alias of: b1 b2 b3 b7
@@ -39,6 +40,7 @@ Switches (implemented):
   a3    Enable 2.4.1 a3 (SPDConvDownsample P3 downsample)
   a4    Enable 2.4.1 a4 (fuse a3+a7 dual-delta on P3 path)
   a5    Enable 2.4.1 a5 (P3-side residual-safe lightweight enhancement)
+  a6    Enable 2.4.1 a6 (a4 + LSKBlock geometry-semantic P3 enhancer)
   a7    Enable 2.4.1 a7 (HorNet/C3HB-style residual-safe P3 generation enhancer)
   a9    Enable 2.4.1 a9 (Light-PDD SE-SAM backbone enhancer on P3 stage)
   a11   Enable 2.4.1 a11 (GAM backbone stage enhancement on P3 route)
@@ -47,17 +49,20 @@ Switches (implemented):
   b2    Enable 2.4.1 b2-safe (residual P4->P3 fuse, baseline-safe init)
   b3    Enable 2.4.1 b3 (NASFPNLite P5->P4 + P4->P3)
   b5    Enable 2.4.1 b5 (GFPN-like CSPStage fusion refinement)
+  b6    Enable 2.4.1 b6 (DySample residual-safe semantic alignment)
   b7    Enable 2.4.1 b7 (CARAFE residual-safe upsampling)
   b9    Enable 2.4.1 b9 (Light-PDD improved_CSP refinement at P4->P3 fusion)
   b11   Enable 2.4.1 b11 (Tiny stride=4 detection branch, backbone_l3 + P3 fusion)
   b21   Enable 2.4.1 b21 (P4->P3 CARAFE safe branch)
   c4    Enable 2.4.1 c4 (fuse c5+c11 sequential residual-safe)
   c5    Enable 2.4.1 c5 (BRA residual-safe semantic enhancer)
+  c6    Enable 2.4.1 c6 (Gated-BRA sparse guardrail)
   c7    Enable 2.4.1 c7 (MCBAM residual-safe gate)
   c9    Enable 2.4.1 c9 (SE-SAM guardrail before head)
   c11   Enable 2.4.1 c11 (light head-input gate on P3/P2_new)
   c21   Enable 2.4.1 c21 (c5-primary combo-safe C module)
   d5    Enable 2.4.1 d5 (Add P2 stride=4/160x160 detect head)
+  d6    Enable 2.4.1 d6 (scale-sensitive cls score calibration)
   d7    Enable 2.4.1 d7 (keep only small-target detect head, P3-only)
   d9    Enable 2.4.1 d9 (P3 head score-calib residual block)
   d11   Enable 2.4.1 d11 (residual-safe cls score calibration)
@@ -206,6 +211,7 @@ done
 ENABLE_A3="false"
 ENABLE_A4="false"
 ENABLE_A5="false"
+ENABLE_A6="false"
 ENABLE_A7="false"
 ENABLE_A9="false"
 ENABLE_A11="false"
@@ -214,18 +220,21 @@ ENABLE_B1="false"
 ENABLE_B2="false"
 ENABLE_B3="false"
 ENABLE_B5="false"
+ENABLE_B6="false"
 ENABLE_B7="false"
 ENABLE_B9="false"
 ENABLE_B11="false"
 ENABLE_B21="false"
 ENABLE_C4="false"
 ENABLE_C5="false"
+ENABLE_C6="false"
 ENABLE_C7="false"
 ENABLE_C9="false"
 ENABLE_C11="false"
 ENABLE_C21="false"
 ENABLE_D3="false"
 ENABLE_D5="false"
+ENABLE_D6="false"
 ENABLE_D7="false"
 ENABLE_D9="false"
 ENABLE_D11="false"
@@ -239,6 +248,7 @@ for sw in "${SWITCHES[@]}"; do
     "" ) ;;
     hmc7|abcd7|a7_b7_c7_d7 ) ENABLE_A7="true"; ENABLE_B7="true"; ENABLE_C7="true"; ENABLE_D7="true" ;;
     pdd9|abcd9|a9_b9_c9_d9 ) ENABLE_A9="true"; ENABLE_B9="true"; ENABLE_C9="true"; ENABLE_D9="true" ;;
+    abcd6|a6_b6_c6_d6 ) ENABLE_A6="true"; ENABLE_B6="true"; ENABLE_C6="true"; ENABLE_D6="true" ;;
     abcd11|a11_b11_c11_d11 ) ENABLE_A11="true"; ENABLE_B11="true"; ENABLE_C11="true"; ENABLE_D11="true" ;;
     abcd21|a21_b21_c21_d21 ) ENABLE_A21="true"; ENABLE_B21="true"; ENABLE_C21="true"; ENABLE_D21="true" ;;
     b1237 ) ENABLE_B1="true"; ENABLE_B2="true"; ENABLE_B3="true"; ENABLE_B7="true" ;;
@@ -246,6 +256,7 @@ for sw in "${SWITCHES[@]}"; do
     a3 ) ENABLE_A3="true" ;;
     a4 ) ENABLE_A4="true" ;;
     a5 ) ENABLE_A5="true" ;;
+    a6 ) ENABLE_A6="true" ;;
     a7 ) ENABLE_A7="true" ;;
     a9 ) ENABLE_A9="true" ;;
     a11 ) ENABLE_A11="true" ;;
@@ -254,17 +265,20 @@ for sw in "${SWITCHES[@]}"; do
     b2 ) ENABLE_B2="true" ;;
     b3 ) ENABLE_B3="true" ;;
     b5 ) ENABLE_B5="true" ;;
+    b6 ) ENABLE_B6="true" ;;
     b7 ) ENABLE_B7="true" ;;
     b9 ) ENABLE_B9="true" ;;
     b11 ) ENABLE_B11="true" ;;
     b21 ) ENABLE_B21="true" ;;
     c4 ) ENABLE_C4="true" ;;
     c5 ) ENABLE_C5="true" ;;
+    c6 ) ENABLE_C6="true" ;;
     c7 ) ENABLE_C7="true" ;;
     c9 ) ENABLE_C9="true" ;;
     c11 ) ENABLE_C11="true" ;;
     c21 ) ENABLE_C21="true" ;;
     d5 ) ENABLE_D5="true" ;;
+    d6 ) ENABLE_D6="true" ;;
     d7 ) ENABLE_D7="true" ;;
     d9 ) ENABLE_D9="true" ;;
     d11 ) ENABLE_D11="true" ;;
@@ -276,17 +290,18 @@ for sw in "${SWITCHES[@]}"; do
 done
 
 if [[ ${#UNKNOWN[@]} -gt 0 ]]; then
-  echo "[error] Unsupported switches (hmc7/pdd9/abcd11/abcd21, b1237/d1579, a3/a4/a5/a7/a9/a11/a21, b1/b2/b3/b5/b7/b9/b11/b21, c4/c5/c7/c9/c11/c21, d5/d7/d9/d11/d21/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
+  echo "[error] Unsupported switches (abcd6/hmc7/pdd9/abcd11/abcd21, b1237/d1579, a3/a4/a5/a6/a7/a9/a11/a21, b1/b2/b3/b5/b6/b7/b9/b11/b21, c4/c5/c6/c7/c9/c11/c21, d5/d6/d7/d9/d11/d21/d3 plus legacy d1 alias): ${UNKNOWN[*]}" >&2
   exit 4
 fi
 
 CONFIG_TO_RUN="${BASE_CONFIG}"
 
-if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A7}" == "true" || "${ENABLE_A9}" == "true" || "${ENABLE_A11}" == "true" || "${ENABLE_A21}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_B5}" == "true" || "${ENABLE_B7}" == "true" || "${ENABLE_B9}" == "true" || "${ENABLE_B11}" == "true" || "${ENABLE_B21}" == "true" || "${ENABLE_C4}" == "true" || "${ENABLE_C5}" == "true" || "${ENABLE_C7}" == "true" || "${ENABLE_C9}" == "true" || "${ENABLE_C11}" == "true" || "${ENABLE_C21}" == "true" || "${ENABLE_D5}" == "true" || "${ENABLE_D7}" == "true" || "${ENABLE_D9}" == "true" || "${ENABLE_D11}" == "true" || "${ENABLE_D21}" == "true" || "${ENABLE_D3}" == "true" ]]; then
+if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A6}" == "true" || "${ENABLE_A7}" == "true" || "${ENABLE_A9}" == "true" || "${ENABLE_A11}" == "true" || "${ENABLE_A21}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_B5}" == "true" || "${ENABLE_B6}" == "true" || "${ENABLE_B7}" == "true" || "${ENABLE_B9}" == "true" || "${ENABLE_B11}" == "true" || "${ENABLE_B21}" == "true" || "${ENABLE_C4}" == "true" || "${ENABLE_C5}" == "true" || "${ENABLE_C6}" == "true" || "${ENABLE_C7}" == "true" || "${ENABLE_C9}" == "true" || "${ENABLE_C11}" == "true" || "${ENABLE_C21}" == "true" || "${ENABLE_D5}" == "true" || "${ENABLE_D6}" == "true" || "${ENABLE_D7}" == "true" || "${ENABLE_D9}" == "true" || "${ENABLE_D11}" == "true" || "${ENABLE_D21}" == "true" || "${ENABLE_D3}" == "true" ]]; then
   ENABLED_KEYS=()
   [[ "${ENABLE_A3}" == "true" ]] && ENABLED_KEYS+=("a3")
   [[ "${ENABLE_A4}" == "true" ]] && ENABLED_KEYS+=("a4")
   [[ "${ENABLE_A5}" == "true" ]] && ENABLED_KEYS+=("a5")
+  [[ "${ENABLE_A6}" == "true" ]] && ENABLED_KEYS+=("a6")
   [[ "${ENABLE_A7}" == "true" ]] && ENABLED_KEYS+=("a7")
   [[ "${ENABLE_A9}" == "true" ]] && ENABLED_KEYS+=("a9")
   [[ "${ENABLE_A11}" == "true" ]] && ENABLED_KEYS+=("a11")
@@ -295,17 +310,20 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
   [[ "${ENABLE_B2}" == "true" ]] && ENABLED_KEYS+=("b2")
   [[ "${ENABLE_B3}" == "true" ]] && ENABLED_KEYS+=("b3")
   [[ "${ENABLE_B5}" == "true" ]] && ENABLED_KEYS+=("b5")
+  [[ "${ENABLE_B6}" == "true" ]] && ENABLED_KEYS+=("b6")
   [[ "${ENABLE_B7}" == "true" ]] && ENABLED_KEYS+=("b7")
   [[ "${ENABLE_B9}" == "true" ]] && ENABLED_KEYS+=("b9")
   [[ "${ENABLE_B11}" == "true" ]] && ENABLED_KEYS+=("b11")
   [[ "${ENABLE_B21}" == "true" ]] && ENABLED_KEYS+=("b21")
   [[ "${ENABLE_C4}" == "true" ]] && ENABLED_KEYS+=("c4")
   [[ "${ENABLE_C5}" == "true" ]] && ENABLED_KEYS+=("c5")
+  [[ "${ENABLE_C6}" == "true" ]] && ENABLED_KEYS+=("c6")
   [[ "${ENABLE_C7}" == "true" ]] && ENABLED_KEYS+=("c7")
   [[ "${ENABLE_C9}" == "true" ]] && ENABLED_KEYS+=("c9")
   [[ "${ENABLE_C11}" == "true" ]] && ENABLED_KEYS+=("c11")
   [[ "${ENABLE_C21}" == "true" ]] && ENABLED_KEYS+=("c21")
   [[ "${ENABLE_D5}" == "true" ]] && ENABLED_KEYS+=("d5")
+  [[ "${ENABLE_D6}" == "true" ]] && ENABLED_KEYS+=("d6")
   [[ "${ENABLE_D7}" == "true" ]] && ENABLED_KEYS+=("d7")
   [[ "${ENABLE_D9}" == "true" ]] && ENABLED_KEYS+=("d9")
   [[ "${ENABLE_D11}" == "true" ]] && ENABLED_KEYS+=("d11")
@@ -338,6 +356,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a5.yaml"
         DERIVED_SUFFIX="__a5"
         ;;
+      a6 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a6.yaml"
+        DERIVED_SUFFIX="__a6"
+        ;;
       a7 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a7.yaml"
         DERIVED_SUFFIX="__a7"
@@ -361,6 +383,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
       b5 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b5.yaml"
         DERIVED_SUFFIX="__b5"
+        ;;
+      b6 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b6.yaml"
+        DERIVED_SUFFIX="__b6"
         ;;
       b7 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b7.yaml"
@@ -386,6 +412,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c5.yaml"
         DERIVED_SUFFIX="__c5"
         ;;
+      c6 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c6.yaml"
+        DERIVED_SUFFIX="__c6"
+        ;;
       c7 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c7.yaml"
         DERIVED_SUFFIX="__c7"
@@ -405,6 +435,10 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
       d5 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d5.yaml"
         DERIVED_SUFFIX="__d5"
+        ;;
+      d6 )
+        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d6.yaml"
+        DERIVED_SUFFIX="__d6"
         ;;
       d7 )
         DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d7.yaml"
@@ -464,6 +498,7 @@ if not isinstance(enh, dict):
 enh["a3"] = False
 enh["a4"] = False
 enh["a5"] = False
+enh["a6"] = False
 enh["a7"] = False
 enh["a9"] = False
 enh["a11"] = False
@@ -472,12 +507,14 @@ enh["b1"] = False
 enh["b2"] = False
 enh["b3"] = False
 enh["b5"] = False
+enh["b6"] = False
 enh["b7"] = False
 enh["b9"] = False
 enh["b11"] = False
 enh["b21"] = False
 enh["c4"] = False
 enh["c5"] = False
+enh["c6"] = False
 enh["c7"] = False
 enh["c9"] = False
 enh["c11"] = False
@@ -485,6 +522,7 @@ enh["c21"] = False
 enh["d1"] = False
 enh["d3"] = False
 enh["d5"] = False
+enh["d6"] = False
 enh["d7"] = False
 enh["d9"] = False
 enh["d11"] = False
@@ -527,6 +565,7 @@ fi
 export _E241_RUN_CFG="${RUNTIME_CONFIG}"
 export _E241_ENABLE_D3="${ENABLE_D3}"
 export _E241_ENABLE_D5="${ENABLE_D5}"
+export _E241_ENABLE_D6="${ENABLE_D6}"
 export _E241_ENABLE_D7="${ENABLE_D7}"
 export _E241_ENABLE_D9="${ENABLE_D9}"
 export _E241_ENABLE_D11="${ENABLE_D11}"
@@ -543,6 +582,7 @@ import yaml
 cfg_path = Path(os.environ["_E241_RUN_CFG"]).resolve()
 enable_d3_arg = str(os.environ.get("_E241_ENABLE_D3", "false")).lower() == "true"
 enable_d5_arg = str(os.environ.get("_E241_ENABLE_D5", "false")).lower() == "true"
+enable_d6_arg = str(os.environ.get("_E241_ENABLE_D6", "false")).lower() == "true"
 enable_d7_arg = str(os.environ.get("_E241_ENABLE_D7", "false")).lower() == "true"
 enable_d9_arg = str(os.environ.get("_E241_ENABLE_D9", "false")).lower() == "true"
 enable_d11_arg = str(os.environ.get("_E241_ENABLE_D11", "false")).lower() == "true"
@@ -566,10 +606,10 @@ if not isinstance(enh, dict):
 enhance_enabled = any(
     bool(enh.get(k, False))
     for k in (
-        "a3", "a4", "a5", "a7", "a9", "a11", "a21",
-        "b1", "b2", "b3", "b5", "b7", "b9", "b11", "b21",
-        "c4", "c5", "c7", "c9", "c11", "c21",
-        "d1", "d3", "d5", "d7", "d9", "d11", "d21",
+        "a3", "a4", "a5", "a6", "a7", "a9", "a11", "a21",
+        "b1", "b2", "b3", "b5", "b6", "b7", "b9", "b11", "b21",
+        "c4", "c5", "c6", "c7", "c9", "c11", "c21",
+        "d1", "d3", "d5", "d6", "d7", "d9", "d11", "d21",
     )
 )
 if not enhance_enabled:
@@ -577,6 +617,7 @@ if not enhance_enabled:
 
 enable_d3 = enable_d3_arg or bool(enh.get("d3", False)) or bool(enh.get("d1", False))
 enable_d5 = enable_d5_arg or bool(enh.get("d5", False))
+enable_d6 = enable_d6_arg or bool(enh.get("d6", False))
 enable_d7 = enable_d7_arg or bool(enh.get("d7", False))
 enable_d9 = enable_d9_arg or bool(enh.get("d9", False))
 enable_d11 = enable_d11_arg or bool(enh.get("d11", False))

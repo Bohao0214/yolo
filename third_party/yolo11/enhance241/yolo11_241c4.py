@@ -315,6 +315,43 @@ class C4BRAInject(torch.nn.Module):
         return out
 
 
+class C4C5C11Inject(C4BRAInject):
+    """Compatibility wrapper for the old c4 cascade class name."""
+
+    def __init__(
+        self,
+        base_module: torch.nn.Module,
+        channels: int,
+        c5_topk: int = 4,
+        c5_window_size: int = 8,
+        c5_num_heads: int = 4,
+        c5_kv_downsample_mode: str = "avg",
+        c5_soft_routing: bool = True,
+        c4_gate_mode: str = "se",
+        c4_gate_reduction: int = 16,
+        alpha5_init: float = 0.05,
+        alpha5_cap: float = 0.5,
+        alpha11_init: float = 0.01,
+        alpha11_cap: float = 0.5,
+        **_: Any,
+    ) -> None:
+        super().__init__(
+            base_module=base_module,
+            channels=channels,
+            num_heads=c5_num_heads,
+            window_size=c5_window_size,
+            topk=c5_topk,
+            kv_downsample_mode=c5_kv_downsample_mode,
+            soft_routing=c5_soft_routing,
+            alpha_init=alpha5_init,
+            alpha_cap=alpha5_cap,
+        )
+        self.c4_gate_mode = str(c4_gate_mode)
+        self.c4_gate_reduction = int(c4_gate_reduction)
+        self.alpha11_init = float(alpha11_init)
+        self.alpha11_cap = float(alpha11_cap)
+
+
 def _extract_model_seq(model: Any) -> Tuple[Any, Optional[Any]]:
     yolo_obj = model
     if hasattr(model, "model") and hasattr(getattr(model, "model"), "model"):

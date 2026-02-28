@@ -974,6 +974,7 @@ def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
     keys = [
         "a3",
         "a4",
+        "a6",
         "a5",
         "a7",
         "a9",
@@ -983,18 +984,21 @@ def _enhance241_enabled_keys(cfg: Dict[str, Any]) -> List[str]:
         "b2",
         "b3",
         "b5",
+        "b6",
         "b7",
         "b9",
         "b11",
         "b21",
         "c4",
         "c5",
+        "c6",
         "c21",
         "c7",
         "c9",
         "c11",
         "d1",
         "d3",
+        "d6",
         "d5",
         "d7",
         "d9",
@@ -1029,6 +1033,7 @@ def _collect_patched(seq: Any) -> List[str]:
         "P4P3GateAlignFuse",
         "P3FuseChain",
         "SPDConvDownsample",
+        "A6LSKSPDDownsampleSafe",
         "A4DualDeltaSafe",
         "A21DualDeltaSafe",
         "A5P3Residual",
@@ -1039,10 +1044,12 @@ def _collect_patched(seq: Any) -> List[str]:
         "B5GFPNFuse",
         "B11TinyP2Fuse",
         "B21CARAFEUpsampleSafe",
+        "B6DySampleSafe",
         "CARAFEUpsampleSafe",
         "B9ImprovedCSPFuseSafe",
         "C4C5C11Inject",
         "C21C5C11Inject",
+        "C6GatedBRAInject",
         "C5BRAInject",
         "C11HeadGateInject",
         "C7MCBAMInject",
@@ -1051,6 +1058,7 @@ def _collect_patched(seq: Any) -> List[str]:
         "P3LogitTemperature",
         "P6Downsample",
         "D9HeadScoreCalib",
+        "D6ScaleAwareCalib",
         "D11ClsScoreCalib",
         "D21ClsScoreCalib",
     }
@@ -1506,33 +1514,34 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
 
     enabled = _enhance241_enabled_keys(cfg)
     if enabled:
-        a_enabled = [k for k in ("a3", "a4", "a5", "a7", "a9", "a11", "a21") if k in enabled]
+        a_enabled = [k for k in ("a3", "a4", "a6", "a5", "a7", "a9", "a11", "a21") if k in enabled]
         if len(a_enabled) > 1:
-            raise RuntimeError(f"enhance241 A-class conflict: {a_enabled}; enable only one of a3/a4/a5/a7/a9/a11/a21.")
+            raise RuntimeError(f"enhance241 A-class conflict: {a_enabled}; enable only one of a3/a4/a6/a5/a7/a9/a11/a21.")
 
-        b_enabled = [k for k in ("b1", "b2", "b3", "b5", "b7", "b9", "b11", "b21") if k in enabled]
+        b_enabled = [k for k in ("b1", "b2", "b3", "b5", "b6", "b7", "b9", "b11", "b21") if k in enabled]
         if len(b_enabled) > 1:
-            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5/b7/b9/b11/b21.")
+            raise RuntimeError(f"enhance241 B-class conflict: {b_enabled}; enable only one of b1/b2/b3/b5/b6/b7/b9/b11/b21.")
 
-        c_enabled = [k for k in ("c4", "c5", "c7", "c9", "c11", "c21") if k in enabled]
+        c_enabled = [k for k in ("c4", "c5", "c6", "c7", "c9", "c11", "c21") if k in enabled]
         if len(c_enabled) > 1:
-            raise RuntimeError(f"enhance241 C-class conflict: {c_enabled}; enable only one of c4/c5/c7/c9/c11/c21.")
+            raise RuntimeError(f"enhance241 C-class conflict: {c_enabled}; enable only one of c4/c5/c6/c7/c9/c11/c21.")
 
         d_enabled_norm = []
         for k in enabled:
             if k in ("d1", "d3"):
                 d_enabled_norm.append("d3")
-            elif k in ("d5", "d7", "d9", "d11", "d21"):
+            elif k in ("d5", "d6", "d7", "d9", "d11", "d21"):
                 d_enabled_norm.append(k)
         d_enabled_norm = sorted(set(d_enabled_norm))
         if len(d_enabled_norm) > 1:
-            raise RuntimeError(f"enhance241 D-class conflict: {d_enabled_norm}; enable only one of d3/d5/d7/d9/d11/d21.")
+            raise RuntimeError(f"enhance241 D-class conflict: {d_enabled_norm}; enable only one of d3/d5/d6/d7/d9/d11/d21.")
 
         if "b11" in enabled and "d5" in enabled:
             raise RuntimeError("enhance241 conflict: b11 and d5 both add stride=4 tiny head; enable only one.")
         from third_party.yolo11.enhance241 import (
             yolo11_241a3,
             yolo11_241a4,
+            yolo11_241a6,
             yolo11_241a11,
             yolo11_241a21,
             yolo11_241a5,
@@ -1544,15 +1553,18 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
             yolo11_241b2,
             yolo11_241b3,
             yolo11_241b5,
+            yolo11_241b6,
             yolo11_241b7,
             yolo11_241b9,
             yolo11_241c4,
             yolo11_241c21,
             yolo11_241c5,
+            yolo11_241c6,
             yolo11_241c11,
             yolo11_241c7,
             yolo11_241c9,
             yolo11_241d3,
+            yolo11_241d6,
             yolo11_241d11,
             yolo11_241d21,
             yolo11_241d5,
@@ -1562,6 +1574,7 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
 
         model = yolo11_241a3.apply(model, cfg)
         model = yolo11_241a4.apply(model, cfg)
+        model = yolo11_241a6.apply(model, cfg)
         model = yolo11_241a11.apply(model, cfg)
         model = yolo11_241a21.apply(model, cfg)
         model = yolo11_241a5.apply(model, cfg)
@@ -1573,14 +1586,17 @@ def _apply_enhance241_patches(model: Any, cfg: Dict[str, Any], stage: str, audit
         model = yolo11_241b2.apply(model, cfg)
         model = yolo11_241b3.apply(model, cfg)
         model = yolo11_241b5.apply(model, cfg)
+        model = yolo11_241b6.apply(model, cfg)
         model = yolo11_241b7.apply(model, cfg)
         model = yolo11_241b9.apply(model, cfg)
         model = yolo11_241c4.apply(model, cfg)
         model = yolo11_241c21.apply(model, cfg)
         model = yolo11_241c5.apply(model, cfg)
+        model = yolo11_241c6.apply(model, cfg)
         model = yolo11_241c11.apply(model, cfg)
         model = yolo11_241c7.apply(model, cfg)
         model = yolo11_241c9.apply(model, cfg)
+        model = yolo11_241d6.apply(model, cfg)
         model = yolo11_241d11.apply(model, cfg)
         model = yolo11_241d21.apply(model, cfg)
         model = yolo11_241d5.apply(model, cfg)

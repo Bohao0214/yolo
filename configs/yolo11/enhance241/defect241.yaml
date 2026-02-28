@@ -66,7 +66,7 @@ threshold_sweep:
   curve: [0.01, 0.01, 1.00]   # start, step, end
   table: [0.00, 0.05, 1.00]   # start, step, end
 
-# enhance241 开关（实现 a3/a4/a5/a7/a9/a11/a21/b1/b2/b3/b5/b7/b9/b11/b21/c4/c5/c7/c9/c11/c21/d3/d5/d7/d9/d11/d21；d1 保留为 d3 兼容别名）
+# enhance241 开关（实现 a3/a4/a5/a6/a7/a9/a11/a21/b1/b2/b3/b5/b6/b7/b9/b11/b21/c4/c5/c6/c7/c9/c11/c21/d3/d5/d6/d7/d9/d11/d21；d1 保留为 d3 兼容别名）
 enhance241:
   a2: false
   a3: false
@@ -82,6 +82,13 @@ enhance241:
   a4_alpha1_cap: 0.5
   a4_alpha2_init: 0.0
   a4_alpha2_cap: 0.5
+  a6: false
+  a6_pre_div: 4
+  a6_refine: "dw"   # 几何保真沿用 a4 的 SPD 支路
+  a6_lsk_kernel: 7  # LSK 大核选择
+  a6_lsk_dilation: 3
+  a6_alpha_init: 0.02
+  a6_alpha_cap: 0.5
   a5: false
   a5_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
   a5_depth: 1
@@ -138,6 +145,11 @@ enhance241:
   b5_expansion: 0.5
   b5_refine: "dw"         # dw=depthwise separable, conv=普通3x3
   b5_upsample: "nearest"
+  b6: false
+  b6_offset_max: 1.5      # DySample 最大偏移（像素）
+  b6_canvas_mode: "bilinear"
+  b6_alpha_init: 0.02
+  b6_alpha_cap: 0.3
   b7: false
   b7_kernel_size: 5
   b7_compress: 64
@@ -193,6 +205,14 @@ enhance241:
   c5_conf_detach: false
   c5_alpha_init: 0.05
   c5_alpha_cap: 0.5
+  c6: false
+  c6_topk: 4
+  c6_window_size: 8
+  c6_num_heads: 4
+  c6_kv_downsample_mode: "avg"
+  c6_soft_routing: true
+  c6_gate_scale: 6.0
+  c6_gate_bias: -0.5
   c7: false
   c7_n: 3
   c7_mode: "full"         # full | channel | spatial
@@ -226,6 +246,18 @@ enhance241:
   d3_temp_init: 1.0
   d3_temp_min: 0.7
   d3_temp_max: 2.0
+  d6: false
+  d6_apply_to: ["P3", "P2_new"]
+  d6_temp_init: 1.0
+  d6_temp_min: 0.5
+  d6_temp_max: 4.0
+  d6_scale_beta: 0.20
+  d6_scale_lambda: 32.0
+  d6_scale_threshold: 64.0
+  d6_stride_gamma_mul: 4.0
+  d6_score_domain: true
+  d6_alpha_init: 0.05
+  d6_alpha_cap: 0.5
   d5: false
   d5_downsample: "dw"     # d5(P2 head) 融合 refine 类型：dw=depthwise separable, conv=普通3x3
   d5_upsample: "nearest"  # P3 -> P2 对齐插值：nearest | bilinear
