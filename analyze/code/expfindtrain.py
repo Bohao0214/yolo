@@ -8,6 +8,7 @@ import json
 import locale
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -62,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_det", type=int, default=None, help="Max detections after NMS. Default: cfg.max_det")
     p.add_argument("--batch", type=int, default=None, help="Eval batch. Default: cfg.eval_batch")
     p.add_argument("--workers", type=int, default=None, help="YOLO val workers. Default: 0 (safe)")
+    p.add_argument("--infer_chunk", type=int, default=16, help="Max images per image-level inference chunk.")
     p.add_argument("--imgsz", type=int, default=None, help="YOLO val imgsz. Default: cfg.imgsz")
     p.add_argument("--device", type=str, default=None, help="Eval device. Default: cfg.eval_device/cfg.device")
     return p.parse_args()
@@ -171,6 +173,45 @@ def _collect_split_sources(data_yaml: Path) -> Dict[str, List[Path]]:
         "val": _resolve_data_entry(data_root, info.get("val")),
         "test": _resolve_data_entry(data_root, info.get("test")),
     }
+
+
+def _list_source_images_local(source: Path) -> List[Path]:
+    if source.is_file() and source.suffix.lower() == ".txt":
+        items: List[Path] = []
+        with source.open("r", encoding="utf-8") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+                p = Path(raw)
+                if not p.is_absolute():
+                    p = (source.parent / p).resolve()
+                if p.exists():
+                    items.append(p)
+        return items
+    if source.is_dir():
+        return sorted(
+            [p for p in source.rglob("*") if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}]
+        )
+    if source.exists() and source.is_file():
+        return [source]
+    return []
+
+
+def _chunk_source_to_txts(source: Path, infer_chunk: int, tmp_dir: Path) -> List[Path]:
+    images = _list_source_images_local(source)
+    if not images:
+        return []
+    chunk = max(1, int(infer_chunk))
+    if len(images) <= chunk:
+        return [source]
+    out: List[Path] = []
+    for idx in range(0, len(images), chunk):
+        shard = images[idx : idx + chunk]
+        shard_path = tmp_dir / f"{source.stem or source.name}_{idx:05d}.txt"
+        shard_path.write_text("\n".join(str(p) for p in shard), encoding="utf-8")
+        out.append(shard_path)
+    return out
 
 
 def _safe_metric(metrics: Any, attr: str, default: float = 0.0) -> float:
@@ -344,50 +385,54 @@ def _run_split(
     metrics_dir = report_dir / "metrics"
     all_items: List[Dict[str, object]] = []
     vis_root = report_dir / f"{split}_vis"
-    for src in sources:
-        if not src.exists():
-            continue
-        try:
-            items = compute_image_level_results(
-                model,
-                src,
-                conf_threshold=float(args.conf),
-                iou_match=float(args.match_iou),
-                metric_conf=float(args.metric_conf),
-                batch=int(args.batch),
-                device=str(args.device),
-                nms_iou=float(args.nms_iou),
-                max_det=int(args.max_det),
-                split=split,
-                vis_root=vis_root,
-                save_visuals=True,
-            )
-        except RuntimeError as exc:
-            if "out of memory" not in str(exc).lower():
-                raise
-            try:
-                import torch
+    with tempfile.TemporaryDirectory(prefix=f"expfindtrain_{split}_") as tmp:
+        tmp_dir = Path(tmp)
+        for src in sources:
+            if not src.exists():
+                continue
+            shard_sources = _chunk_source_to_txts(src, int(args.infer_chunk), tmp_dir)
+            for shard_src in shard_sources:
+                try:
+                    items = compute_image_level_results(
+                        model,
+                        shard_src,
+                        conf_threshold=float(args.conf),
+                        iou_match=float(args.match_iou),
+                        metric_conf=float(args.metric_conf),
+                        batch=int(args.batch),
+                        device=str(args.device),
+                        nms_iou=float(args.nms_iou),
+                        max_det=int(args.max_det),
+                        split=split,
+                        vis_root=vis_root,
+                        save_visuals=True,
+                    )
+                except RuntimeError as exc:
+                    if "out of memory" not in str(exc).lower():
+                        raise
+                    try:
+                        import torch
 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-            gc.collect()
-            items = compute_image_level_results(
-                model,
-                src,
-                conf_threshold=float(args.conf),
-                iou_match=float(args.match_iou),
-                metric_conf=float(args.metric_conf),
-                batch=1,
-                device="cpu",
-                nms_iou=float(args.nms_iou),
-                max_det=int(args.max_det),
-                split=split,
-                vis_root=vis_root,
-                save_visuals=True,
-            )
-        all_items.extend(items)
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    gc.collect()
+                    items = compute_image_level_results(
+                        model,
+                        shard_src,
+                        conf_threshold=float(args.conf),
+                        iou_match=float(args.match_iou),
+                        metric_conf=float(args.metric_conf),
+                        batch=1,
+                        device="cpu",
+                        nms_iou=float(args.nms_iou),
+                        max_det=int(args.max_det),
+                        split=split,
+                        vis_root=vis_root,
+                        save_visuals=True,
+                    )
+                all_items.extend(items)
 
     meta = {
         "split": split,
@@ -396,6 +441,7 @@ def _run_split(
         "metric_conf": float(args.metric_conf),
         "nms_iou": float(args.nms_iou),
         "max_det": int(args.max_det),
+        "infer_chunk": int(args.infer_chunk),
         "weights": str(args.weights),
         "data_yaml": str(data_yaml),
     }
@@ -457,6 +503,7 @@ def main() -> None:
         "nms_iou": float(args.nms_iou),
         "max_det": int(args.max_det),
         "batch": int(args.batch),
+        "infer_chunk": int(args.infer_chunk),
         "imgsz": int(args.imgsz),
         "workers": int(args.workers),
         "device": str(args.device),
