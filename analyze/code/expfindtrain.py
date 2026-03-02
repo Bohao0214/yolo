@@ -56,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--nms_iou", type=float, default=0.7, help="NMS IoU.")
     p.add_argument("--max_det", type=int, default=100, help="Max detections after NMS.")
     p.add_argument("--batch", type=int, default=1, help="Eval batch for image-level scans.")
+    p.add_argument("--workers", type=int, default=0, help="YOLO val dataloader workers.")
     p.add_argument("--imgsz", type=int, default=640, help="YOLO val imgsz.")
     p.add_argument("--device", type=str, default="", help="Eval device.")
     return p.parse_args()
@@ -273,6 +274,7 @@ def _run_yolo_val(
         split=split,
         imgsz=int(args.imgsz),
         batch=int(args.batch),
+        workers=max(0, int(args.workers)),
         device=str(args.device),
         conf=float(args.metric_conf),
         iou=float(args.nms_iou),
@@ -410,6 +412,7 @@ def main() -> None:
         "max_det": int(args.max_det),
         "batch": int(args.batch),
         "imgsz": int(args.imgsz),
+        "workers": int(args.workers),
         "device": str(args.device),
         "loaded_enhance_modules": _loaded_enhance_modules(model),
         "report_dir": str(report_dir),
