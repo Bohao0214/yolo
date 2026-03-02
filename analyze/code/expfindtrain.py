@@ -421,4 +421,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    """""
+    /home/ubuntu/anaconda3/envs/yolo11/bin/python /home/ubuntu/hpproject/yolo/analyze/code/expfindtrain.py \
+  --weights /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__b7__c11__d11/exp_2602280003/train/weights/best.pt \
+  --tag a3_b7_d11
+    """""
     main()
