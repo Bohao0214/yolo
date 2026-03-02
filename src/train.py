@@ -1205,7 +1205,11 @@ def _evaluate_enhance241_checks(audit_state: Dict[str, Any]) -> Tuple[str, List[
 
     if "a4" in enabled:
         a4 = info.get("a4", {}) if isinstance(info, dict) else {}
-        patched = int(a4.get("patched_count", 0)) + int(a4.get("existing_count", 0))
+        patched = (
+            int(a4.get("patched_count", 0))
+            + int(a4.get("replaced_count", 0))
+            + int(a4.get("existing_count", 0))
+        )
         ok = patched == 1
         checks.append({"name": "a4_patch_count", "ok": ok, "detail": f"count={patched}"})
 

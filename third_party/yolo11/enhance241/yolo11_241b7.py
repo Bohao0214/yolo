@@ -179,17 +179,26 @@ class CARAFECore(torch.nn.Module):
         hs, ws = h * s, w * s
 
         kernel_logits = self.encoder(self.comp(x))
-        hf_gate = torch.tanh(self.enhance241_b7_hf_gain.to(dtype=x.dtype, device=x.device))
-        if self.use_hf:
+        use_hf = bool(getattr(self, "use_hf", False))
+        hf_gate_param = getattr(self, "enhance241_b7_hf_gain", None)
+        hf_comp = getattr(self, "hf_comp", None)
+        hf_encoder = getattr(self, "hf_encoder", None)
+        hf_kernel = int(getattr(self, "hf_kernel", 3))
+        if hf_kernel % 2 == 0:
+            hf_kernel += 1
+        hf_gate = x.new_tensor(0.0)
+        if hf_gate_param is not None:
+            hf_gate = torch.tanh(hf_gate_param.to(dtype=x.dtype, device=x.device))
+        if use_hf and hf_gate_param is not None and hf_comp is not None and hf_encoder is not None:
             blur = F.avg_pool2d(
                 x,
-                kernel_size=self.hf_kernel,
+                kernel_size=hf_kernel,
                 stride=1,
-                padding=self.hf_kernel // 2,
+                padding=hf_kernel // 2,
                 count_include_pad=False,
             )
             hf = x - blur
-            hf_logits = self.hf_encoder(self.hf_comp(hf))
+            hf_logits = hf_encoder(hf_comp(hf))
             kernel_logits = kernel_logits + hf_gate * hf_logits
 
         kernel = F.pixel_shuffle(kernel_logits, upscale_factor=s)  # [B, k*k, H*s, W*s]
@@ -202,7 +211,7 @@ class CARAFECore(torch.nn.Module):
 
         # Memory-safe feature reassembly: process channels in chunks to cap unfold peak memory.
         out = x_up.new_zeros((b, c, hs, ws))
-        step = int(self.chunk_channels)
+        step = max(1, int(getattr(self, "chunk_channels", c)))
         for c0 in range(0, c, step):
             c1 = min(c, c0 + step)
             part = x_up[:, c0:c1, :, :]

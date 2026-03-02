@@ -1420,6 +1420,7 @@ def apply(model: Any, cfg: Any) -> Any:
     if prepatched:
         info = {
             "enabled": True,
+            "patched_count": 0,
             "existing_count": len(prepatched),
             "existing_indices": prepatched,
             "replaced_count": 0,
@@ -1503,6 +1504,7 @@ def apply(model: Any, cfg: Any) -> Any:
 
     info = {
         "enabled": True,
+        "patched_count": 1,
         "replaced_count": 1,
         "existing_count": 0,
         "replaced_idx": ds_idx,
