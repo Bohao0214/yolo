@@ -50,15 +50,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data", type=str, default="", help="Optional explicit data.yaml path.")
     p.add_argument("--out_root", type=str, default=DEFAULT_OUT_ROOT, help="Result root.")
     p.add_argument("--tag", type=str, default="a3_b7_d11", help="Requested combo tag for report metadata.")
-    p.add_argument("--conf", type=float, default=0.25, help="Image-level decision threshold.")
-    p.add_argument("--metric_conf", type=float, default=0.01, help="Prediction conf used before image-level scoring.")
-    p.add_argument("--match_iou", type=float, default=0.3, help="GT/pred match IoU.")
-    p.add_argument("--nms_iou", type=float, default=0.7, help="NMS IoU.")
-    p.add_argument("--max_det", type=int, default=100, help="Max detections after NMS.")
-    p.add_argument("--batch", type=int, default=1, help="Eval batch for image-level scans.")
-    p.add_argument("--workers", type=int, default=0, help="YOLO val dataloader workers.")
-    p.add_argument("--imgsz", type=int, default=640, help="YOLO val imgsz.")
-    p.add_argument("--device", type=str, default="", help="Eval device.")
+    p.add_argument("--conf", type=float, default=None, help="Image-level decision threshold. Default: cfg.conf")
+    p.add_argument(
+        "--metric_conf",
+        type=float,
+        default=None,
+        help="Prediction conf used before image-level scoring. Default: cfg.metric_conf",
+    )
+    p.add_argument("--match_iou", type=float, default=None, help="GT/pred match IoU. Default: cfg.match_iou")
+    p.add_argument("--nms_iou", type=float, default=None, help="NMS IoU. Default: cfg.nms_iou")
+    p.add_argument("--max_det", type=int, default=None, help="Max detections after NMS. Default: cfg.max_det")
+    p.add_argument("--batch", type=int, default=None, help="Eval batch. Default: cfg.eval_batch")
+    p.add_argument("--workers", type=int, default=None, help="YOLO val workers. Default: 0 (safe)")
+    p.add_argument("--imgsz", type=int, default=None, help="YOLO val imgsz. Default: cfg.imgsz")
+    p.add_argument("--device", type=str, default=None, help="Eval device. Default: cfg.eval_device/cfg.device")
     return p.parse_args()
 
 
@@ -101,6 +106,45 @@ def _infer_data_yaml(weights: Path, explicit_data: str, cfg_path: Path) -> Path:
     if not data_path.is_absolute():
         data_path = (REPO_ROOT / data_path).resolve()
     return data_path
+
+
+def _cfg_float(cfg: Dict[str, Any], key: str, default: float) -> float:
+    try:
+        value = cfg.get(key, default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _cfg_int(cfg: Dict[str, Any], key: str, default: int) -> int:
+    try:
+        value = cfg.get(key, default)
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _apply_cfg_defaults(args: argparse.Namespace, cfg: Dict[str, Any]) -> None:
+    if args.conf is None:
+        args.conf = _cfg_float(cfg, "conf", 0.25)
+    if args.metric_conf is None:
+        args.metric_conf = _cfg_float(cfg, "metric_conf", 0.01)
+    if args.match_iou is None:
+        args.match_iou = _cfg_float(cfg, "match_iou", 0.3)
+    if args.nms_iou is None:
+        args.nms_iou = _cfg_float(cfg, "nms_iou", 0.7)
+    if args.max_det is None:
+        args.max_det = _cfg_int(cfg, "max_det", 100)
+    if args.batch is None:
+        args.batch = _cfg_int(cfg, "eval_batch", 1)
+    if args.workers is None:
+        args.workers = 0
+    if args.imgsz is None:
+        args.imgsz = _cfg_int(cfg, "imgsz", 640)
+    if args.device is None:
+        eval_device = str(cfg.get("eval_device", "") or "").strip()
+        train_device = str(cfg.get("device", "") or "").strip()
+        args.device = eval_device or train_device
 
 
 def _resolve_data_entry(data_root: Path, entry: Any) -> List[Path]:
@@ -370,6 +414,8 @@ def main() -> None:
     cfg_path = Path(args.cfg).resolve()
     if not cfg_path.exists():
         raise FileNotFoundError(f"cfg not found: {cfg_path}")
+    cfg = load_yaml(cfg_path)
+    _apply_cfg_defaults(args, cfg)
 
     data_yaml = _infer_data_yaml(weights, str(args.data), cfg_path)
     if not data_yaml.exists():
