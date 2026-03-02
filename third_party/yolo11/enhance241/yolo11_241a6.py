@@ -33,7 +33,7 @@ ENHANCE241_AUDIT_KEYS = ["enhance241_a6"]  # enhance241-audit
 
 
 class LSKBlock(torch.nn.Module):
-    """Lightweight large-selective-kernel block with safe zero-init tail."""
+    """Large selective kernel block with safe-start spatial gating."""
 
     def __init__(self, channels: int, kernel_size: int = 7, dilation: int = 3) -> None:
         super().__init__()
@@ -41,8 +41,20 @@ class LSKBlock(torch.nn.Module):
         k = max(5, int(kernel_size))
         if k % 2 == 0:
             k += 1
+        km = max(5, k - 4)
+        if km % 2 == 0:
+            km += 1
         d = max(1, int(dilation))
         self.dw_local = torch.nn.Conv2d(c, c, kernel_size=5, stride=1, padding=2, groups=c, bias=True)
+        self.dw_median = torch.nn.Conv2d(
+            c,
+            c,
+            kernel_size=km,
+            stride=1,
+            padding=km // 2,
+            groups=c,
+            bias=True,
+        )
         self.dw_large = torch.nn.Conv2d(
             c,
             c,
@@ -53,16 +65,18 @@ class LSKBlock(torch.nn.Module):
             groups=c,
             bias=True,
         )
-        self.mix = torch.nn.Conv2d(c * 2, c, kernel_size=1, stride=1, padding=0, bias=True)
-        torch.nn.init.zeros_(self.mix.weight)
-        if self.mix.bias is not None:
-            torch.nn.init.zeros_(self.mix.bias)
+        self.enhance241_a6_mix = torch.nn.Conv2d(c * 2, c, kernel_size=1, stride=1, padding=0, bias=True)
+        torch.nn.init.zeros_(self.enhance241_a6_mix.weight)
+        if self.enhance241_a6_mix.bias is not None:
+            torch.nn.init.zeros_(self.enhance241_a6_mix.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attn_local = self.dw_local(x)
-        attn_large = self.dw_large(x)
-        attn = torch.sigmoid(self.mix(torch.cat((attn_local, attn_large), dim=1)))
-        return x * attn
+        local_feat = self.dw_local(x)
+        median_feat = self.dw_median(local_feat)
+        large_feat = self.dw_large(local_feat)
+        gate_logits = self.enhance241_a6_mix(torch.cat((median_feat, large_feat), dim=1))
+        gate = torch.sigmoid(gate_logits) * 2.0
+        return x * gate
 
 
 class A6LSKSPDDownsampleSafe(torch.nn.Module):
@@ -106,7 +120,8 @@ class A6LSKSPDDownsampleSafe(torch.nn.Module):
             recorder.capture_param_before(self, prefix)
 
         y_geom = self.enhance241_a6_geom(x)
-        delta = self.enhance241_a6_lsk(y_geom)
+        y_lsk = self.enhance241_a6_lsk(y_geom)
+        delta = y_lsk - y_geom
         alpha_raw = self.enhance241_a6_alpha.to(dtype=y_geom.dtype, device=y_geom.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
         out = y_geom + alpha * delta
@@ -120,6 +135,7 @@ class A6LSKSPDDownsampleSafe(torch.nn.Module):
                         "alpha": _to_float(alpha.item()),
                         "alpha_cap": _to_float(self.alpha_cap),
                         "geom_stats": _tensor_stats(y_geom),
+                        "lsk_stats": _tensor_stats(y_lsk),
                         "delta_stats": _tensor_stats(delta),
                         "out_stats": _tensor_stats(out),
                     },

@@ -33,7 +33,7 @@ ENHANCE241_AUDIT_KEYS = ["enhance241_b6"]  # enhance241-audit
 
 
 class DySampleCore(torch.nn.Module):
-    """A light DySample-style sampler on an upsampled feature canvas."""
+    """A light DySample-style point sampler with learned offset field."""
 
     def __init__(self, channels: int, scale: int = 2, offset_max: float = 1.5, canvas_mode: str = "bilinear") -> None:
         super().__init__()
@@ -41,37 +41,41 @@ class DySampleCore(torch.nn.Module):
         s = max(2, int(scale))
         self.scale = s
         self.offset_max = float(max(0.1, offset_max))
-        self.canvas_mode = str(canvas_mode).lower()
+        self.sample_mode = str(canvas_mode).lower()
         self.enhance241_b6_offset = torch.nn.Conv2d(c, 2 * s * s, kernel_size=1, stride=1, padding=0, bias=True)
         torch.nn.init.zeros_(self.enhance241_b6_offset.weight)
         if self.enhance241_b6_offset.bias is not None:
             torch.nn.init.zeros_(self.enhance241_b6_offset.bias)
+        self._enhance241_last_offset_abs_mean = 0.0
+        self._enhance241_last_offset_abs_max = 0.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        hs, ws = x.shape[-2] * self.scale, x.shape[-1] * self.scale
-        if self.canvas_mode == "nearest":
-            canvas = F.interpolate(x, size=(hs, ws), mode="nearest")
-        else:
-            canvas = F.interpolate(x, size=(hs, ws), mode="bilinear", align_corners=False)
+        batch, channels, h, w = x.shape
+        hs, ws = h * self.scale, w * self.scale
         offset = F.pixel_shuffle(self.enhance241_b6_offset(x), upscale_factor=self.scale)
         offset = torch.tanh(offset) * self.offset_max
+        self._enhance241_last_offset_abs_mean = _to_float(offset.detach().float().abs().mean().item())
+        self._enhance241_last_offset_abs_max = _to_float(offset.detach().float().abs().amax().item())
 
-        grid_y = torch.linspace(-1.0, 1.0, hs, device=canvas.device, dtype=torch.float32)
-        grid_x = torch.linspace(-1.0, 1.0, ws, device=canvas.device, dtype=torch.float32)
-        yy, xx = torch.meshgrid(grid_y, grid_x, indexing="ij")
-        base_grid = torch.stack((xx, yy), dim=-1).unsqueeze(0).repeat(canvas.shape[0], 1, 1, 1)
+        theta = torch.tensor(
+            [[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]],
+            device=x.device,
+            dtype=torch.float32,
+        ).expand(batch, -1, -1)
+        base_grid = F.affine_grid(theta, size=(batch, channels, hs, ws), align_corners=False)
 
-        norm_x = offset[:, 0].float() * (2.0 / max(1, ws - 1))
-        norm_y = offset[:, 1].float() * (2.0 / max(1, hs - 1))
+        norm_x = offset[:, 0].float() * (2.0 / max(1, w))
+        norm_y = offset[:, 1].float() * (2.0 / max(1, h))
         grid = base_grid.clone()
-        grid[..., 0] += norm_x
-        grid[..., 1] += norm_y
+        grid[..., 0] = grid[..., 0] + norm_x
+        grid[..., 1] = grid[..., 1] + norm_y
+        sample_mode = "nearest" if self.sample_mode == "nearest" else "bilinear"
         sampled = F.grid_sample(
-            canvas.float(),
+            x.float(),
             grid,
-            mode="bilinear",
+            mode=sample_mode,
             padding_mode="border",
-            align_corners=True,
+            align_corners=False,
         )
         return sampled.to(dtype=x.dtype)
 
@@ -125,7 +129,6 @@ class B6DySampleSafe(torch.nn.Module):
 
         if recorder is not None:
             if step == 0:
-                offset = self.enhance241_b6_dysample.enhance241_b6_offset(x)
                 recorder.record_module_compare(f"{prefix}.upsample", patched=out, baseline=y_base, input_tensor=x)
                 recorder.record_a1_payload(
                     f"{prefix}.gate1",
@@ -133,7 +136,8 @@ class B6DySampleSafe(torch.nn.Module):
                         "tag": self.tag,
                         "alpha": _to_float(alpha.item()),
                         "alpha_cap": _to_float(self.alpha_cap),
-                        "offset_abs_mean": _to_float(offset.detach().float().abs().mean().item()),
+                        "offset_abs_mean": _to_float(self.enhance241_b6_dysample._enhance241_last_offset_abs_mean),
+                        "offset_abs_max": _to_float(self.enhance241_b6_dysample._enhance241_last_offset_abs_max),
                         "base_stats": _tensor_stats(y_base),
                         "dy_stats": _tensor_stats(y_dy),
                         "delta_stats": _tensor_stats(delta),

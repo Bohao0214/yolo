@@ -162,7 +162,7 @@ class GatedBRACore(torch.nn.Module):
 
 
 class C6GatedBRAInject(torch.nn.Module):
-    """Gated-BRA: out = base + sigmoid(route_mask) * BRA(base)."""
+    """Gated-BRA: out = base + sigmoid(M_route) * BRA(base)."""
 
     def __init__(
         self,
@@ -199,7 +199,7 @@ class C6GatedBRAInject(torch.nn.Module):
 
         y_base = self.enhance241_c6_base(x)
         delta, route_mask = self.enhance241_c6_bra(y_base)
-        gate = torch.sigmoid((route_mask + self.gate_bias) * self.gate_scale)
+        gate = torch.sigmoid(route_mask * self.gate_scale + self.gate_bias)
         out = y_base + gate * delta
 
         if recorder is not None:
