@@ -24,7 +24,74 @@ ENHANCE241_AUDIT_KEYS = ["enhance241_d6"]  # enhance241-audit
 
 
 class D6ScaleAwareCalib(D11ClsScoreCalib):
-    """Compatibility wrapper with d6-specific config namespace."""
+    """Compatibility wrapper with d6-specific config namespace and linear scale bias."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        recorder = getattr(self, "_enhance241_recorder", None)
+        prefix = str(getattr(self, "_enhance241_prefix", "d6"))
+        step = int(getattr(self, "_enhance241_fwd_step", 0))
+
+        if recorder is not None and step == 0:
+            recorder.capture_param_before(self, prefix)
+
+        logits = self.enhance241_d11_base_cls(x)
+        t = torch.clamp(self.enhance241_d11_temp, min=self.t_min, max=self.t_max).to(dtype=logits.dtype, device=logits.device)
+        b = self.enhance241_d11_bias.to(dtype=logits.dtype, device=logits.device)
+        alpha_raw = self.enhance241_d11_alpha_raw.to(dtype=logits.dtype, device=logits.device)
+        alpha = torch.tanh(alpha_raw) * self.alpha_cap
+        gamma = logits.new_tensor(self.head_stride * self.stride_gamma_mul)
+        linear_limit = max(float(self.scale_lambda), 1e-6)
+        ratio = torch.clamp(logits.new_tensor(1.0) - (gamma / linear_limit), min=0.0)
+        scale_bias = logits.new_tensor(self.scale_beta) * ratio
+        logits_calib = logits / t + (b + scale_bias)
+        if self.score_domain:
+            score_base = torch.sigmoid(logits)
+            score_calib = torch.sigmoid(logits_calib)
+            score_out = score_base + alpha * (score_calib - score_base)
+            score_out = torch.clamp(score_out, min=1e-5, max=1.0 - 1e-5)
+            out = torch.log(score_out / (1.0 - score_out))
+        else:
+            out = logits + alpha * (logits_calib - logits)
+
+        if recorder is not None:
+            recorder.record_scalar_curve(f"{prefix}.temperature", float(t.item()), step, max_steps=100)
+            recorder.record_scalar_curve(f"{prefix}.bias", float(b.item()), step, max_steps=100)
+            recorder.record_scalar_curve(f"{prefix}.alpha", float(alpha.item()), step, max_steps=100)
+            recorder.record_scalar_curve(f"{prefix}.scale_bias", float(scale_bias.item()), step, max_steps=100)
+            if step == 0:
+                recorder.record_a1_payload(
+                    f"{prefix}.cfg",
+                    {
+                        "temp_init": _to_float(self.enhance241_d11_temp.detach().item()),
+                        "temp_min": _to_float(self.t_min),
+                        "temp_max": _to_float(self.t_max),
+                        "bias_init": _to_float(self.enhance241_d11_bias.detach().item()),
+                        "head_stride": _to_float(self.head_stride),
+                        "stride_gamma_mul": _to_float(self.stride_gamma_mul),
+                        "gamma_proxy": _to_float(gamma.item()),
+                        "scale_beta": _to_float(self.scale_beta),
+                        "scale_lambda": _to_float(self.scale_lambda),
+                        "scale_threshold": _to_float(self.scale_threshold),
+                        "linear_ratio": _to_float(ratio.item()),
+                        "scale_bias": _to_float(scale_bias.item()),
+                        "score_domain": bool(self.score_domain),
+                        "alpha": _to_float(alpha.item()),
+                        "alpha_cap": _to_float(self.alpha_cap),
+                    },
+                )
+                if out.requires_grad:
+                    try:
+                        out.register_hook(lambda g, n=f"{prefix}.logits": recorder.record_output_grad(n, g))
+                    except Exception:
+                        pass
+            if hasattr(recorder, "capture_param_delta"):
+                from .yolo11_241a3 import _should_capture_delta
+
+                if _should_capture_delta(step):
+                    recorder.capture_param_delta(self, prefix)
+
+        setattr(self, "_enhance241_fwd_step", step + 1)
+        return out
 
 
 def apply(model: Any, cfg: Any) -> Any:

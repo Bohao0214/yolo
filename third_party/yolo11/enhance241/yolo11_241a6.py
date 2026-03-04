@@ -33,44 +33,66 @@ ENHANCE241_AUDIT_KEYS = ["enhance241_a6"]  # enhance241-audit
 
 
 class LSKBlock(torch.nn.Module):
-    """Large selective kernel block with safe-start spatial gating."""
+    """PKI-style pyramid knowledge injection block.
 
-    def __init__(self, channels: int, kernel_size: int = 7, dilation: int = 3) -> None:
+    Keeps the historical class name for checkpoint compatibility.
+    Old checkpoints without PKI attrs fall back to the legacy LSK path.
+    """
+
+    def __init__(self, channels: int, kernel_size: int = 7, dilation: int = 3, reduction: int = 16) -> None:
         super().__init__()
         c = int(channels)
-        k = max(5, int(kernel_size))
-        if k % 2 == 0:
-            k += 1
-        km = max(5, k - 4)
-        if km % 2 == 0:
-            km += 1
-        d = max(1, int(dilation))
-        self.dw_local = torch.nn.Conv2d(c, c, kernel_size=5, stride=1, padding=2, groups=c, bias=True)
-        self.dw_median = torch.nn.Conv2d(
+        d3 = max(3, int(dilation))
+        hidden = max(4, c // max(1, int(reduction)))
+
+        self.enhance241_a6_pki_d1 = torch.nn.Conv2d(
             c,
             c,
-            kernel_size=km,
+            kernel_size=3,
             stride=1,
-            padding=km // 2,
+            padding=1,
+            dilation=1,
             groups=c,
             bias=True,
         )
-        self.dw_large = torch.nn.Conv2d(
+        self.enhance241_a6_pki_d2 = torch.nn.Conv2d(
             c,
             c,
-            kernel_size=k,
+            kernel_size=3,
             stride=1,
-            padding=((k // 2) * d),
-            dilation=d,
+            padding=2,
+            dilation=2,
             groups=c,
             bias=True,
         )
-        self.enhance241_a6_mix = torch.nn.Conv2d(c * 2, c, kernel_size=1, stride=1, padding=0, bias=True)
-        torch.nn.init.zeros_(self.enhance241_a6_mix.weight)
-        if self.enhance241_a6_mix.bias is not None:
-            torch.nn.init.zeros_(self.enhance241_a6_mix.bias)
+        self.enhance241_a6_pki_d3 = torch.nn.Conv2d(
+            c,
+            c,
+            kernel_size=3,
+            stride=1,
+            padding=d3,
+            dilation=d3,
+            groups=c,
+            bias=True,
+        )
+        self.enhance241_a6_pki_proj = torch.nn.Conv2d(c * 3, c, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_a6_pki_ca1 = torch.nn.Conv2d(c, hidden, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_a6_pki_ca2 = torch.nn.Conv2d(hidden, c, kernel_size=1, stride=1, padding=0, bias=True)
+        torch.nn.init.zeros_(self.enhance241_a6_pki_ca2.weight)
+        if self.enhance241_a6_pki_ca2.bias is not None:
+            torch.nn.init.zeros_(self.enhance241_a6_pki_ca2.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if hasattr(self, "enhance241_a6_pki_proj"):
+            p1 = self.enhance241_a6_pki_d1(x)
+            p2 = self.enhance241_a6_pki_d2(x)
+            p3 = self.enhance241_a6_pki_d3(x)
+            fused = self.enhance241_a6_pki_proj(torch.cat((p1, p2, p3), dim=1))
+            pooled = F.adaptive_avg_pool2d(fused, output_size=1)
+            gate = self.enhance241_a6_pki_ca2(F.silu(self.enhance241_a6_pki_ca1(pooled)))
+            gate = torch.sigmoid(gate) * 2.0
+            return fused * gate
+
         local_feat = self.dw_local(x)
         median_feat = self.dw_median(local_feat)
         large_feat = self.dw_large(local_feat)
@@ -80,7 +102,7 @@ class LSKBlock(torch.nn.Module):
 
 
 class A6LSKSPDDownsampleSafe(torch.nn.Module):
-    """a6 = a4 geometry branch + residual-safe LSK semantic shaping."""
+    """a6 = a4 geometry branch + residual-safe PKI semantic shaping."""
 
     def __init__(
         self,
@@ -91,6 +113,7 @@ class A6LSKSPDDownsampleSafe(torch.nn.Module):
         refine: str = "dw",
         lsk_kernel: int = 7,
         lsk_dilation: int = 3,
+        attn_reduction: int = 16,
         alpha_init: float = 0.02,
         alpha_cap: float = 0.5,
     ) -> None:
@@ -104,7 +127,12 @@ class A6LSKSPDDownsampleSafe(torch.nn.Module):
             alpha_init=float(alpha_init),
             alpha_cap=float(alpha_cap),
         )
-        self.enhance241_a6_lsk = LSKBlock(int(out_ch), kernel_size=int(lsk_kernel), dilation=int(lsk_dilation))
+        self.enhance241_a6_pki = LSKBlock(
+            int(out_ch),
+            kernel_size=int(lsk_kernel),
+            dilation=int(lsk_dilation),
+            reduction=int(attn_reduction),
+        )
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
         alpha_ratio = alpha_init / self.alpha_cap
@@ -120,8 +148,11 @@ class A6LSKSPDDownsampleSafe(torch.nn.Module):
             recorder.capture_param_before(self, prefix)
 
         y_geom = self.enhance241_a6_geom(x)
-        y_lsk = self.enhance241_a6_lsk(y_geom)
-        delta = y_lsk - y_geom
+        pki = getattr(self, "enhance241_a6_pki", None)
+        if pki is None:
+            pki = getattr(self, "enhance241_a6_lsk")
+        y_pki = pki(y_geom)
+        delta = y_pki - y_geom
         alpha_raw = self.enhance241_a6_alpha.to(dtype=y_geom.dtype, device=y_geom.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
         out = y_geom + alpha * delta
@@ -135,7 +166,7 @@ class A6LSKSPDDownsampleSafe(torch.nn.Module):
                         "alpha": _to_float(alpha.item()),
                         "alpha_cap": _to_float(self.alpha_cap),
                         "geom_stats": _tensor_stats(y_geom),
-                        "lsk_stats": _tensor_stats(y_lsk),
+                        "pki_stats": _tensor_stats(y_pki),
                         "delta_stats": _tensor_stats(delta),
                         "out_stats": _tensor_stats(out),
                     },
@@ -209,6 +240,7 @@ def apply(model: Any, cfg: Any) -> Any:
     a6_refine = str(_deep_get(cfg, "enhance241", "a6_refine", default="dw"))
     a6_lsk_kernel = _safe_int(_deep_get(cfg, "enhance241", "a6_lsk_kernel", default=7), 7)
     a6_lsk_dilation = _safe_int(_deep_get(cfg, "enhance241", "a6_lsk_dilation", default=3), 3)
+    a6_attn_reduction = _safe_int(_deep_get(cfg, "enhance241", "a6_attn_reduction", default=16), 16)
     a6_alpha_init = _safe_float(_deep_get(cfg, "enhance241", "a6_alpha_init", default=0.02), 0.02)
     a6_alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "a6_alpha_cap", default=0.5), 0.5)
 
@@ -220,6 +252,7 @@ def apply(model: Any, cfg: Any) -> Any:
         refine=a6_refine,
         lsk_kernel=a6_lsk_kernel,
         lsk_dilation=a6_lsk_dilation,
+        attn_reduction=a6_attn_reduction,
         alpha_init=a6_alpha_init,
         alpha_cap=a6_alpha_cap,
     )
@@ -245,13 +278,14 @@ def apply(model: Any, cfg: Any) -> Any:
         "a6_refine": str(a6_refine),
         "a6_lsk_kernel": int(a6_lsk_kernel),
         "a6_lsk_dilation": int(a6_lsk_dilation),
+        "a6_attn_reduction": int(a6_attn_reduction),
         "alpha_init": _to_float(a6_alpha_init),
         "alpha_cap": _to_float(a6_alpha_cap),
     }
     setattr(yolo_obj, "_enhance241_a6_info", info)
     print(
         f"[enhance241] a6 enabled: patched model.model[{int(ds_idx)}] "
-        f"-> A6LSKSPDDownsampleSafe(kernel={a6_lsk_kernel}, dilation={a6_lsk_dilation})"
+        f"-> A6LSKSPDDownsampleSafe(PKI d=1/2/{a6_lsk_dilation}, reduction={a6_attn_reduction})"
     )
 
     recorder = get_check_recorder("a6", cfg, patch_info=info)

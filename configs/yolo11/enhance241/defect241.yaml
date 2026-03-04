@@ -85,8 +85,9 @@ enhance241:
   a6: false
   a6_pre_div: 4
   a6_refine: "dw"   # 几何保真沿用 a4 的 SPD 支路
-  a6_lsk_kernel: 7  # LSK 大核选择
+  a6_lsk_kernel: 7  # 兼容旧字段；a6 现使用 PKI（三路 3x3 扩张卷积）
   a6_lsk_dilation: 3
+  a6_attn_reduction: 16
   a6_alpha_init: 0.02
   a6_alpha_cap: 0.5
   a5: false
@@ -146,8 +147,13 @@ enhance241:
   b5_refine: "dw"         # dw=depthwise separable, conv=普通3x3
   b5_upsample: "nearest"
   b6: false
-  b6_offset_max: 1.5      # DySample 最大偏移（像素）
-  b6_canvas_mode: "bilinear"
+  b6_offset_max: 1.5      # 兼容旧字段（保留，不作为主路径）
+  b6_canvas_mode: "bilinear"  # 高频残差上采样模式
+  b6_kernel_size: 5
+  b6_compress: 64
+  b6_chunk_channels: 64
+  b6_hf_kernel: 3
+  b6_hf_gain_init: 0.1
   b6_alpha_init: 0.02
   b6_alpha_cap: 0.3
   b7: false
@@ -206,13 +212,17 @@ enhance241:
   c5_alpha_init: 0.05
   c5_alpha_cap: 0.5
   c6: false
-  c6_topk: 4
-  c6_window_size: 8
-  c6_num_heads: 4
-  c6_kv_downsample_mode: "avg"
-  c6_soft_routing: true
+  c6_topk: 4              # 兼容旧字段（EMA 路径忽略）
+  c6_window_size: 8       # 兼容旧字段（EMA 路径忽略）
+  c6_num_heads: 4         # 兼容旧字段；默认作为 EMA groups 的回退值
+  c6_kv_downsample_mode: "avg"  # 兼容旧字段（EMA 路径忽略）
+  c6_soft_routing: true   # 兼容旧字段（EMA 路径忽略）
+  c6_groups: 4
+  c6_reduction: 16
   c6_gate_scale: 6.0
   c6_gate_bias: -0.5
+  c6_alpha_init: 0.05
+  c6_alpha_cap: 0.5
   c7: false
   c7_n: 3
   c7_mode: "full"         # full | channel | spatial
@@ -252,7 +262,7 @@ enhance241:
   d6_temp_min: 0.5
   d6_temp_max: 4.0
   d6_scale_beta: 0.20
-  d6_scale_lambda: 32.0
+  d6_scale_lambda: 64.0
   d6_scale_threshold: 64.0
   d6_stride_gamma_mul: 4.0
   d6_score_domain: true

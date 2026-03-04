@@ -161,8 +161,62 @@ class GatedBRACore(torch.nn.Module):
         return out, route_mask.to(dtype=out.dtype, device=out.device)
 
 
+class EMAAttentionCore(torch.nn.Module):
+    """Lightweight EMA-style attention with cross-spatial pooling."""
+
+    def __init__(self, channels: int, groups: int = 4, reduction: int = 16) -> None:
+        super().__init__()
+        c = int(channels)
+        g = max(1, int(groups))
+        while g > 1 and c % g != 0:
+            g -= 1
+        cg = max(1, c // g)
+        hidden = max(4, cg // max(1, int(reduction)))
+
+        self.channels = c
+        self.groups = g
+        self.group_channels = cg
+        self.enhance241_c6_h = torch.nn.Conv2d(cg, hidden, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_c6_w = torch.nn.Conv2d(cg, hidden, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_c6_h_out = torch.nn.Conv2d(hidden, cg, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_c6_w_out = torch.nn.Conv2d(hidden, cg, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_c6_local = torch.nn.Conv2d(cg, cg, kernel_size=3, stride=1, padding=1, groups=cg, bias=True)
+        self.enhance241_c6_proj = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
+        torch.nn.init.zeros_(self.enhance241_c6_proj.weight)
+        if self.enhance241_c6_proj.bias is not None:
+            torch.nn.init.zeros_(self.enhance241_c6_proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.groups <= 1:
+            grouped = x
+            batch_group = x.shape[0]
+        else:
+            batch, _, h, w = x.shape
+            grouped = x.view(batch, self.groups, self.group_channels, h, w).reshape(
+                batch * self.groups, self.group_channels, h, w
+            )
+            batch_group = grouped.shape[0]
+
+        h_pool = grouped.mean(dim=3, keepdim=True)
+        w_pool = grouped.mean(dim=2, keepdim=True)
+        h_gate = self.enhance241_c6_h_out(F.silu(self.enhance241_c6_h(h_pool)))
+        w_gate = self.enhance241_c6_w_out(F.silu(self.enhance241_c6_w(w_pool)))
+        spatial_gate = torch.sigmoid(h_gate.expand(-1, -1, -1, grouped.shape[3]) + w_gate.expand(-1, -1, grouped.shape[2], -1))
+        local = self.enhance241_c6_local(grouped)
+        out_group = local * spatial_gate
+
+        if self.groups > 1:
+            batch = batch_group // self.groups
+            out = out_group.view(batch, self.groups, self.group_channels, grouped.shape[2], grouped.shape[3]).reshape(
+                batch, self.channels, grouped.shape[2], grouped.shape[3]
+            )
+        else:
+            out = out_group
+        return self.enhance241_c6_proj(out)
+
+
 class C6GatedBRAInject(torch.nn.Module):
-    """Gated-BRA: out = base + sigmoid(M_route) * BRA(base)."""
+    """C6 EMA wrapper; keeps class name for checkpoint compatibility."""
 
     def __init__(
         self,
@@ -175,19 +229,23 @@ class C6GatedBRAInject(torch.nn.Module):
         soft_routing: bool = True,
         gate_scale: float = 6.0,
         gate_bias: float = -0.5,
+        groups: int = 4,
+        reduction: int = 16,
+        alpha_init: float = 0.05,
+        alpha_cap: float = 0.5,
     ) -> None:
         super().__init__()
         self.enhance241_c6_base = base_module
-        self.enhance241_c6_bra = GatedBRACore(
-            channels=channels,
-            num_heads=num_heads,
-            window_size=window_size,
-            topk=topk,
-            kv_downsample_mode=kv_downsample_mode,
-            soft_routing=soft_routing,
-        )
+        self.enhance241_c6_ema = EMAAttentionCore(channels=channels, groups=groups, reduction=reduction)
         self.gate_scale = float(gate_scale)
         self.gate_bias = float(gate_bias)
+        self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
+        alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
+        alpha_ratio = alpha_init / self.alpha_cap
+        alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
+        self.enhance241_c6_alpha_raw = torch.nn.Parameter(alpha_raw)
+        self.groups = int(groups)
+        self.reduction = int(reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -198,12 +256,45 @@ class C6GatedBRAInject(torch.nn.Module):
             recorder.capture_param_before(self, prefix)
 
         y_base = self.enhance241_c6_base(x)
-        delta, route_mask = self.enhance241_c6_bra(y_base)
-        gate = torch.sigmoid(route_mask * self.gate_scale + self.gate_bias)
-        out = y_base + gate * delta
+        if hasattr(self, "enhance241_c6_ema"):
+            delta = self.enhance241_c6_ema(y_base)
+            alpha_raw = self.enhance241_c6_alpha_raw.to(dtype=y_base.dtype, device=y_base.device)
+            alpha = torch.tanh(alpha_raw) * self.alpha_cap
+            route_mask = None
+            gate = None
+            out = y_base + alpha * delta
+        else:
+            delta, route_mask = self.enhance241_c6_bra(y_base)
+            gate = torch.sigmoid(route_mask * self.gate_scale + self.gate_bias)
+            alpha = None
+            out = y_base + gate * delta
 
         if recorder is not None:
             if step == 0:
+                payload = {
+                    "delta_stats": _tensor_stats(delta),
+                    "out_stats": _tensor_stats(out),
+                }
+                if alpha is not None:
+                    payload.update(
+                        {
+                            "mode": "ema",
+                            "groups": int(self.groups),
+                            "reduction": int(self.reduction),
+                            "alpha": _to_float(alpha.item()),
+                            "alpha_cap": _to_float(self.alpha_cap),
+                        }
+                    )
+                else:
+                    payload.update(
+                        {
+                            "mode": "legacy_gated_bra",
+                            "gate_scale": _to_float(self.gate_scale),
+                            "gate_bias": _to_float(self.gate_bias),
+                            "route_mask_stats": _tensor_stats(route_mask),
+                            "gate_stats": _tensor_stats(gate),
+                        }
+                    )
                 recorder.record_module_compare(
                     f"{prefix}.p3",
                     patched=out,
@@ -212,14 +303,7 @@ class C6GatedBRAInject(torch.nn.Module):
                 )
                 recorder.record_a1_payload(
                     f"{prefix}.gate1",
-                    {
-                        "gate_scale": _to_float(self.gate_scale),
-                        "gate_bias": _to_float(self.gate_bias),
-                        "route_mask_stats": _tensor_stats(route_mask),
-                        "gate_stats": _tensor_stats(gate),
-                        "delta_stats": _tensor_stats(delta),
-                        "out_stats": _tensor_stats(out),
-                    },
+                    payload,
                 )
                 if out.requires_grad:
                     try:
@@ -264,8 +348,12 @@ def apply(model: Any, cfg: Any) -> Any:
     topk = _safe_int(_deep_get(cfg, "enhance241", "c6_topk", default=4), 4)
     kv_mode = str(_deep_get(cfg, "enhance241", "c6_kv_downsample_mode", default="avg")).lower()
     soft_routing = bool(_deep_get(cfg, "enhance241", "c6_soft_routing", default=True))
+    groups = _safe_int(_deep_get(cfg, "enhance241", "c6_groups", default=num_heads), num_heads)
+    reduction = _safe_int(_deep_get(cfg, "enhance241", "c6_reduction", default=16), 16)
     gate_scale = _safe_float(_deep_get(cfg, "enhance241", "c6_gate_scale", default=6.0), 6.0)
     gate_bias = _safe_float(_deep_get(cfg, "enhance241", "c6_gate_bias", default=-0.5), -0.5)
+    alpha_init = _safe_float(_deep_get(cfg, "enhance241", "c6_alpha_init", default=0.05), 0.05)
+    alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "c6_alpha_cap", default=0.5), 0.5)
 
     wrapped = C6GatedBRAInject(
         old,
@@ -277,6 +365,10 @@ def apply(model: Any, cfg: Any) -> Any:
         soft_routing=soft_routing,
         gate_scale=gate_scale,
         gate_bias=gate_bias,
+        groups=groups,
+        reduction=reduction,
+        alpha_init=alpha_init,
+        alpha_cap=alpha_cap,
     )
     for attr in ("i", "f", "type"):
         if hasattr(old, attr):
@@ -302,13 +394,17 @@ def apply(model: Any, cfg: Any) -> Any:
         "topk": int(topk),
         "kv_downsample_mode": str(kv_mode),
         "soft_routing": bool(soft_routing),
+        "groups": int(groups),
+        "reduction": int(reduction),
         "gate_scale": _to_float(gate_scale),
         "gate_bias": _to_float(gate_bias),
+        "alpha_init": _to_float(alpha_init),
+        "alpha_cap": _to_float(alpha_cap),
     }
     setattr(yolo_obj, "_enhance241_c6_info", info)
     print(
         f"[enhance241] c6 enabled: patched model.model[{int(p3_idx)}] "
-        f"-> C6GatedBRAInject(topk={topk}, window={window_size}, gate_scale={gate_scale:.2f})"
+        f"-> C6GatedBRAInject(EMA groups={groups}, reduction={reduction}, alpha_init={alpha_init:.2f})"
     )
 
     recorder = get_check_recorder("c6", cfg, patch_info=info)
