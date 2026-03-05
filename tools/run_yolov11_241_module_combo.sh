@@ -86,9 +86,21 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --combos)
-      [[ $# -ge 2 ]] || { echo "[error] --combos requires a value" >&2; exit 2; }
-      COMBOS_RAW="$2"
-      shift 2
+      shift
+      [[ $# -ge 1 ]] || { echo "[error] --combos requires a value" >&2; exit 2; }
+      _combo_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --*|-h|--help|*.yml|*.yaml)
+            break
+            ;;
+        esac
+        _combo_parts+=("$1")
+        shift
+      done
+      [[ ${#_combo_parts[@]} -gt 0 ]] || { echo "[error] --combos requires a value" >&2; exit 2; }
+      COMBOS_RAW="$(IFS=,; echo "${_combo_parts[*]}")"
+      COMBOS_RAW="$(echo "${COMBOS_RAW}" | sed -E 's/[[:space:]]+//g; s/,+/,/g; s/^,+//; s/,+$//')"
       ;;
     --batch|--batch-size)
       [[ $# -ge 2 ]] || { echo "[error] --batch requires a value" >&2; exit 2; }
