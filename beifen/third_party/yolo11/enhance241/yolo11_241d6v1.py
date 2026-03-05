@@ -1,20 +1,13 @@
 from __future__ import annotations
 
 # Path: third_party/yolo11/enhance241/yolo11_241d6.py
-# Purpose: enhance241 d6 (d11-derived stride-aware cls score calibration).
+# Purpose: enhance241 d6 (scale-sensitive score calibration; d11-derived isolated variant).
 
 from typing import Any, List
 
 import torch
 
-from .yolo11_241a3 import (
-    _bind_module_debug,
-    _get_module_recorder,
-    _locate_detect,
-    _should_capture_delta,
-    _to_float,
-    get_check_recorder,
-)
+from .yolo11_241a3 import _bind_module_debug, _locate_detect, _to_float, get_check_recorder
 from .yolo11_241d11 import (
     D11ClsScoreCalib,
     _cast_like_module,
@@ -31,44 +24,10 @@ ENHANCE241_AUDIT_KEYS = ["enhance241_d6"]  # enhance241-audit
 
 
 class D6ScaleAwareCalib(D11ClsScoreCalib):
-    """S-D11: stride-aware confidence subsidy on top of d11 residual-safe calibration.
-
-    logits' = logits + alpha * ((logits / T + B_stride) - logits)
-    where B_stride = beta_p3 if head stride == 8 else 0.
-    """
-
-    def __init__(
-        self,
-        base_cls_head: torch.nn.Module,
-        temp_init: float = 1.0,
-        t_min: float = 0.5,
-        t_max: float = 4.0,
-        bias_init: float = 0.0,
-        head_stride: float = 8.0,
-        p3_bias: float = 0.2,
-        score_domain: bool = True,
-        alpha_init: float = 0.05,
-        alpha_cap: float = 0.5,
-    ) -> None:
-        super().__init__(
-            base_cls_head=base_cls_head,
-            temp_init=temp_init,
-            t_min=t_min,
-            t_max=t_max,
-            bias_init=bias_init,
-            head_stride=head_stride,
-            scale_beta=0.0,
-            scale_lambda=1.0,
-            scale_threshold=0.0,
-            stride_gamma_mul=1.0,
-            score_domain=score_domain,
-            alpha_init=alpha_init,
-            alpha_cap=alpha_cap,
-        )
-        self.enhance241_d6_p3_bias = float(p3_bias)
+    """Compatibility wrapper with d6-specific config namespace and linear scale bias."""
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        recorder = _get_module_recorder(self)
+        recorder = getattr(self, "_enhance241_recorder", None)
         prefix = str(getattr(self, "_enhance241_prefix", "d6"))
         step = int(getattr(self, "_enhance241_fwd_step", 0))
 
@@ -77,13 +36,14 @@ class D6ScaleAwareCalib(D11ClsScoreCalib):
 
         logits = self.enhance241_d11_base_cls(x)
         t = torch.clamp(self.enhance241_d11_temp, min=self.t_min, max=self.t_max).to(dtype=logits.dtype, device=logits.device)
+        b = self.enhance241_d11_bias.to(dtype=logits.dtype, device=logits.device)
         alpha_raw = self.enhance241_d11_alpha_raw.to(dtype=logits.dtype, device=logits.device)
         alpha = torch.tanh(alpha_raw) * self.alpha_cap
-        gamma = logits.new_tensor(self.head_stride)
-        is_p3_stride = abs(float(self.head_stride) - 8.0) < 0.5
-        b_stride = logits.new_tensor(float(self.enhance241_d6_p3_bias if is_p3_stride else 0.0))
-        logits_calib = logits / t + b_stride
-
+        gamma = logits.new_tensor(self.head_stride * self.stride_gamma_mul)
+        linear_limit = max(float(self.scale_lambda), 1e-6)
+        ratio = torch.clamp(logits.new_tensor(1.0) - (gamma / linear_limit), min=0.0)
+        scale_bias = logits.new_tensor(self.scale_beta) * ratio
+        logits_calib = logits / t + (b + scale_bias)
         if self.score_domain:
             score_base = torch.sigmoid(logits)
             score_calib = torch.sigmoid(logits_calib)
@@ -95,8 +55,9 @@ class D6ScaleAwareCalib(D11ClsScoreCalib):
 
         if recorder is not None:
             recorder.record_scalar_curve(f"{prefix}.temperature", float(t.item()), step, max_steps=100)
+            recorder.record_scalar_curve(f"{prefix}.bias", float(b.item()), step, max_steps=100)
             recorder.record_scalar_curve(f"{prefix}.alpha", float(alpha.item()), step, max_steps=100)
-            recorder.record_scalar_curve(f"{prefix}.b_stride", float(b_stride.item()), step, max_steps=100)
+            recorder.record_scalar_curve(f"{prefix}.scale_bias", float(scale_bias.item()), step, max_steps=100)
             if step == 0:
                 recorder.record_a1_payload(
                     f"{prefix}.cfg",
@@ -104,11 +65,15 @@ class D6ScaleAwareCalib(D11ClsScoreCalib):
                         "temp_init": _to_float(self.enhance241_d11_temp.detach().item()),
                         "temp_min": _to_float(self.t_min),
                         "temp_max": _to_float(self.t_max),
+                        "bias_init": _to_float(self.enhance241_d11_bias.detach().item()),
                         "head_stride": _to_float(self.head_stride),
+                        "stride_gamma_mul": _to_float(self.stride_gamma_mul),
                         "gamma_proxy": _to_float(gamma.item()),
-                        "is_p3_stride": bool(is_p3_stride),
-                        "p3_bias": _to_float(self.enhance241_d6_p3_bias),
-                        "b_stride": _to_float(b_stride.item()),
+                        "scale_beta": _to_float(self.scale_beta),
+                        "scale_lambda": _to_float(self.scale_lambda),
+                        "scale_threshold": _to_float(self.scale_threshold),
+                        "linear_ratio": _to_float(ratio.item()),
+                        "scale_bias": _to_float(scale_bias.item()),
                         "score_domain": bool(self.score_domain),
                         "alpha": _to_float(alpha.item()),
                         "alpha_cap": _to_float(self.alpha_cap),
@@ -119,8 +84,11 @@ class D6ScaleAwareCalib(D11ClsScoreCalib):
                         out.register_hook(lambda g, n=f"{prefix}.logits": recorder.record_output_grad(n, g))
                     except Exception:
                         pass
-            if _should_capture_delta(step):
-                recorder.capture_param_delta(self, prefix)
+            if hasattr(recorder, "capture_param_delta"):
+                from .yolo11_241a3 import _should_capture_delta
+
+                if _should_capture_delta(step):
+                    recorder.capture_param_delta(self, prefix)
 
         setattr(self, "_enhance241_fwd_step", step + 1)
         return out
@@ -148,15 +116,10 @@ def apply(model: Any, cfg: Any) -> Any:
     temp_init = _safe_float(_deep_get(cfg, "enhance241", "d6_temp_init", default=1.0), 1.0)
     t_min = _safe_float(_deep_get(cfg, "enhance241", "d6_temp_min", default=0.5), 0.5)
     t_max = _safe_float(_deep_get(cfg, "enhance241", "d6_temp_max", default=4.0), 4.0)
-    p3_bias = _safe_float(
-        _deep_get(
-            cfg,
-            "enhance241",
-            "d6_p3_bias",
-            default=_deep_get(cfg, "enhance241", "d6_scale_beta", default=0.20),
-        ),
-        0.20,
-    )
+    scale_beta = _safe_float(_deep_get(cfg, "enhance241", "d6_scale_beta", default=0.20), 0.20)
+    scale_lambda = _safe_float(_deep_get(cfg, "enhance241", "d6_scale_lambda", default=32.0), 32.0)
+    scale_threshold = _safe_float(_deep_get(cfg, "enhance241", "d6_scale_threshold", default=64.0), 64.0)
+    stride_gamma_mul = _safe_float(_deep_get(cfg, "enhance241", "d6_stride_gamma_mul", default=4.0), 4.0)
     score_domain = _safe_bool(_deep_get(cfg, "enhance241", "d6_score_domain", default=True), True)
     alpha_init = _safe_float(_deep_get(cfg, "enhance241", "d6_alpha_init", default=0.05), 0.05)
     alpha_cap = _safe_float(_deep_get(cfg, "enhance241", "d6_alpha_cap", default=0.5), 0.5)
@@ -177,7 +140,10 @@ def apply(model: Any, cfg: Any) -> Any:
             t_max=t_max,
             bias_init=0.0,
             head_stride=_infer_head_stride(detect, head_idx=head_idx, default=8.0),
-            p3_bias=p3_bias,
+            scale_beta=scale_beta,
+            scale_lambda=scale_lambda,
+            scale_threshold=scale_threshold,
+            stride_gamma_mul=stride_gamma_mul,
             score_domain=score_domain,
             alpha_init=alpha_init,
             alpha_cap=alpha_cap,
@@ -204,7 +170,10 @@ def apply(model: Any, cfg: Any) -> Any:
                     t_max=t_max,
                     bias_init=0.0,
                     head_stride=_infer_head_stride(detect, head_idx=head_idx, default=8.0),
-                    p3_bias=p3_bias,
+                    scale_beta=scale_beta,
+                    scale_lambda=scale_lambda,
+                    scale_threshold=scale_threshold,
+                    stride_gamma_mul=stride_gamma_mul,
                     score_domain=score_domain,
                     alpha_init=alpha_init,
                     alpha_cap=alpha_cap,
@@ -220,7 +189,10 @@ def apply(model: Any, cfg: Any) -> Any:
         "target_heads": [int(x) for x in target_heads],
         "temp_init": _to_float(temp_init),
         "temp_range": [_to_float(t_min), _to_float(t_max)],
-        "p3_bias": _to_float(p3_bias),
+        "scale_beta": _to_float(scale_beta),
+        "scale_lambda": _to_float(scale_lambda),
+        "scale_threshold": _to_float(scale_threshold),
+        "stride_gamma_mul": _to_float(stride_gamma_mul),
         "score_domain": bool(score_domain),
         "alpha_init": _to_float(alpha_init),
         "alpha_cap": _to_float(alpha_cap),
@@ -228,7 +200,7 @@ def apply(model: Any, cfg: Any) -> Any:
     setattr(yolo_obj, "_enhance241_d6_info", info)
     print(
         f"[enhance241] d6 enabled: patched cls heads={patched_heads or 'none(new)'} "
-        f"target_heads={target_heads} p3_bias={p3_bias:.3f}"
+        f"target_heads={target_heads} beta={scale_beta:.3f} lambda={scale_lambda:.1f}"
     )
 
     if recorder is not None:

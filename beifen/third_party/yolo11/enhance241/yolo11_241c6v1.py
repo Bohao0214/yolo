@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 # Path: third_party/yolo11/enhance241/yolo11_241c6.py
-# Purpose: enhance241 c6 (EMA attention guardrail before head).
+# Purpose: enhance241 c6 (Gated-BRA sparse guardrail before head).
 
-from typing import Any, Optional, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -25,6 +26,8 @@ from .yolo11_241c5 import (
     _infer_p3_output_index,
     _safe_float,
     _safe_int,
+    _window_partition,
+    _window_reverse,
 )
 
 ENHANCE241_AUDIT_KEYS = ["enhance241_c6"]  # enhance241-audit
@@ -41,19 +44,125 @@ def _to_input_tensor(x: Any) -> Optional[torch.Tensor]:
 
 
 class GatedBRACore(torch.nn.Module):
-    """Legacy compatibility stub for old pickled checkpoints."""
+    """BRA + route-mask export for sparse gated enhancement."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        channels: int,
+        num_heads: int = 4,
+        window_size: int = 8,
+        topk: int = 4,
+        kv_downsample_mode: str = "avg",
+        soft_routing: bool = True,
+        eps: float = 1e-6,
+    ) -> None:
         super().__init__()
+        self.channels = int(channels)
+        self.num_heads = max(1, int(num_heads))
+        if self.channels % self.num_heads != 0:
+            self.num_heads = 1
+        self.head_dim = self.channels // self.num_heads
+        self.window_size = max(2, int(window_size))
+        self.topk = max(1, int(topk))
+        self.kv_downsample_mode = str(kv_downsample_mode).lower()
+        self.soft_routing = bool(soft_routing)
+        self.eps = float(eps)
+        self.enhance241_c6_qkv = torch.nn.Conv2d(self.channels, self.channels * 3, kernel_size=1, stride=1, padding=0)
+        self.enhance241_c6_proj = torch.nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0)
+        torch.nn.init.zeros_(self.enhance241_c6_proj.weight)
+        if self.enhance241_c6_proj.bias is not None:
+            torch.nn.init.zeros_(self.enhance241_c6_proj.bias)
+
+    def _prepare(self, x: torch.Tensor) -> Tuple[torch.Tensor, int, int, int, int]:
+        b, c, h, w = x.shape
+        ws = self.window_size
+        pad_h = (ws - h % ws) % ws
+        pad_w = (ws - w % ws) % ws
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode="replicate")
+        hp, wp = x.shape[-2:]
+        return x, h, w, hp, wp
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        zeros = torch.zeros_like(x)
-        mask = torch.zeros((x.shape[0], 1, x.shape[2], x.shape[3]), device=x.device, dtype=x.dtype)
-        return zeros, mask
+        x_pad, h, w, hp, wp = self._prepare(x)
+        qkv = self.enhance241_c6_qkv(x_pad)
+        q, k, v = torch.chunk(qkv, 3, dim=1)
+
+        ws = self.window_size
+        q_w = _window_partition(q, ws)
+        k_w = _window_partition(k, ws)
+        v_w = _window_partition(v, ws)
+
+        if self.kv_downsample_mode == "max":
+            k_tok = k_w.amax(dim=2, keepdim=True)
+            v_tok = v_w.amax(dim=2, keepdim=True)
+        elif self.kv_downsample_mode == "identity":
+            k_tok = k_w
+            v_tok = v_w
+        else:
+            k_tok = k_w.mean(dim=2, keepdim=True)
+            v_tok = v_w.mean(dim=2, keepdim=True)
+
+        q_mean = q_w.mean(dim=2)
+        k_mean = k_w.mean(dim=2)
+        scale_win = 1.0 / math.sqrt(max(1, self.channels))
+        routing_logits = torch.matmul(q_mean.float(), k_mean.float().transpose(-1, -2)) * scale_win
+        topk = min(self.topk, int(routing_logits.shape[-1]))
+        topv, topi = torch.topk(routing_logits, k=topk, dim=-1)
+
+        routing_w: Optional[torch.Tensor] = None
+        if self.soft_routing:
+            topv = topv - topv.amax(dim=-1, keepdim=True)
+            routing_w = torch.softmax(topv, dim=-1).to(dtype=q_w.dtype)
+            route_strength = routing_w.amax(dim=-1)
+        else:
+            route_strength = torch.sigmoid(topv.float()).mean(dim=-1).to(dtype=q_w.dtype)
+
+        bsz, nwin, tq, c = q_w.shape
+        tk = int(k_tok.shape[2])
+        out_windows: List[torch.Tensor] = []
+        scale_head = 1.0 / math.sqrt(max(1, self.head_dim))
+
+        for b in range(bsz):
+            q_b = q_w[b]
+            k_b = k_tok[b]
+            v_b = v_tok[b]
+            idx_b = topi[b]
+
+            k_sel = k_b[idx_b]
+            v_sel = v_b[idx_b]
+
+            qh = q_b.view(nwin, tq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            kh = k_sel.view(nwin, topk * tk, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            vh = v_sel.view(nwin, topk * tk, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+            logits = torch.matmul(qh.float(), kh.float().transpose(-1, -2)) * scale_head
+            logits = logits - logits.amax(dim=-1, keepdim=True)
+            attn = torch.softmax(logits, dim=-1).to(dtype=qh.dtype)
+
+            if routing_w is not None:
+                rw = routing_w[b].repeat_interleave(tk, dim=-1)
+                rw = rw.unsqueeze(1).unsqueeze(2)
+                attn = attn * rw
+                attn = attn / attn.sum(dim=-1, keepdim=True).clamp_min(self.eps)
+
+            out_h = torch.matmul(attn.float(), vh.float()).to(dtype=qh.dtype)
+            out_b = out_h.permute(0, 2, 1, 3).contiguous().view(nwin, tq, c)
+            out_windows.append(out_b)
+
+        out_w = torch.stack(out_windows, dim=0)
+        out = _window_reverse(out_w, ws, hp, wp)
+        out = out[..., :h, :w]
+        out = self.enhance241_c6_proj(out)
+
+        route_mask_windows = route_strength.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, ws * ws, 1)
+        route_mask = _window_reverse(route_mask_windows, ws, hp, wp)
+        route_mask = route_mask[..., :h, :w]
+        return out, route_mask.to(dtype=out.dtype, device=out.device)
 
 
 class EMAAttentionCore(torch.nn.Module):
-    """Efficient Multi-Scale Attention with cross-spatial interaction."""
+    """Lightweight EMA-style attention with cross-spatial pooling."""
 
     def __init__(self, channels: int, groups: int = 4, reduction: int = 16) -> None:
         super().__init__()
@@ -67,45 +176,47 @@ class EMAAttentionCore(torch.nn.Module):
         self.channels = c
         self.groups = g
         self.group_channels = cg
-
-        self.enhance241_c6_h_reduce = torch.nn.Conv2d(cg, hidden, kernel_size=1, stride=1, padding=0, bias=True)
-        self.enhance241_c6_w_reduce = torch.nn.Conv2d(cg, hidden, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_c6_h = torch.nn.Conv2d(cg, hidden, kernel_size=1, stride=1, padding=0, bias=True)
+        self.enhance241_c6_w = torch.nn.Conv2d(cg, hidden, kernel_size=1, stride=1, padding=0, bias=True)
         self.enhance241_c6_h_out = torch.nn.Conv2d(hidden, cg, kernel_size=1, stride=1, padding=0, bias=True)
         self.enhance241_c6_w_out = torch.nn.Conv2d(hidden, cg, kernel_size=1, stride=1, padding=0, bias=True)
-
         self.enhance241_c6_local = torch.nn.Conv2d(cg, cg, kernel_size=3, stride=1, padding=1, groups=cg, bias=True)
-        self.enhance241_c6_cross = torch.nn.Conv2d(cg, cg, kernel_size=1, stride=1, padding=0, bias=True)
         self.enhance241_c6_proj = torch.nn.Conv2d(c, c, kernel_size=1, stride=1, padding=0, bias=True)
         torch.nn.init.zeros_(self.enhance241_c6_proj.weight)
         if self.enhance241_c6_proj.bias is not None:
             torch.nn.init.zeros_(self.enhance241_c6_proj.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, h, w = x.shape
-        if self.groups > 1:
-            grouped = x.view(b, self.groups, self.group_channels, h, w).reshape(b * self.groups, self.group_channels, h, w)
-        else:
+        if self.groups <= 1:
             grouped = x
+            batch_group = x.shape[0]
+        else:
+            batch, _, h, w = x.shape
+            grouped = x.view(batch, self.groups, self.group_channels, h, w).reshape(
+                batch * self.groups, self.group_channels, h, w
+            )
+            batch_group = grouped.shape[0]
 
-        zh = grouped.mean(dim=3, keepdim=True)
-        zw = grouped.mean(dim=2, keepdim=True)
-        ah = self.enhance241_c6_h_out(F.silu(self.enhance241_c6_h_reduce(zh)))
-        aw = self.enhance241_c6_w_out(F.silu(self.enhance241_c6_w_reduce(zw)))
-        coord = torch.sigmoid(ah.expand(-1, -1, -1, w) + aw.expand(-1, -1, h, -1))
-
+        h_pool = grouped.mean(dim=3, keepdim=True)
+        w_pool = grouped.mean(dim=2, keepdim=True)
+        h_gate = self.enhance241_c6_h_out(F.silu(self.enhance241_c6_h(h_pool)))
+        w_gate = self.enhance241_c6_w_out(F.silu(self.enhance241_c6_w(w_pool)))
+        spatial_gate = torch.sigmoid(h_gate.expand(-1, -1, -1, grouped.shape[3]) + w_gate.expand(-1, -1, grouped.shape[2], -1))
         local = self.enhance241_c6_local(grouped)
-        cross = torch.sigmoid(self.enhance241_c6_cross(F.adaptive_avg_pool2d(local, output_size=1)))
-        out_group = local * coord * cross
+        out_group = local * spatial_gate
 
         if self.groups > 1:
-            out = out_group.view(b, self.groups, self.group_channels, h, w).reshape(b, c, h, w)
+            batch = batch_group // self.groups
+            out = out_group.view(batch, self.groups, self.group_channels, grouped.shape[2], grouped.shape[3]).reshape(
+                batch, self.channels, grouped.shape[2], grouped.shape[3]
+            )
         else:
             out = out_group
         return self.enhance241_c6_proj(out)
 
 
 class C6GatedBRAInject(torch.nn.Module):
-    """Residual-safe EMA wrapper (keeps historical class name for compatibility)."""
+    """C6 EMA wrapper; keeps class name for checkpoint compatibility."""
 
     def __init__(
         self,
@@ -125,18 +236,16 @@ class C6GatedBRAInject(torch.nn.Module):
     ) -> None:
         super().__init__()
         self.enhance241_c6_base = base_module
-        _ = (window_size, topk, kv_downsample_mode, soft_routing)  # compatibility args
-        groups = int(groups if int(groups) > 0 else num_heads)
         self.enhance241_c6_ema = EMAAttentionCore(channels=channels, groups=groups, reduction=reduction)
         self.gate_scale = float(gate_scale)
         self.gate_bias = float(gate_bias)
-        self.groups = int(groups)
-        self.reduction = int(reduction)
         self.alpha_cap = float(max(1e-6, abs(alpha_cap)))
         alpha_init = float(max(-self.alpha_cap * 0.95, min(self.alpha_cap * 0.95, alpha_init)))
         alpha_ratio = alpha_init / self.alpha_cap
         alpha_raw = torch.atanh(torch.tensor(alpha_ratio, dtype=torch.float32))
         self.enhance241_c6_alpha_raw = torch.nn.Parameter(alpha_raw)
+        self.groups = int(groups)
+        self.reduction = int(reduction)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         recorder = _get_module_recorder(self)
@@ -151,39 +260,51 @@ class C6GatedBRAInject(torch.nn.Module):
             delta = self.enhance241_c6_ema(y_base)
             alpha_raw = self.enhance241_c6_alpha_raw.to(dtype=y_base.dtype, device=y_base.device)
             alpha = torch.tanh(alpha_raw) * self.alpha_cap
+            route_mask = None
+            gate = None
             out = y_base + alpha * delta
-            payload = {
-                "mode": "ema",
-                "groups": int(self.groups),
-                "reduction": int(self.reduction),
-                "alpha": _to_float(alpha.item()),
-                "alpha_cap": _to_float(self.alpha_cap),
-                "delta_stats": _tensor_stats(delta),
-                "out_stats": _tensor_stats(out),
-            }
         else:
             delta, route_mask = self.enhance241_c6_bra(y_base)
             gate = torch.sigmoid(route_mask * self.gate_scale + self.gate_bias)
+            alpha = None
             out = y_base + gate * delta
-            payload = {
-                "mode": "legacy_gated_bra",
-                "gate_scale": _to_float(self.gate_scale),
-                "gate_bias": _to_float(self.gate_bias),
-                "route_mask_stats": _tensor_stats(route_mask),
-                "gate_stats": _tensor_stats(gate),
-                "delta_stats": _tensor_stats(delta),
-                "out_stats": _tensor_stats(out),
-            }
 
         if recorder is not None:
             if step == 0:
+                payload = {
+                    "delta_stats": _tensor_stats(delta),
+                    "out_stats": _tensor_stats(out),
+                }
+                if alpha is not None:
+                    payload.update(
+                        {
+                            "mode": "ema",
+                            "groups": int(self.groups),
+                            "reduction": int(self.reduction),
+                            "alpha": _to_float(alpha.item()),
+                            "alpha_cap": _to_float(self.alpha_cap),
+                        }
+                    )
+                else:
+                    payload.update(
+                        {
+                            "mode": "legacy_gated_bra",
+                            "gate_scale": _to_float(self.gate_scale),
+                            "gate_bias": _to_float(self.gate_bias),
+                            "route_mask_stats": _tensor_stats(route_mask),
+                            "gate_stats": _tensor_stats(gate),
+                        }
+                    )
                 recorder.record_module_compare(
                     f"{prefix}.p3",
                     patched=out,
                     baseline=y_base,
                     input_tensor=_to_input_tensor(x),
                 )
-                recorder.record_a1_payload(f"{prefix}.gate1", payload)
+                recorder.record_a1_payload(
+                    f"{prefix}.gate1",
+                    payload,
+                )
                 if out.requires_grad:
                     try:
                         out.register_hook(lambda g, n=f"{prefix}.p3": recorder.record_output_grad(n, g))
@@ -268,8 +389,15 @@ def apply(model: Any, cfg: Any) -> Any:
         "detect_idx": int(detect_idx),
         "new_type": "C6GatedBRAInject",
         "channels": int(channels),
+        "num_heads": int(num_heads),
+        "window_size": int(window_size),
+        "topk": int(topk),
+        "kv_downsample_mode": str(kv_mode),
+        "soft_routing": bool(soft_routing),
         "groups": int(groups),
         "reduction": int(reduction),
+        "gate_scale": _to_float(gate_scale),
+        "gate_bias": _to_float(gate_bias),
         "alpha_init": _to_float(alpha_init),
         "alpha_cap": _to_float(alpha_cap),
     }
