@@ -371,6 +371,125 @@ def detect_splits(root: Path):
     return train_entry, val_entry, test_entry
 
 
+def image_entry_to_label_dir(entry: str) -> Path:
+    p = Path(entry)
+    parts = list(p.parts)
+    for i, part in enumerate(parts):
+        if part.lower() in {"images", "image"}:
+            parts[i] = "labels"
+            return Path(*parts)
+    return Path("labels") / p
+
+
+def collect_label_dirs(root: Path, train_entry: str, val_entry: str, test_entry: str) -> List[Path]:
+    rel_dirs = [
+        image_entry_to_label_dir(train_entry),
+        image_entry_to_label_dir(val_entry),
+    ]
+    if test_entry:
+        rel_dirs.append(image_entry_to_label_dir(test_entry))
+    rel_dirs.extend(
+        [
+            Path("labels"),
+            Path("label"),
+            Path("lable"),
+            Path("train/labels"),
+            Path("valid/labels"),
+            Path("val/labels"),
+            Path("test/labels"),
+        ]
+    )
+
+    out: List[Path] = []
+    seen = set()
+    for rel in rel_dirs:
+        abs_dir = (root / rel).resolve()
+        key = str(abs_dir)
+        if key in seen:
+            continue
+        seen.add(key)
+        if abs_dir.is_dir():
+            out.append(abs_dir)
+    return out
+
+
+def infer_nc_from_labels(root: Path, train_entry: str, val_entry: str, test_entry: str):
+    label_dirs = collect_label_dirs(root, train_entry, val_entry, test_entry)
+    max_cls_first = -1
+    max_cls_last = -1
+    first_hits = 0
+    last_hits = 0
+    fallback_max = -1
+
+    def is_int_like(v: float) -> bool:
+        return v >= 0 and abs(v - round(v)) < 1e-9
+
+    for label_dir in label_dirs:
+        for txt in label_dir.rglob("*.txt"):
+            if txt.name.lower() in {"class.txt", "classes.txt", "names.txt", "labels.txt"}:
+                continue
+            try:
+                lines = txt.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except Exception:
+                continue
+            for line in lines:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                parts = s.split()
+                if not parts:
+                    continue
+                vals = []
+                try:
+                    vals = [float(x) for x in parts]
+                except Exception:
+                    continue
+                if not vals:
+                    continue
+
+                first = vals[0]
+                last = vals[-1]
+                first_ok = is_int_like(first)
+                last_ok = is_int_like(last)
+                if first_ok:
+                    fcls = int(round(first))
+                    if fcls > fallback_max:
+                        fallback_max = fcls
+
+                used = False
+                if len(vals) >= 5:
+                    first_style = first_ok and all(0.0 <= v <= 1.0 for v in vals[1:5])
+                    last_style = last_ok and any(v > 1.0 for v in vals[:4])
+                    if first_style:
+                        first_hits += 1
+                        if int(round(first)) > max_cls_first:
+                            max_cls_first = int(round(first))
+                        used = True
+                    if last_style:
+                        last_hits += 1
+                        if int(round(last)) > max_cls_last:
+                            max_cls_last = int(round(last))
+                        used = True
+
+                if not used:
+                    if first_ok and not last_ok:
+                        first_hits += 1
+                        if int(round(first)) > max_cls_first:
+                            max_cls_first = int(round(first))
+                    elif last_ok and not first_ok:
+                        last_hits += 1
+                        if int(round(last)) > max_cls_last:
+                            max_cls_last = int(round(last))
+
+    if first_hits == 0 and last_hits == 0:
+        max_cls = fallback_max
+    elif last_hits > first_hits:
+        max_cls = max_cls_last
+    else:
+        max_cls = max_cls_first
+    return (max_cls + 1) if max_cls >= 0 else None
+
+
 root_dir = Path(os.environ["_M_ROOT_DIR"]).resolve()
 base_cfg_path = Path(os.environ["_M_BASE_CONFIG"]).resolve()
 dataset_root = Path(os.environ["_M_DATASET_ROOT"]).resolve()
@@ -406,20 +525,38 @@ if data_path.exists():
         pass
 
 train_entry, val_entry, test_entry = detect_splits(dataset_root)
+inferred_nc = infer_nc_from_labels(dataset_root, train_entry, val_entry, test_entry)
 
 names = []
+names_from_file = False
 for candidate in ("Class.txt", "classes.txt", "class.txt", "names.txt", "labels.txt"):
     cand_path = dataset_root / candidate
     if cand_path.exists():
         parsed = parse_names(cand_path)
         if parsed:
             names = parsed
+            names_from_file = True
             break
 
 if not names:
-    names = list(default_names) if default_names else [f"class_{i}" for i in range(default_nc)]
+    if inferred_nc and inferred_nc > 0:
+        use_default_names = (
+            len(default_names) >= inferred_nc
+            and not (len(default_names) == 1 and default_names[0].strip().lower() in {"defect", "object"} and inferred_nc > 1)
+        )
+        if use_default_names:
+            names = list(default_names[:inferred_nc])
+        else:
+            names = [f"class_{i}" for i in range(inferred_nc)]
+    else:
+        names = list(default_names) if default_names else [f"class_{i}" for i in range(default_nc)]
 
-nc = max(int(default_nc), len(names))
+if names_from_file:
+    nc = max(int(default_nc), len(names))
+elif inferred_nc and inferred_nc > 0:
+    nc = max(int(default_nc), len(names), int(inferred_nc))
+else:
+    nc = max(int(default_nc), len(names))
 if len(names) < nc:
     names = names + [f"class_{i}" for i in range(len(names), nc)]
 
