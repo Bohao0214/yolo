@@ -12,9 +12,11 @@ dataset/**/images/**/*.bmp
 dataset/**/images/**/*.tif
 dataset/**/images/**/*.tiff
 dataset/**/images/**/*.webp
-
-dataset/yolo
-dataset/raw
+dataset/**/labels/**/*.txt
+dataset/**/labels/**/*.xml
+dataset/**/labels/**/*.json
+dataset/**/labels/**/*.cache
+dataset/**/annotations/**/*
 # =====================
 # Pretrained weights
 # =====================

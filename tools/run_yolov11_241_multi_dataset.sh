@@ -22,6 +22,71 @@ SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 DRY_RUN="false"
 
 DATASET_PATHS=()
+RUNNING_PIDS=()
+
+print_pid_snapshot() {
+  local stage="${1:-snapshot}"
+  local pgid
+  pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -n "${RUNNING_PIDS[*]:-}" ]]; then
+    echo "[multi-dataset][pid] stage=${stage} self=$$ ppid=${PPID:-NA} pgid=${pgid:-NA} children=${RUNNING_PIDS[*]}"
+  else
+    echo "[multi-dataset][pid] stage=${stage} self=$$ ppid=${PPID:-NA} pgid=${pgid:-NA} children=(none)"
+  fi
+}
+
+collect_descendant_pids() {
+  local parent_pid="$1"
+  local child
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 0
+  fi
+  while read -r child; do
+    [[ -z "${child}" ]] && continue
+    collect_descendant_pids "${child}"
+    echo "${child}"
+  done < <(pgrep -P "${parent_pid}" 2>/dev/null || true)
+}
+
+kill_pid_tree() {
+  local root_pid="$1"
+  local descendants
+  local p
+  descendants="$(collect_descendant_pids "${root_pid}" || true)"
+  for p in ${descendants}; do
+    kill -TERM "${p}" 2>/dev/null || true
+  done
+  kill -TERM "${root_pid}" 2>/dev/null || true
+}
+
+prune_running_pid() {
+  local target="$1"
+  local p
+  local -a kept=()
+  for p in "${RUNNING_PIDS[@]:-}"; do
+    [[ "${p}" != "${target}" ]] && kept+=("${p}")
+  done
+  RUNNING_PIDS=("${kept[@]}")
+}
+
+on_interrupt() {
+  local sig="${1:-INT}"
+  local p
+  echo
+  echo "[multi-dataset] received ${sig}, terminating running jobs..."
+  print_pid_snapshot "before_interrupt_cleanup"
+  for p in "${RUNNING_PIDS[@]:-}"; do
+    kill_pid_tree "${p}"
+  done
+  sleep 1
+  for p in "${RUNNING_PIDS[@]:-}"; do
+    kill -KILL "${p}" 2>/dev/null || true
+  done
+  exit 130
+}
+
+trap 'on_interrupt INT' INT
+trap 'on_interrupt TERM' TERM
 
 usage() {
   cat <<'USAGE'
@@ -340,6 +405,39 @@ def parse_names(path: Path) -> List[str]:
     return cleaned
 
 
+def parse_names_obj(obj) -> List[str]:
+    if isinstance(obj, (list, tuple)):
+        return [str(x).strip() for x in obj if str(x).strip()]
+    if isinstance(obj, dict):
+        items = []
+        for k, v in obj.items():
+            key_s = str(k).strip()
+            val_s = str(v).strip()
+            if not val_s:
+                continue
+            try:
+                key_i = int(float(key_s))
+            except Exception:
+                key_i = 10**9
+            items.append((key_i, key_s, val_s))
+        items.sort(key=lambda x: (x[0], x[1]))
+        return [v for _, _, v in items]
+    if isinstance(obj, str):
+        s = obj.strip()
+        if not s:
+            return []
+        try:
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, (list, tuple, dict)):
+                return parse_names_obj(parsed)
+        except Exception:
+            pass
+        if "," in s:
+            return [x.strip().strip("'\"") for x in s.split(",") if x.strip().strip("'\"")]
+        return [s.strip().strip("'\"")]
+    return []
+
+
 def pick_existing(root: Path, candidates: List[str]) -> str:
     for rel in candidates:
         if (root / rel).exists():
@@ -510,9 +608,32 @@ data_path = Path(data_ref)
 if not data_path.is_absolute():
     data_path = (root_dir / data_path).resolve()
 
+dataset_meta_info = {}
+for _cand in ("data.yaml", "data.yml", "dataset.yaml", "dataset.yml"):
+    _cand_path = dataset_root / _cand
+    if _cand_path.is_file():
+        try:
+            _doc = load_yaml(_cand_path)
+            if isinstance(_doc, dict):
+                dataset_meta_info = _doc
+                break
+        except Exception:
+            pass
+
 default_nc = 1
 default_names: List[str] = ["defect"]
-if data_path.exists():
+if dataset_meta_info:
+    names_obj = dataset_meta_info.get("names", [])
+    parsed_names = parse_names_obj(names_obj)
+    if parsed_names:
+        default_names = parsed_names
+    if default_names:
+        default_nc = len(default_names)
+    try:
+        default_nc = int(dataset_meta_info.get("nc", default_nc))
+    except Exception:
+        pass
+elif data_path.exists():
     data_info = load_yaml(data_path)
     names_obj = data_info.get("names", [])
     if isinstance(names_obj, (list, tuple)):
@@ -525,6 +646,26 @@ if data_path.exists():
         pass
 
 train_entry, val_entry, test_entry = detect_splits(dataset_root)
+if dataset_meta_info:
+    meta_train = str(dataset_meta_info.get("train", "")).strip()
+    meta_val = str(dataset_meta_info.get("val", dataset_meta_info.get("valid", ""))).strip()
+    meta_test = str(dataset_meta_info.get("test", "")).strip()
+
+    def _entry_exists(entry: str) -> bool:
+        if not entry:
+            return False
+        p = Path(entry)
+        if p.is_absolute():
+            return p.exists()
+        return (dataset_root / p).exists()
+
+    if _entry_exists(meta_train):
+        train_entry = meta_train
+    if _entry_exists(meta_val):
+        val_entry = meta_val
+    if _entry_exists(meta_test):
+        test_entry = meta_test
+
 inferred_nc = infer_nc_from_labels(dataset_root, train_entry, val_entry, test_entry)
 
 names = []
@@ -691,6 +832,7 @@ echo "[multi-dataset] run_tag=${RUN_TAG_SAFE}"
 echo "[multi-dataset] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[multi-dataset] log_root=${LOG_ROOT}"
 echo "[multi-dataset] datasets=${#DATASET_ROOTS[@]}"
+print_pid_snapshot "startup"
 
 fail_count=0
 
@@ -738,13 +880,17 @@ else
       fi
       pid=$!
       pids+=("${pid}")
+      RUNNING_PIDS+=("${pid}")
       PID_TO_INDEX["${pid}"]="${j}"
       echo "[multi-dataset:${DATASET_TAGS[$j]}] started pid=${pid} log=${log_path}"
+      print_pid_snapshot "after_spawn_${DATASET_TAGS[$j]}"
     done
 
     for pid in "${pids[@]}"; do
       status=0
       wait "${pid}" || status=$?
+      prune_running_pid "${pid}"
+      print_pid_snapshot "after_wait_${pid}"
       j="${PID_TO_INDEX[$pid]}"
       log_path="${LOG_ROOT}/${DATASET_TAGS[$j]}.log"
 

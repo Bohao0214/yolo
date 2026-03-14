@@ -1,0 +1,1 @@
+'open','short','mousebite','spur','copper','pin-hole'

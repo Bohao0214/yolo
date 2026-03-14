@@ -20,6 +20,58 @@ LOG_ROOT="${LOG_ROOT:-}"
 PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
 DRY_RUN="false"
 COMBOS_RAW="${COMBOS_RAW:-}"
+ACTIVE_CHILD_PID=""
+
+print_pid_snapshot() {
+  local stage="${1:-snapshot}"
+  local pgid
+  pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -n "${ACTIVE_CHILD_PID:-}" ]]; then
+    echo "[module-combo][pid] stage=${stage} self=$$ ppid=${PPID:-NA} pgid=${pgid:-NA} child=${ACTIVE_CHILD_PID}"
+  else
+    echo "[module-combo][pid] stage=${stage} self=$$ ppid=${PPID:-NA} pgid=${pgid:-NA} child=(none)"
+  fi
+}
+
+collect_descendant_pids() {
+  local parent_pid="$1"
+  local child
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 0
+  fi
+  while read -r child; do
+    [[ -z "${child}" ]] && continue
+    collect_descendant_pids "${child}"
+    echo "${child}"
+  done < <(pgrep -P "${parent_pid}" 2>/dev/null || true)
+}
+
+kill_pid_tree() {
+  local root_pid="$1"
+  local descendants
+  local p
+  descendants="$(collect_descendant_pids "${root_pid}" || true)"
+  for p in ${descendants}; do
+    kill -TERM "${p}" 2>/dev/null || true
+  done
+  kill -TERM "${root_pid}" 2>/dev/null || true
+}
+
+on_interrupt() {
+  local sig="${1:-INT}"
+  echo
+  echo "[module-combo] received ${sig}, terminating current child..."
+  print_pid_snapshot "before_interrupt_cleanup"
+  if [[ -n "${ACTIVE_CHILD_PID:-}" ]]; then
+    kill_pid_tree "${ACTIVE_CHILD_PID}"
+    sleep 1
+    kill -KILL "${ACTIVE_CHILD_PID}" 2>/dev/null || true
+  fi
+  exit 130
+}
+
+trap 'on_interrupt INT' INT
+trap 'on_interrupt TERM' TERM
 
 usage() {
   cat <<'USAGE'
@@ -418,6 +470,7 @@ echo "[module-combo] combos_raw=${COMBOS_RAW}"
 echo "[module-combo] combos_resolved=${CASE_TAGS[*]}"
 echo "[module-combo] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[module-combo] log_root=${LOG_ROOT}"
+print_pid_snapshot "startup"
 
 fail_count=0
 
@@ -453,8 +506,12 @@ for i in "${!CASE_TAGS[@]}"; do
       echo "[dry-run] ${cmd[*]}"
     } > "${log_path}"
   else
-    "${cmd[@]}" > "${log_path}" 2>&1
-    status=$?
+    "${cmd[@]}" > "${log_path}" 2>&1 &
+    ACTIVE_CHILD_PID=$!
+    print_pid_snapshot "after_spawn_${tag}"
+    wait "${ACTIVE_CHILD_PID}" || status=$?
+    ACTIVE_CHILD_PID=""
+    print_pid_snapshot "after_wait_${tag}"
   fi
 
   exp_dir=""

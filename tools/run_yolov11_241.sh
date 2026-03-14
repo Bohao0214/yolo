@@ -14,6 +14,42 @@ E241_SAFE_WORKERS="${E241_SAFE_WORKERS:-4}"
 E241_VRAM_GUARD="${E241_VRAM_GUARD:-auto}"   # auto|on|off
 E241_GUARD_MAX_GB="${E241_GUARD_MAX_GB:-10}" # apply guard when total VRAM <= this value in auto mode
 CLEANUP_FILES=()
+ACTIVE_CHILD_PID=""
+
+print_pid_snapshot() {
+  local stage="${1:-snapshot}"
+  local pgid
+  pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -n "${ACTIVE_CHILD_PID:-}" ]]; then
+    echo "[run-241][pid] stage=${stage} self=$$ ppid=${PPID:-NA} pgid=${pgid:-NA} child=${ACTIVE_CHILD_PID}"
+  else
+    echo "[run-241][pid] stage=${stage} self=$$ ppid=${PPID:-NA} pgid=${pgid:-NA} child=(none)"
+  fi
+}
+
+collect_descendant_pids() {
+  local parent_pid="$1"
+  local child
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 0
+  fi
+  while read -r child; do
+    [[ -z "${child}" ]] && continue
+    collect_descendant_pids "${child}"
+    echo "${child}"
+  done < <(pgrep -P "${parent_pid}" 2>/dev/null || true)
+}
+
+kill_pid_tree() {
+  local root_pid="$1"
+  local descendants
+  local p
+  descendants="$(collect_descendant_pids "${root_pid}" || true)"
+  for p in ${descendants}; do
+    kill -TERM "${p}" 2>/dev/null || true
+  done
+  kill -TERM "${root_pid}" 2>/dev/null || true
+}
 
 cleanup_on_exit() {
   local f
@@ -22,7 +58,22 @@ cleanup_on_exit() {
   done
 }
 
+on_interrupt() {
+  local sig="${1:-INT}"
+  echo
+  echo "[run-241] received ${sig}, terminating current child..."
+  print_pid_snapshot "before_interrupt_cleanup"
+  if [[ -n "${ACTIVE_CHILD_PID:-}" ]]; then
+    kill_pid_tree "${ACTIVE_CHILD_PID}"
+    sleep 1
+    kill -KILL "${ACTIVE_CHILD_PID}" 2>/dev/null || true
+  fi
+  exit 130
+}
+
 trap cleanup_on_exit EXIT
+trap 'on_interrupt INT' INT
+trap 'on_interrupt TERM' TERM
 
 usage() {
   cat <<'USAGE'
@@ -708,4 +759,12 @@ print(
 PY
 
 echo "[run] config=${CONFIG_TO_RUN} runtime_config=${RUNTIME_CONFIG} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN} vram_guard=${E241_VRAM_GUARD}"
-"${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${RUNTIME_CONFIG}"
+print_pid_snapshot "startup"
+"${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${RUNTIME_CONFIG}" &
+ACTIVE_CHILD_PID=$!
+print_pid_snapshot "after_spawn_train"
+train_status=0
+wait "${ACTIVE_CHILD_PID}" || train_status=$?
+ACTIVE_CHILD_PID=""
+print_pid_snapshot "after_wait_train"
+exit "${train_status}"
