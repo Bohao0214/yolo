@@ -1,0 +1,26 @@
+{
+  "train": {
+    "images": 680,
+    "objects": 1600,
+    "normal": 228,
+    "abnormal": 452
+  },
+  "val": {
+    "images": 168,
+    "objects": 387,
+    "normal": 56,
+    "abnormal": 112
+  },
+  "test": {
+    "images": 403,
+    "objects": 1052,
+    "normal": 100,
+    "abnormal": 303
+  },
+  "total": {
+    "images": 1251,
+    "objects": 3039,
+    "normal": 384,
+    "abnormal": 867
+  }
+}

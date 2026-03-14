@@ -1,0 +1,7 @@
+names:
+- defect
+nc: 1
+path: /home/ubuntu/project/deduibi/yolo11/dataset2
+test: images/test
+train: images/train
+val: images/val
