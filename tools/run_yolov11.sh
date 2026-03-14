@@ -59,14 +59,12 @@ on_interrupt() {
 trap 'on_interrupt INT' INT
 trap 'on_interrupt TERM' TERM
 
-print_pid_snapshot "startup"
 python "${ROOT_DIR}/src/train.py" --config "${CONFIG}" &
 ACTIVE_CHILD_PID=$!
-print_pid_snapshot "after_spawn_train"
+echo "[run-yolov11][train-pid] pid=${ACTIVE_CHILD_PID} config=${CONFIG}"
 train_status=0
 wait "${ACTIVE_CHILD_PID}" || train_status=$?
 ACTIVE_CHILD_PID=""
-print_pid_snapshot "after_wait_train"
 exit "${train_status}"
 
 # bash tools/run_yolov11.sh configs/yolo11/defect.yaml

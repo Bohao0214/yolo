@@ -470,7 +470,6 @@ echo "[module-combo] combos_raw=${COMBOS_RAW}"
 echo "[module-combo] combos_resolved=${CASE_TAGS[*]}"
 echo "[module-combo] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[module-combo] log_root=${LOG_ROOT}"
-print_pid_snapshot "startup"
 
 fail_count=0
 
@@ -508,10 +507,9 @@ for i in "${!CASE_TAGS[@]}"; do
   else
     "${cmd[@]}" > "${log_path}" 2>&1 &
     ACTIVE_CHILD_PID=$!
-    print_pid_snapshot "after_spawn_${tag}"
+    echo "[module-combo][train-pid] tag=${tag} pid=${ACTIVE_CHILD_PID} log=${log_path}"
     wait "${ACTIVE_CHILD_PID}" || status=$?
     ACTIVE_CHILD_PID=""
-    print_pid_snapshot "after_wait_${tag}"
   fi
 
   exp_dir=""

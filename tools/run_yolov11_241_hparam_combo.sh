@@ -680,7 +680,6 @@ echo "[hparam-combo] mode=${FORCE_MODE} seed=${SEED_OVERRIDE:-<keep>}"
 echo "[hparam-combo] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OVERRIDE} safe_batch=${SAFE_BATCH_OVERRIDE} safe_workers=${SAFE_WORKERS_OVERRIDE}"
 echo "[hparam-combo] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[hparam-combo] log_root=${LOG_ROOT}"
-print_pid_snapshot "startup"
 echo "[hparam-combo] note: grad_accum is recorded in config/summary; src/train.py may not consume it directly."
 
 fail_count=0
@@ -723,10 +722,9 @@ for i in "${!CASE_TAGS[@]}"; do
   else
     "${cmd[@]}" > "${log_path}" 2>&1 &
     ACTIVE_CHILD_PID=$!
-    print_pid_snapshot "after_spawn_${case_tag}"
+    echo "[hparam-combo][train-pid] case=${case_tag} pid=${ACTIVE_CHILD_PID} log=${log_path}"
     wait "${ACTIVE_CHILD_PID}" || status=$?
     ACTIVE_CHILD_PID=""
-    print_pid_snapshot "after_wait_${case_tag}"
   fi
 
   exp_dir=""

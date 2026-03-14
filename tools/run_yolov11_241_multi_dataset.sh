@@ -832,7 +832,6 @@ echo "[multi-dataset] run_tag=${RUN_TAG_SAFE}"
 echo "[multi-dataset] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[multi-dataset] log_root=${LOG_ROOT}"
 echo "[multi-dataset] datasets=${#DATASET_ROOTS[@]}"
-print_pid_snapshot "startup"
 
 fail_count=0
 
@@ -883,14 +882,13 @@ else
       RUNNING_PIDS+=("${pid}")
       PID_TO_INDEX["${pid}"]="${j}"
       echo "[multi-dataset:${DATASET_TAGS[$j]}] started pid=${pid} log=${log_path}"
-      print_pid_snapshot "after_spawn_${DATASET_TAGS[$j]}"
+      echo "[multi-dataset][train-pid] dataset=${DATASET_TAGS[$j]} pid=${pid} runner=${RUNNER_MODE} log=${log_path}"
     done
 
     for pid in "${pids[@]}"; do
       status=0
       wait "${pid}" || status=$?
       prune_running_pid "${pid}"
-      print_pid_snapshot "after_wait_${pid}"
       j="${PID_TO_INDEX[$pid]}"
       log_path="${LOG_ROOT}/${DATASET_TAGS[$j]}.log"
 

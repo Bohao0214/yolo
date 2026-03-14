@@ -759,12 +759,10 @@ print(
 PY
 
 echo "[run] config=${CONFIG_TO_RUN} runtime_config=${RUNTIME_CONFIG} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN} vram_guard=${E241_VRAM_GUARD}"
-print_pid_snapshot "startup"
 "${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${RUNTIME_CONFIG}" &
 ACTIVE_CHILD_PID=$!
-print_pid_snapshot "after_spawn_train"
+echo "[run-241][train-pid] pid=${ACTIVE_CHILD_PID} runtime_config=${RUNTIME_CONFIG}"
 train_status=0
 wait "${ACTIVE_CHILD_PID}" || train_status=$?
 ACTIVE_CHILD_PID=""
-print_pid_snapshot "after_wait_train"
 exit "${train_status}"
