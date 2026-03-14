@@ -871,6 +871,7 @@ else
 
       echo "[multi-dataset:${DATASET_TAGS[$j]}] dataset=${DATASET_ROOTS[$j]}"
       echo "[multi-dataset:${DATASET_TAGS[$j]}] cmd=${CMD[*]}"
+      echo "[multi-dataset:${DATASET_TAGS[$j]}] data_yaml=${DATA_YAMLS[$j]} nc=${CLASS_COUNTS[$j]}"
 
       if [[ "${RUNNER_MODE}" == "module_combo" ]]; then
         FORCE_MODE="${RUN_TRAIN_MODE}" "${CMD[@]}" > "${log_path}" 2>&1 &
