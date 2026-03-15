@@ -100,6 +100,21 @@ on_interrupt() {
 trap 'on_interrupt INT' INT
 trap 'on_interrupt TERM' TERM
 
+write_experiment_metrics_for_exp() {
+  local exp_dir="$1"
+  local log_path="$2"
+  local tag="$3"
+  local out
+  [[ -d "${exp_dir}" ]] || return 0
+  out="$("${PYTHON_CFG_BIN}" "${ROOT_DIR}/tools/generate_paper_metrics.py" \
+    --exp-dir "${exp_dir}" \
+    --log "${log_path}" \
+    --tag "${tag}" 2>/dev/null || true)"
+  if [[ -n "${out}" ]]; then
+    echo "[hparam-combo:${tag}] ${out}"
+  fi
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -791,6 +806,7 @@ for i in "${!CASE_TAGS[@]}"; do
     echo "[hparam-combo:${case_tag}] failed -> ${error_md}"
   else
     echo "[hparam-combo:${case_tag}] success exp_dir=${exp_dir}"
+    write_experiment_metrics_for_exp "${exp_dir}" "${log_path}" "${case_tag}"
   fi
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \

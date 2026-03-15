@@ -82,6 +82,43 @@ terminate_running_jobs() {
   done
 }
 
+extract_exp_dir_from_log() {
+  local log_path="$1"
+  local line
+  local clean
+  local path
+  [[ -f "${log_path}" ]] || return 0
+  line="$(grep -a 'Results saved to' "${log_path}" 2>/dev/null | tail -n 1 || true)"
+  [[ -n "${line}" ]] || return 0
+  clean="$(echo "${line}" | sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g')"
+  path="${clean#*Results saved to }"
+  path="${path//$'\r'/}"
+  path="$(echo "${path}" | sed -E 's/[[:space:]]+$//')"
+  if [[ "${path}" == */train ]]; then
+    echo "${path%/train}"
+    return 0
+  fi
+  if [[ -d "${path}" ]]; then
+    echo "${path%/}"
+    return 0
+  fi
+}
+
+write_experiment_metrics_for_exp() {
+  local exp_dir="$1"
+  local log_path="$2"
+  local tag="$3"
+  local out
+  [[ -d "${exp_dir}" ]] || return 0
+  out="$("${PYTHON_CFG_BIN}" "${ROOT_DIR}/tools/generate_paper_metrics.py" \
+    --exp-dir "${exp_dir}" \
+    --log "${log_path}" \
+    --tag "${tag}" 2>/dev/null || true)"
+  if [[ -n "${out}" ]]; then
+    echo "[multi-dataset:${tag}] ${out}"
+  fi
+}
+
 prune_running_pid() {
   local target="$1"
   local p
@@ -137,6 +174,8 @@ Purpose:
   Run one or more datasets in parallel using:
   - baseline runner (tools/run_yolov11_241.sh)
   - module combo runner (tools/run_yolov11_241_module_combo.sh)
+  - Batch outputs are grouped under experiments/<yolo_version>/batch_runs/<tag>/...
+  - After each successful run, writes metrics/experiment_metrics.{csv,md,json} in the exp dir
 
 Dataset inputs:
   --dataset DIR      Add one dataset dir (repeatable)
@@ -870,10 +909,7 @@ out_data.parent.mkdir(parents=True, exist_ok=True)
 with out_data.open("w", encoding="utf-8") as f:
     yaml.safe_dump(data_doc, f, sort_keys=False, allow_unicode=True)
 
-exp_base = str(cfg.get("exp_name", "defect241"))
-suffix = f"__{run_tag}__ds_{dataset_tag}"
-if not exp_base.endswith(suffix):
-    cfg["exp_name"] = exp_base + suffix
+cfg["exp_name"] = f"batch_runs/{run_tag}/{dataset_tag}"
 
 cfg["data"] = str(out_data)
 cfg["data_root"] = str(dataset_root)
@@ -1066,6 +1102,14 @@ else
         echo "[multi-dataset:${DATASET_TAGS[$j]}] failed status=${status} log=${log_path}"
       else
         echo "[multi-dataset:${DATASET_TAGS[$j]}] success log=${log_path}"
+        if [[ "${RUNNER_MODE}" == "baseline" ]]; then
+          exp_dir_from_log="$(extract_exp_dir_from_log "${log_path}")"
+          if [[ -n "${exp_dir_from_log}" ]]; then
+            write_experiment_metrics_for_exp "${exp_dir_from_log}" "${log_path}" "${DATASET_TAGS[$j]}"
+          else
+            echo "[multi-dataset:${DATASET_TAGS[$j]}] warn: unable to resolve exp_dir from log for experiment metrics"
+          fi
+        fi
       fi
 
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \

@@ -18,6 +18,7 @@ SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
 PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
+RESULT_GROUP_ROOT="${RESULT_GROUP_ROOT:-batch_runs/${MATRIX_TAG}}"
 DRY_RUN="false"
 COMBOS_RAW="${COMBOS_RAW:-}"
 ACTIVE_CHILD_PID=""
@@ -99,6 +100,21 @@ on_interrupt() {
 trap 'on_interrupt INT' INT
 trap 'on_interrupt TERM' TERM
 
+write_experiment_metrics_for_exp() {
+  local exp_dir="$1"
+  local log_path="$2"
+  local tag="$3"
+  local out
+  [[ -d "${exp_dir}" ]] || return 0
+  out="$("${PYTHON_CFG_BIN}" "${ROOT_DIR}/tools/generate_paper_metrics.py" \
+    --exp-dir "${exp_dir}" \
+    --log "${log_path}" \
+    --tag "${tag}" 2>/dev/null || true)"
+  if [[ -n "${out}" ]]; then
+    echo "[module-combo:${tag}] ${out}"
+  fi
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -147,7 +163,7 @@ Options:
 Env overrides:
   BASE_CONFIG, EPOCHS_OVERRIDE, COMBOS_RAW, FORCE_MODE, SEED_OVERRIDE, BATCH_OVERRIDE(default 6)
   D1_WORKERS_OVERRIDE(default 4), VRAM_GUARD_OVERRIDE(auto|on|off), GUARD_MAX_GB_OVERRIDE(default 10)
-  SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4)
+  SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4), RESULT_GROUP_ROOT(default batch_runs/<tag>)
   TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN
 USAGE
 }
@@ -411,9 +427,12 @@ list_exp_dirs() {
 generate_case_cfg() {
   local out_cfg="$1"
   local switches="$2"
+  local case_tag="$3"
   _M_BASE_CONFIG="${BASE_CONFIG}" \
   _M_OUT_CFG="${out_cfg}" \
   _M_SWITCHES="${switches}" \
+  _M_CASE_TAG="${case_tag}" \
+  _M_RESULT_GROUP_ROOT="${RESULT_GROUP_ROOT}" \
   _M_EPOCHS="${EPOCHS_OVERRIDE}" \
   _M_FORCE_MODE="${FORCE_MODE}" \
   _M_SEED_OVERRIDE="${SEED_OVERRIDE}" \
@@ -428,6 +447,8 @@ import yaml
 base_cfg = Path(os.environ["_M_BASE_CONFIG"]).resolve()
 out_cfg = Path(os.environ["_M_OUT_CFG"]).resolve()
 switches = [s.strip() for s in os.environ["_M_SWITCHES"].split() if s.strip()]
+case_tag = os.environ["_M_CASE_TAG"].strip()
+result_group_root = os.environ.get("_M_RESULT_GROUP_ROOT", "").strip().strip("/")
 epochs = os.environ["_M_EPOCHS"].strip()
 force_mode = os.environ["_M_FORCE_MODE"].strip()
 seed_override = os.environ["_M_SEED_OVERRIDE"].strip()
@@ -458,7 +479,10 @@ for key in switches:
         enh[key] = True
 
 exp_name = str(cfg.get("exp_name", "defect241"))
-if switches:
+if result_group_root and not exp_name.startswith("batch_runs/"):
+    leaf = case_tag or ("baseline" if not switches else "__".join(switches))
+    exp_name = f"{result_group_root}/{leaf}"
+elif switches:
     suffix = "__" + "__".join(switches)
     if not exp_name.endswith(suffix):
         exp_name = exp_name + suffix
@@ -494,6 +518,7 @@ echo "[module-combo] epochs=${EPOCHS_OVERRIDE} mode=${FORCE_MODE} seed=${SEED_OV
 echo "[module-combo] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OVERRIDE} safe_batch=${SAFE_BATCH_OVERRIDE} safe_workers=${SAFE_WORKERS_OVERRIDE}"
 echo "[module-combo] combos_raw=${COMBOS_RAW}"
 echo "[module-combo] combos_resolved=${CASE_TAGS[*]}"
+echo "[module-combo] result_group_root=${RESULT_GROUP_ROOT}"
 echo "[module-combo] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[module-combo] log_root=${LOG_ROOT}"
 
@@ -505,7 +530,7 @@ for i in "${!CASE_TAGS[@]}"; do
   cfg_path="${TMP_CFG_DIR}/${tag}.yaml"
   log_path="${LOG_ROOT}/${tag}.log"
 
-  meta="$(generate_case_cfg "${cfg_path}" "${switches}")"
+  meta="$(generate_case_cfg "${cfg_path}" "${switches}" "${tag}")"
   exp_name="$(echo "${meta}" | awk -F $'\t' '{print $1}')"
   yolo_version="$(echo "${meta}" | awk -F $'\t' '{print $2}')"
   exp_root="${ROOT_DIR}/experiments/${yolo_version}/${exp_name}"
@@ -575,6 +600,7 @@ for i in "${!CASE_TAGS[@]}"; do
     echo "[module-combo:${tag}] failed -> ${error_md}"
   else
     echo "[module-combo:${tag}] success exp_dir=${exp_dir}"
+    write_experiment_metrics_for_exp "${exp_dir}" "${log_path}" "${tag}"
   fi
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
