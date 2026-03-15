@@ -16,6 +16,7 @@ TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
 PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
 DATASET_REGISTRY="${DATASET_REGISTRY:-${ROOT_DIR}/dataset/yolo/public_dataset_registry.yaml}"
+CLEAR_LABEL_CACHE="${CLEAR_LABEL_CACHE:-on}" # on|off
 VRAM_GUARD_OVERRIDE="${VRAM_GUARD_OVERRIDE:-auto}" # auto|on|off
 GUARD_MAX_GB_OVERRIDE="${GUARD_MAX_GB_OVERRIDE:-10}"
 SAFE_BATCH_OVERRIDE="${SAFE_BATCH_OVERRIDE:-${E241_SAFE_BATCH:-6}}"
@@ -91,6 +92,19 @@ prune_running_pid() {
   RUNNING_PIDS=("${kept[@]}")
 }
 
+clear_dataset_label_cache() {
+  local dataset_root="$1"
+  local removed=0
+  local f
+  while IFS= read -r -d '' f; do
+    rm -f "${f}" || true
+    removed=$((removed + 1))
+  done < <(find "${dataset_root}" -type f \
+    \( -path "*/labels/*.cache" -o -name "labels.cache" -o -name "train.cache" -o -name "val.cache" -o -name "valid.cache" -o -name "test.cache" \) \
+    -print0 2>/dev/null || true)
+  echo "${removed}"
+}
+
 on_interrupt() {
   local sig="${1:-INT}"
   INTERRUPT_COUNT=$((INTERRUPT_COUNT + 1))
@@ -135,6 +149,8 @@ Main options:
   --epochs N         Override epochs for all datasets
   --train-mode MODE  Override cfg mode (test | train_test | finetune_test)
   --parallel N       Max datasets running at the same time (default 2)
+  --clear-label-cache MODE
+                    on|off (default on). Remove stale label *.cache before launch.
   --dataset-registry FILE
                     Optional dataset registry yaml. Default:
                     dataset/yolo/public_dataset_registry.yaml
@@ -169,7 +185,7 @@ Examples:
 Env overrides:
   BASE_CONFIG, RUN_TAG, RUNNER_MODE, COMBOS_RAW, BATCH_OVERRIDE, EPOCHS_OVERRIDE,
   TRAIN_MODE_OVERRIDE, MAX_PARALLEL, TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN,
-  DATASET_REGISTRY, VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
+  DATASET_REGISTRY, CLEAR_LABEL_CACHE, VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
 USAGE
 }
 
@@ -230,6 +246,11 @@ while [[ $# -gt 0 ]]; do
       MAX_PARALLEL="$2"
       shift 2
       ;;
+    --clear-label-cache)
+      [[ $# -ge 2 ]] || { echo "[error] --clear-label-cache requires a value (on|off)" >&2; exit 2; }
+      CLEAR_LABEL_CACHE="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
     --dataset-registry)
       [[ $# -ge 2 ]] || { echo "[error] --dataset-registry requires a value" >&2; exit 2; }
       DATASET_REGISTRY="$2"
@@ -282,6 +303,11 @@ done
 
 if [[ "${RUNNER_MODE}" != "baseline" && "${RUNNER_MODE}" != "module_combo" ]]; then
   echo "[error] invalid --runner='${RUNNER_MODE}', expected baseline|module_combo" >&2
+  exit 2
+fi
+
+if [[ "${CLEAR_LABEL_CACHE}" != "on" && "${CLEAR_LABEL_CACHE}" != "off" ]]; then
+  echo "[error] invalid --clear-label-cache='${CLEAR_LABEL_CACHE}', expected on|off" >&2
   exit 2
 fi
 
@@ -963,6 +989,7 @@ echo "[multi-dataset] base_config=${BASE_CONFIG}"
 echo "[multi-dataset] runner=${RUNNER_MODE} dry_run=${DRY_RUN} parallel=${MAX_PARALLEL}"
 echo "[multi-dataset] epochs=${RUN_EPOCHS} batch=${RUN_BATCH} train_mode=${RUN_TRAIN_MODE}"
 echo "[multi-dataset] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OVERRIDE} safe_batch=${SAFE_BATCH_OVERRIDE} safe_workers=${SAFE_WORKERS_OVERRIDE}"
+echo "[multi-dataset] clear_label_cache=${CLEAR_LABEL_CACHE}"
 echo "[multi-dataset] run_tag=${RUN_TAG_SAFE}"
 echo "[multi-dataset] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[multi-dataset] log_root=${LOG_ROOT}"
@@ -1004,6 +1031,11 @@ else
     for ((j=chunk_start; j<chunk_end; j++)); do
       build_cmd_for_index "${j}"
       log_path="${LOG_ROOT}/${DATASET_TAGS[$j]}.log"
+
+      if [[ "${CLEAR_LABEL_CACHE}" == "on" ]]; then
+        removed_cache_count="$(clear_dataset_label_cache "${DATASET_ROOTS[$j]}")"
+        echo "[multi-dataset:${DATASET_TAGS[$j]}] cleared_label_cache=${removed_cache_count}"
+      fi
 
       echo "[multi-dataset:${DATASET_TAGS[$j]}] dataset=${DATASET_ROOTS[$j]}"
       echo "[multi-dataset:${DATASET_TAGS[$j]}] cmd=${CMD[*]}"
