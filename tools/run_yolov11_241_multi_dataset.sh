@@ -15,6 +15,7 @@ MAX_PARALLEL="${MAX_PARALLEL:-2}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
 PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
+DATASET_REGISTRY="${DATASET_REGISTRY:-${ROOT_DIR}/dataset/yolo/public_dataset_registry.yaml}"
 VRAM_GUARD_OVERRIDE="${VRAM_GUARD_OVERRIDE:-auto}" # auto|on|off
 GUARD_MAX_GB_OVERRIDE="${GUARD_MAX_GB_OVERRIDE:-10}"
 SAFE_BATCH_OVERRIDE="${SAFE_BATCH_OVERRIDE:-${E241_SAFE_BATCH:-6}}"
@@ -23,6 +24,8 @@ DRY_RUN="false"
 
 DATASET_PATHS=()
 RUNNING_PIDS=()
+INTERRUPT_IN_PROGRESS=0
+INTERRUPT_COUNT=0
 
 print_pid_snapshot() {
   local stage="${1:-snapshot}"
@@ -48,15 +51,34 @@ collect_descendant_pids() {
   done < <(pgrep -P "${parent_pid}" 2>/dev/null || true)
 }
 
+kill_pid_group() {
+  local root_pid="$1"
+  local sig="${2:-TERM}"
+  local pgid
+  pgid="$(ps -o pgid= -p "${root_pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ -n "${pgid}" ]] || return 0
+  kill -s "${sig}" -- "-${pgid}" 2>/dev/null || true
+}
+
 kill_pid_tree() {
   local root_pid="$1"
+  local sig="${2:-TERM}"
   local descendants
   local p
   descendants="$(collect_descendant_pids "${root_pid}" || true)"
   for p in ${descendants}; do
-    kill -TERM "${p}" 2>/dev/null || true
+    kill -s "${sig}" "${p}" 2>/dev/null || true
   done
-  kill -TERM "${root_pid}" 2>/dev/null || true
+  kill -s "${sig}" "${root_pid}" 2>/dev/null || true
+}
+
+terminate_running_jobs() {
+  local sig="${1:-TERM}"
+  local p
+  for p in "${RUNNING_PIDS[@]:-}"; do
+    kill_pid_group "${p}" "${sig}"
+    kill_pid_tree "${p}" "${sig}"
+  done
 }
 
 prune_running_pid() {
@@ -71,17 +93,21 @@ prune_running_pid() {
 
 on_interrupt() {
   local sig="${1:-INT}"
-  local p
+  INTERRUPT_COUNT=$((INTERRUPT_COUNT + 1))
+  if [[ "${INTERRUPT_IN_PROGRESS}" == "1" ]]; then
+    echo
+    echo "[multi-dataset] interrupt already in progress (count=${INTERRUPT_COUNT}); force-killing now..."
+    terminate_running_jobs "KILL"
+    exit 130
+  fi
+  INTERRUPT_IN_PROGRESS=1
+  trap '' INT TERM
   echo
   echo "[multi-dataset] received ${sig}, terminating running jobs..."
   print_pid_snapshot "before_interrupt_cleanup"
-  for p in "${RUNNING_PIDS[@]:-}"; do
-    kill_pid_tree "${p}"
-  done
+  terminate_running_jobs "TERM"
   sleep 1
-  for p in "${RUNNING_PIDS[@]:-}"; do
-    kill -KILL "${p}" 2>/dev/null || true
-  done
+  terminate_running_jobs "KILL"
   exit 130
 }
 
@@ -109,6 +135,9 @@ Main options:
   --epochs N         Override epochs for all datasets
   --train-mode MODE  Override cfg mode (test | train_test | finetune_test)
   --parallel N       Max datasets running at the same time (default 2)
+  --dataset-registry FILE
+                    Optional dataset registry yaml. Default:
+                    dataset/yolo/public_dataset_registry.yaml
   --tag NAME         Run tag for tmp/log folder naming
   --dry-run          Generate configs and command logs only
 
@@ -140,7 +169,7 @@ Examples:
 Env overrides:
   BASE_CONFIG, RUN_TAG, RUNNER_MODE, COMBOS_RAW, BATCH_OVERRIDE, EPOCHS_OVERRIDE,
   TRAIN_MODE_OVERRIDE, MAX_PARALLEL, TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN,
-  VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
+  DATASET_REGISTRY, VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
 USAGE
 }
 
@@ -199,6 +228,11 @@ while [[ $# -gt 0 ]]; do
     --parallel)
       [[ $# -ge 2 ]] || { echo "[error] --parallel requires a value" >&2; exit 2; }
       MAX_PARALLEL="$2"
+      shift 2
+      ;;
+    --dataset-registry)
+      [[ $# -ge 2 ]] || { echo "[error] --dataset-registry requires a value" >&2; exit 2; }
+      DATASET_REGISTRY="$2"
       shift 2
       ;;
     --tag)
@@ -274,6 +308,11 @@ fi
 if [[ ! -f "${BASE_CONFIG}" ]]; then
   echo "[error] base config not found: ${BASE_CONFIG}" >&2
   exit 2
+fi
+
+if [[ -n "${DATASET_REGISTRY}" && ! -f "${DATASET_REGISTRY}" ]]; then
+  echo "[warn] dataset registry not found: ${DATASET_REGISTRY}; fallback to auto-detection" >&2
+  DATASET_REGISTRY=""
 fi
 
 if [[ ${#DATASET_PATHS[@]} -eq 0 ]]; then
@@ -363,6 +402,7 @@ generate_dataset_bundle() {
   _M_BATCH_OVERRIDE="${BATCH_OVERRIDE}" \
   _M_EPOCHS_OVERRIDE="${EPOCHS_OVERRIDE}" \
   _M_TRAIN_MODE_OVERRIDE="${TRAIN_MODE_OVERRIDE}" \
+  _M_DATASET_REGISTRY="${DATASET_REGISTRY}" \
   "${PYTHON_CFG_BIN}" - <<'PY'
 import ast
 import os
@@ -436,6 +476,54 @@ def parse_names_obj(obj) -> List[str]:
             return [x.strip().strip("'\"") for x in s.split(",") if x.strip().strip("'\"")]
         return [s.strip().strip("'\"")]
     return []
+
+
+def normalize_ds_key(raw: str) -> str:
+    s = str(raw).strip().lower()
+    if not s:
+        return ""
+    out = []
+    prev_sep = False
+    for ch in s:
+        if ch.isalnum():
+            out.append(ch)
+            prev_sep = False
+        else:
+            if not prev_sep:
+                out.append("_")
+                prev_sep = True
+    return "".join(out).strip("_")
+
+
+def load_registry_map(path: Path):
+    if not path or not path.is_file():
+        return {}
+    try:
+        doc = load_yaml(path)
+    except Exception:
+        return {}
+    table = doc.get("datasets", doc) if isinstance(doc, dict) else {}
+    if not isinstance(table, dict):
+        return {}
+
+    out = {}
+    for key, val in table.items():
+        if not isinstance(val, dict):
+            continue
+        keys = [str(key)]
+        aliases = val.get("aliases", [])
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if isinstance(aliases, (list, tuple)):
+            keys.extend(str(x) for x in aliases if str(x).strip())
+        entry_path = str(val.get("path", "")).strip()
+        if entry_path:
+            keys.append(entry_path)
+        for k in keys:
+            nk = normalize_ds_key(k)
+            if nk:
+                out[nk] = val
+    return out
 
 
 def pick_existing(root: Path, candidates: List[str]) -> str:
@@ -598,6 +686,7 @@ run_tag = os.environ["_M_RUN_TAG"].strip()
 batch_override = os.environ["_M_BATCH_OVERRIDE"].strip()
 epochs_override = os.environ["_M_EPOCHS_OVERRIDE"].strip()
 train_mode_override = os.environ["_M_TRAIN_MODE_OVERRIDE"].strip()
+dataset_registry_path_s = os.environ.get("_M_DATASET_REGISTRY", "").strip()
 
 if not dataset_root.is_dir():
     raise SystemExit(f"Dataset root not found: {dataset_root}")
@@ -620,11 +709,34 @@ for _cand in ("data.yaml", "data.yml", "dataset.yaml", "dataset.yml"):
         except Exception:
             pass
 
+dataset_registry_info = {}
+if dataset_registry_path_s:
+    dataset_registry_path = Path(dataset_registry_path_s).resolve()
+    dataset_registry_map = load_registry_map(dataset_registry_path)
+    for _candidate in (str(dataset_root), dataset_root.name, dataset_tag):
+        _key = normalize_ds_key(_candidate)
+        if _key and _key in dataset_registry_map:
+            dataset_registry_info = dict(dataset_registry_map[_key])
+            break
+
 default_nc = 1
 default_names: List[str] = ["defect"]
+default_source = "fallback"
+if data_path.exists():
+    data_info = load_yaml(data_path)
+    parsed_names = parse_names_obj(data_info.get("names", []))
+    if parsed_names:
+        default_names = parsed_names
+    if default_names:
+        default_nc = len(default_names)
+    try:
+        default_nc = int(data_info.get("nc", default_nc))
+    except Exception:
+        pass
+    default_source = "base_data_yaml"
+
 if dataset_meta_info:
-    names_obj = dataset_meta_info.get("names", [])
-    parsed_names = parse_names_obj(names_obj)
+    parsed_names = parse_names_obj(dataset_meta_info.get("names", []))
     if parsed_names:
         default_names = parsed_names
     if default_names:
@@ -633,31 +745,34 @@ if dataset_meta_info:
         default_nc = int(dataset_meta_info.get("nc", default_nc))
     except Exception:
         pass
-elif data_path.exists():
-    data_info = load_yaml(data_path)
-    names_obj = data_info.get("names", [])
-    if isinstance(names_obj, (list, tuple)):
-        default_names = [str(x) for x in names_obj if str(x).strip()]
+    default_source = "dataset_data_yaml"
+
+if dataset_registry_info:
+    parsed_names = parse_names_obj(dataset_registry_info.get("names", []))
+    if parsed_names:
+        default_names = parsed_names
     if default_names:
         default_nc = len(default_names)
     try:
-        default_nc = int(data_info.get("nc", default_nc))
+        default_nc = int(dataset_registry_info.get("nc", default_nc))
     except Exception:
         pass
+    default_source = "dataset_registry"
 
 train_entry, val_entry, test_entry = detect_splits(dataset_root)
+
+def _entry_exists(entry: str) -> bool:
+    if not entry:
+        return False
+    p = Path(entry)
+    if p.is_absolute():
+        return p.exists()
+    return (dataset_root / p).exists()
+
 if dataset_meta_info:
     meta_train = str(dataset_meta_info.get("train", "")).strip()
     meta_val = str(dataset_meta_info.get("val", dataset_meta_info.get("valid", ""))).strip()
     meta_test = str(dataset_meta_info.get("test", "")).strip()
-
-    def _entry_exists(entry: str) -> bool:
-        if not entry:
-            return False
-        p = Path(entry)
-        if p.is_absolute():
-            return p.exists()
-        return (dataset_root / p).exists()
 
     if _entry_exists(meta_train):
         train_entry = meta_train
@@ -665,6 +780,17 @@ if dataset_meta_info:
         val_entry = meta_val
     if _entry_exists(meta_test):
         test_entry = meta_test
+
+if dataset_registry_info:
+    reg_train = str(dataset_registry_info.get("train", "")).strip()
+    reg_val = str(dataset_registry_info.get("val", dataset_registry_info.get("valid", ""))).strip()
+    reg_test = str(dataset_registry_info.get("test", "")).strip()
+    if _entry_exists(reg_train):
+        train_entry = reg_train
+    if _entry_exists(reg_val):
+        val_entry = reg_val
+    if _entry_exists(reg_test):
+        test_entry = reg_test
 
 inferred_nc = infer_nc_from_labels(dataset_root, train_entry, val_entry, test_entry)
 
@@ -692,12 +818,15 @@ if not names:
     else:
         names = list(default_names) if default_names else [f"class_{i}" for i in range(default_nc)]
 
-if names_from_file:
-    nc = max(int(default_nc), len(names))
-elif inferred_nc and inferred_nc > 0:
-    nc = max(int(default_nc), len(names), int(inferred_nc))
-else:
-    nc = max(int(default_nc), len(names))
+nc_candidates = [int(default_nc), len(names)]
+explicit_nc = False
+if dataset_registry_info and "nc" in dataset_registry_info:
+    explicit_nc = True
+elif dataset_meta_info and "nc" in dataset_meta_info:
+    explicit_nc = True
+if (not explicit_nc) and inferred_nc and inferred_nc > 0:
+    nc_candidates.append(int(inferred_nc))
+nc = max(nc_candidates) if nc_candidates else 1
 if len(names) < nc:
     names = names + [f"class_{i}" for i in range(len(names), nc)]
 
@@ -734,7 +863,7 @@ out_cfg.parent.mkdir(parents=True, exist_ok=True)
 with out_cfg.open("w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
 
-print(f"{train_entry}\t{val_entry}\t{test_entry}\t{nc}\t{cfg['exp_name']}")
+print(f"{train_entry}\t{val_entry}\t{test_entry}\t{nc}\t{len(names)}\t{default_source}\t{cfg['exp_name']}")
 PY
 }
 
@@ -779,6 +908,8 @@ TRAIN_ENTRIES=()
 VAL_ENTRIES=()
 TEST_ENTRIES=()
 CLASS_COUNTS=()
+NAME_COUNTS=()
+NC_SOURCES=()
 
 declare -A TAG_SEEN=()
 
@@ -808,6 +939,8 @@ for ds in "${DATASET_PATHS[@]}"; do
   val_entry="$(echo "${meta}" | awk -F $'\t' '{print $2}')"
   test_entry="$(echo "${meta}" | awk -F $'\t' '{print $3}')"
   class_count="$(echo "${meta}" | awk -F $'\t' '{print $4}')"
+  names_count="$(echo "${meta}" | awk -F $'\t' '{print $5}')"
+  nc_source="$(echo "${meta}" | awk -F $'\t' '{print $6}')"
 
   DATASET_ROOTS+=("${abs_ds}")
   DATASET_TAGS+=("${ds_tag}")
@@ -817,11 +950,13 @@ for ds in "${DATASET_PATHS[@]}"; do
   VAL_ENTRIES+=("${val_entry}")
   TEST_ENTRIES+=("${test_entry}")
   CLASS_COUNTS+=("${class_count}")
+  NAME_COUNTS+=("${names_count}")
+  NC_SOURCES+=("${nc_source}")
 done
 
 SUMMARY_TSV="${LOG_ROOT}/summary.tsv"
 {
-  echo -e "dataset_tag\tdataset_root\trunner\tstatus\ttrain\tval\ttest\tnc\tconfig\tdata_yaml\tlog"
+  echo -e "dataset_tag\tdataset_root\trunner\tstatus\ttrain\tval\ttest\tnc\tnames_count\tnc_source\tconfig\tdata_yaml\tlog"
 } > "${SUMMARY_TSV}"
 
 echo "[multi-dataset] base_config=${BASE_CONFIG}"
@@ -831,6 +966,7 @@ echo "[multi-dataset] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OV
 echo "[multi-dataset] run_tag=${RUN_TAG_SAFE}"
 echo "[multi-dataset] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[multi-dataset] log_root=${LOG_ROOT}"
+echo "[multi-dataset] dataset_registry=${DATASET_REGISTRY:-<none>}"
 echo "[multi-dataset] datasets=${#DATASET_ROOTS[@]}"
 
 fail_count=0
@@ -848,9 +984,9 @@ if [[ "${DRY_RUN}" == "true" ]]; then
       printf "\n"
     } > "${log_path}"
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "${DATASET_TAGS[$i]}" "${DATASET_ROOTS[$i]}" "${RUNNER_MODE}" "dry_run" \
-      "${TRAIN_ENTRIES[$i]}" "${VAL_ENTRIES[$i]}" "${TEST_ENTRIES[$i]}" "${CLASS_COUNTS[$i]}" \
+      "${TRAIN_ENTRIES[$i]}" "${VAL_ENTRIES[$i]}" "${TEST_ENTRIES[$i]}" "${CLASS_COUNTS[$i]}" "${NAME_COUNTS[$i]}" "${NC_SOURCES[$i]}" \
       "${CFG_PATHS[$i]}" "${DATA_YAMLS[$i]}" "${log_path}" \
       >> "${SUMMARY_TSV}"
   done
@@ -871,7 +1007,7 @@ else
 
       echo "[multi-dataset:${DATASET_TAGS[$j]}] dataset=${DATASET_ROOTS[$j]}"
       echo "[multi-dataset:${DATASET_TAGS[$j]}] cmd=${CMD[*]}"
-      echo "[multi-dataset:${DATASET_TAGS[$j]}] data_yaml=${DATA_YAMLS[$j]} nc=${CLASS_COUNTS[$j]}"
+      echo "[multi-dataset:${DATASET_TAGS[$j]}] data_yaml=${DATA_YAMLS[$j]} nc=${CLASS_COUNTS[$j]} names=${NAME_COUNTS[$j]} source=${NC_SOURCES[$j]}"
 
       if [[ "${RUNNER_MODE}" == "module_combo" ]]; then
         FORCE_MODE="${RUN_TRAIN_MODE}" "${CMD[@]}" > "${log_path}" 2>&1 &
@@ -900,9 +1036,9 @@ else
         echo "[multi-dataset:${DATASET_TAGS[$j]}] success log=${log_path}"
       fi
 
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "${DATASET_TAGS[$j]}" "${DATASET_ROOTS[$j]}" "${RUNNER_MODE}" "${status}" \
-        "${TRAIN_ENTRIES[$j]}" "${VAL_ENTRIES[$j]}" "${TEST_ENTRIES[$j]}" "${CLASS_COUNTS[$j]}" \
+        "${TRAIN_ENTRIES[$j]}" "${VAL_ENTRIES[$j]}" "${TEST_ENTRIES[$j]}" "${CLASS_COUNTS[$j]}" "${NAME_COUNTS[$j]}" "${NC_SOURCES[$j]}" \
         "${CFG_PATHS[$j]}" "${DATA_YAMLS[$j]}" "${log_path}" \
         >> "${SUMMARY_TSV}"
     done

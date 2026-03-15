@@ -7,6 +7,8 @@ export LC_ALL=C.UTF-8
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${1:-${ROOT_DIR}/configs/yolo11/defect.yaml}"
 ACTIVE_CHILD_PID=""
+INTERRUPT_IN_PROGRESS=0
+INTERRUPT_COUNT=0
 
 print_pid_snapshot() {
   local stage="${1:-snapshot}"
@@ -32,27 +34,51 @@ collect_descendant_pids() {
   done < <(pgrep -P "${parent_pid}" 2>/dev/null || true)
 }
 
+kill_pid_group() {
+  local root_pid="$1"
+  local sig="${2:-TERM}"
+  local pgid
+  pgid="$(ps -o pgid= -p "${root_pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ -n "${pgid}" ]] || return 0
+  kill -s "${sig}" -- "-${pgid}" 2>/dev/null || true
+}
+
 kill_pid_tree() {
   local root_pid="$1"
+  local sig="${2:-TERM}"
   local descendants
   local p
   descendants="$(collect_descendant_pids "${root_pid}" || true)"
   for p in ${descendants}; do
-    kill -TERM "${p}" 2>/dev/null || true
+    kill -s "${sig}" "${p}" 2>/dev/null || true
   done
-  kill -TERM "${root_pid}" 2>/dev/null || true
+  kill -s "${sig}" "${root_pid}" 2>/dev/null || true
+}
+
+terminate_active_child() {
+  local sig="${1:-TERM}"
+  [[ -n "${ACTIVE_CHILD_PID:-}" ]] || return 0
+  kill_pid_group "${ACTIVE_CHILD_PID}" "${sig}"
+  kill_pid_tree "${ACTIVE_CHILD_PID}" "${sig}"
 }
 
 on_interrupt() {
   local sig="${1:-INT}"
+  INTERRUPT_COUNT=$((INTERRUPT_COUNT + 1))
+  if [[ "${INTERRUPT_IN_PROGRESS}" == "1" ]]; then
+    echo
+    echo "[run-yolov11] interrupt already in progress (count=${INTERRUPT_COUNT}); force-killing now..."
+    terminate_active_child "KILL"
+    exit 130
+  fi
+  INTERRUPT_IN_PROGRESS=1
+  trap '' INT TERM
   echo
   echo "[run-yolov11] received ${sig}, terminating current child..."
   print_pid_snapshot "before_interrupt_cleanup"
-  if [[ -n "${ACTIVE_CHILD_PID:-}" ]]; then
-    kill_pid_tree "${ACTIVE_CHILD_PID}"
-    sleep 1
-    kill -KILL "${ACTIVE_CHILD_PID}" 2>/dev/null || true
-  fi
+  terminate_active_child "TERM"
+  sleep 1
+  terminate_active_child "KILL"
   exit 130
 }
 

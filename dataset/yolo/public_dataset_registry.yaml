@@ -1,0 +1,120 @@
+version: 1
+description: "Public dataset metadata used by tools/run_yolov11_241_multi_dataset.sh"
+
+datasets:
+  datasetm6c:
+    aliases:
+    - datasetm6c
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
+    train: images/train
+    val: images/val
+    test: images/test
+    nc: 1
+    names:
+    - defect
+
+  datasetm6c_small:
+    aliases:
+    - datasetm6c_small
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c_small
+    train: images/train
+    val: images/val
+    test: images/test
+    nc: 1
+    names:
+    - defect
+
+  deeppcb:
+    aliases:
+    - DeepPCB
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/DeepPCB
+    train: train/images
+    val: valid/images
+    test: test/images
+    nc: 6
+    names:
+    - open
+    - short
+    - mousebite
+    - spur
+    - copper
+    - pin-hole
+
+  deeppcb_standard:
+    aliases:
+    - DeepPCB_standard
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/DeepPCB_standard
+    train: images/train
+    val: images/val
+    test: images/test
+    nc: 6
+    names:
+    - open
+    - short
+    - mousebite
+    - spur
+    - copper
+    - pin-hole
+
+  gc10det_622_halves:
+    aliases:
+    - gc10det_622_halves
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/gc10det_622_halves
+    train: images/train
+    val: images/val
+    test: images/test
+    nc: 10
+    names:
+    - 1_chongkong
+    - 2_hanfeng
+    - 3_yueyawan
+    - 4_shuiban
+    - 5_youban
+    - 6_siban
+    - 7_yiwu
+    - 8_yahen
+    - 9_zhehen
+    - 10_yaozhed
+
+  kolektorsdd_622_halves:
+    aliases:
+    - kolektorsdd_622_halves
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/kolektorsdd_622_halves
+    train: images/train
+    val: images/val
+    test: images/test
+    nc: 1
+    names:
+    - defect
+
+  neudet_622:
+    aliases:
+    - neudet_622
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/neudet_622
+    train: images/train
+    val: images/val
+    test: images/test
+    nc: 6
+    names:
+    - crazing
+    - inclusion
+    - patches
+    - pitted_surface
+    - rolled-in_scale
+    - scratches
+
+  pku_market_pcb_data_enhanced_version:
+    aliases:
+    - PKU-Market-PCB(Data enhanced version)
+    - /home/ubuntu/hpproject/yolo/dataset/yolo/PKU-Market-PCB(Data enhanced version)
+    train: train/images
+    val: valid/images
+    test: test/images
+    nc: 6
+    names:
+    - Missing_hole
+    - Mouse_bite
+    - Open_circuit
+    - Short
+    - Spur
+    - Spurious_copper
