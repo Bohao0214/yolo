@@ -13,6 +13,7 @@ E241_SAFE_BATCH="${E241_SAFE_BATCH:-6}"
 E241_SAFE_WORKERS="${E241_SAFE_WORKERS:-4}"
 E241_VRAM_GUARD="${E241_VRAM_GUARD:-auto}"   # auto|on|off
 E241_GUARD_MAX_GB="${E241_GUARD_MAX_GB:-10}" # apply guard when total VRAM <= this value in auto mode
+E241_RESUME_POLICY="${E241_RESUME_POLICY:-auto}" # auto|off
 CLEANUP_FILES=()
 ACTIVE_CHILD_PID=""
 INTERRUPT_IN_PROGRESS=0
@@ -104,7 +105,7 @@ trap 'on_interrupt TERM' TERM
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241.sh [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [base_config.yaml] [switches...]
+  bash tools/run_yolov11_241.sh [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [--resume-policy auto|off] [base_config.yaml] [switches...]
 
 Switches (implemented):
   hmc7  Alias of: a7 b7 c7 d7 (YOLO-HMC group)
@@ -200,6 +201,7 @@ Env:
   E241_VRAM_GUARD=auto|on|off
   E241_GUARD_MAX_GB=10
   E241_SAFE_BATCH=6
+  E241_RESUME_POLICY=auto|off  # auto: read latest results.csv and choose fresh/resume/validate-only
   E241_SAFE_WORKERS=4  # worker cap for non-low-VRAM path (avoid CPU/IO bottleneck on strong GPU machines)
 USAGE
 }
@@ -231,6 +233,11 @@ while [[ $# -gt 0 ]]; do
       E241_SAFE_WORKERS="$2"
       shift 2
       ;;
+    --resume-policy)
+      [[ $# -ge 2 ]] || { echo "[error] --resume-policy requires a value (auto|off)" >&2; exit 2; }
+      E241_RESUME_POLICY="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
     *)
       POSITIONAL_ARGS+=("$1")
       shift
@@ -242,6 +249,11 @@ set -- "${POSITIONAL_ARGS[@]}"
 
 if [[ "${E241_VRAM_GUARD}" != "auto" && "${E241_VRAM_GUARD}" != "on" && "${E241_VRAM_GUARD}" != "off" ]]; then
   echo "[error] invalid --vram-guard='${E241_VRAM_GUARD}', expected auto|on|off" >&2
+  exit 2
+fi
+
+if [[ "${E241_RESUME_POLICY}" != "auto" && "${E241_RESUME_POLICY}" != "off" ]]; then
+  echo "[error] invalid --resume-policy='${E241_RESUME_POLICY}', expected auto|off" >&2
   exit 2
 fi
 
@@ -784,11 +796,44 @@ print(
 )
 PY
 
-echo "[run] config=${CONFIG_TO_RUN} runtime_config=${RUNTIME_CONFIG} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN} vram_guard=${E241_VRAM_GUARD}"
+RECOVERY_PRE_ACTION="fresh"
+if [[ "${E241_RESUME_POLICY}" == "auto" ]]; then
+  RECOVERY_INFO="$("${PYTHON_BIN}" "${ROOT_DIR}/tools/inspect_exp_progress.py" \
+    --config "${RUNTIME_CONFIG}" \
+    --root-dir "${ROOT_DIR}" \
+    --policy "${E241_RESUME_POLICY}" \
+    --apply 2>/dev/null || true)"
+  if [[ -n "${RECOVERY_INFO}" ]]; then
+    IFS=$'\t' read -r RECOVERY_PRE_ACTION RECOVERY_LATEST RECOVERY_MAX RECOVERY_TARGET RECOVERY_REMAIN RECOVERY_WEIGHT RECOVERY_REASON <<< "${RECOVERY_INFO}"
+    echo "[run-241][recover] pre action=${RECOVERY_PRE_ACTION:-fresh} reason=${RECOVERY_REASON:-unknown} latest=${RECOVERY_LATEST:-<none>} max_epoch=${RECOVERY_MAX:-NA} target_epochs=${RECOVERY_TARGET:-NA} remaining=${RECOVERY_REMAIN:-NA}"
+    if [[ -n "${RECOVERY_WEIGHT:-}" ]]; then
+      echo "[run-241][recover] pre weight=${RECOVERY_WEIGHT}"
+    fi
+  fi
+fi
+
+echo "[run] config=${CONFIG_TO_RUN} runtime_config=${RUNTIME_CONFIG} switches=${SWITCHES[*]:-(none)} python=${PYTHON_BIN} vram_guard=${E241_VRAM_GUARD} resume_policy=${E241_RESUME_POLICY}"
 "${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${RUNTIME_CONFIG}" &
 ACTIVE_CHILD_PID=$!
 echo "[run-241][train-pid] pid=${ACTIVE_CHILD_PID} runtime_config=${RUNTIME_CONFIG}"
 train_status=0
 wait "${ACTIVE_CHILD_PID}" || train_status=$?
 ACTIVE_CHILD_PID=""
+
+if [[ "${train_status}" != "0" && "${E241_RESUME_POLICY}" == "auto" && "${RECOVERY_PRE_ACTION}" != "validate_only" ]]; then
+  RECOVERY_POST="$("${PYTHON_BIN}" "${ROOT_DIR}/tools/inspect_exp_progress.py" \
+    --config "${RUNTIME_CONFIG}" \
+    --root-dir "${ROOT_DIR}" \
+    --policy auto \
+    --ignore-mode 2>/dev/null || true)"
+  if [[ -n "${RECOVERY_POST}" ]]; then
+    IFS=$'\t' read -r POST_ACTION POST_LATEST POST_MAX POST_TARGET POST_REMAIN POST_WEIGHT POST_REASON <<< "${RECOVERY_POST}"
+    if [[ "${POST_ACTION}" == "validate_only" ]]; then
+      echo "[run-241][recover] post action=${POST_ACTION} reason=${POST_REASON} latest=${POST_LATEST:-<none>} max_epoch=${POST_MAX:-NA} target_epochs=${POST_TARGET:-NA}"
+      echo "[run-241][recover] non-zero train status=${train_status} but results indicate training completed, overriding status to 0"
+      train_status=0
+    fi
+  fi
+fi
+
 exit "${train_status}"
