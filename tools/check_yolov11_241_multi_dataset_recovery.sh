@@ -228,11 +228,13 @@ normalize_dataset_tag() {
 
 find_latest_batch_tag() {
   local batch="$1"
+  local prefix
+  prefix="${TAG_PREFIX}_${batch}_"
   if [[ ! -d "${RUN_ROOT}" ]]; then
     return 0
   fi
   find "${RUN_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
-    | rg "^${TAG_PREFIX}_${batch}_" \
+    | awk -v p="${prefix}" 'index($0, p) == 1' \
     | sort \
     | tail -n 1 || true
 }
