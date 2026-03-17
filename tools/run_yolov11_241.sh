@@ -71,6 +71,27 @@ terminate_active_child() {
   kill_pid_tree "${ACTIVE_CHILD_PID}" "${sig}"
 }
 
+write_recovered_error_md() {
+  local exp_dir="${1:-}"
+  local raw_status="${2:-}"
+  local reason="${3:-}"
+  local runtime_cfg="${4:-}"
+  local error_md
+  [[ -n "${exp_dir}" && -d "${exp_dir}" ]] || return 0
+  error_md="${exp_dir}/error.md"
+  {
+    echo "# ERROR"
+    echo
+    echo "- recovered: \`true\`"
+    echo "- status: \`${raw_status}\`"
+    echo "- reason: \`${reason:-post_eval_failed_after_train_complete}\`"
+    echo "- runtime_config: \`${runtime_cfg}\`"
+    echo "- note: \`results.csv indicates training already reached target epochs; exit status was overridden to success\`"
+    echo "- hint: \`set skip_post_eval_metrics=true if post-eval OOM/KILL repeats\`"
+  } > "${error_md}"
+  echo "[run-241][recover] wrote ${error_md}"
+}
+
 cleanup_on_exit() {
   local f
   for f in "${CLEANUP_FILES[@]:-}"; do
@@ -105,7 +126,7 @@ trap 'on_interrupt TERM' TERM
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241.sh [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [--resume-policy auto|off] [base_config.yaml] [switches...]
+  bash tools/run_yolov11_241.sh [--base-config FILE] [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [--resume-policy auto|off] [base_config.yaml] [switches...]
 
 Switches (implemented):
   hmc7  Alias of: a7 b7 c7 d7 (YOLO-HMC group)
@@ -236,6 +257,11 @@ while [[ $# -gt 0 ]]; do
     --resume-policy)
       [[ $# -ge 2 ]] || { echo "[error] --resume-policy requires a value (auto|off)" >&2; exit 2; }
       E241_RESUME_POLICY="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --base-config)
+      [[ $# -ge 2 ]] || { echo "[error] --base-config requires a file path" >&2; exit 2; }
+      BASE_CONFIG="$2"
       shift 2
       ;;
     *)
@@ -830,6 +856,7 @@ if [[ "${train_status}" != "0" && "${E241_RESUME_POLICY}" == "auto" && "${RECOVE
     IFS=$'\t' read -r POST_ACTION POST_LATEST POST_MAX POST_TARGET POST_REMAIN POST_WEIGHT POST_REASON <<< "${RECOVERY_POST}"
     if [[ "${POST_ACTION}" == "validate_only" ]]; then
       echo "[run-241][recover] post action=${POST_ACTION} reason=${POST_REASON} latest=${POST_LATEST:-<none>} max_epoch=${POST_MAX:-NA} target_epochs=${POST_TARGET:-NA}"
+      write_recovered_error_md "${POST_LATEST}" "${train_status}" "${POST_REASON}" "${RUNTIME_CONFIG}"
       echo "[run-241][recover] non-zero train status=${train_status} but results indicate training completed, overriding status to 0"
       train_status=0
     fi

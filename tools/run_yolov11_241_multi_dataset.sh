@@ -119,6 +119,34 @@ write_experiment_metrics_for_exp() {
   fi
 }
 
+write_error_md_for_exp() {
+  local exp_dir="$1"
+  local status="$2"
+  local dataset_tag="$3"
+  local cfg_path="$4"
+  local data_yaml="$5"
+  local log_path="$6"
+  local error_md
+  [[ -n "${exp_dir}" ]] || return 0
+  mkdir -p "${exp_dir}"
+  error_md="${exp_dir}/error.md"
+  {
+    echo "# ERROR"
+    echo
+    echo "- dataset_tag: \`${dataset_tag}\`"
+    echo "- status: \`${status}\`"
+    echo "- config: \`${cfg_path}\`"
+    echo "- data_yaml: \`${data_yaml}\`"
+    echo "- log: \`${log_path}\`"
+    echo
+    echo "## Log Tail"
+    echo '```text'
+    tail -n 200 "${log_path}" || true
+    echo '```'
+  } > "${error_md}"
+  echo "[multi-dataset:${dataset_tag}] failed -> ${error_md}"
+}
+
 prune_running_pid() {
   local target="$1"
   local p
@@ -168,7 +196,7 @@ trap 'on_interrupt TERM' TERM
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241_multi_dataset.sh [base_config.yaml] [dataset_dir ...] [options]
+  bash tools/run_yolov11_241_multi_dataset.sh [--base-config FILE] [base_config.yaml] [dataset_dir ...] [options]
 
 Purpose:
   Run one or more datasets in parallel using:
@@ -183,6 +211,8 @@ Dataset inputs:
   Positional dirs are also accepted.
 
 Main options:
+  --base-config FILE
+                    Base yaml config path (same meaning as positional *.yaml)
   --runner MODE      baseline | module_combo (default baseline)
   --batch N          Override batch size for all datasets
   --epochs N         Override epochs for all datasets
@@ -263,6 +293,11 @@ while [[ $# -gt 0 ]]; do
     --runner)
       [[ $# -ge 2 ]] || { echo "[error] --runner requires a value (baseline|module_combo)" >&2; exit 2; }
       RUNNER_MODE="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --base-config)
+      [[ $# -ge 2 ]] || { echo "[error] --base-config requires a file path" >&2; exit 2; }
+      BASE_CONFIG="$2"
       shift 2
       ;;
     --batch|--batch-size)
@@ -1100,6 +1135,13 @@ else
       if [[ "${status}" != "0" ]]; then
         fail_count=$((fail_count + 1))
         echo "[multi-dataset:${DATASET_TAGS[$j]}] failed status=${status} log=${log_path}"
+        if [[ "${RUNNER_MODE}" == "baseline" ]]; then
+          exp_dir_from_log="$(extract_exp_dir_from_log "${log_path}")"
+          if [[ -z "${exp_dir_from_log}" ]]; then
+            exp_dir_from_log="${ROOT_DIR}/experiments/yolo11/batch_runs/${RUN_TAG_SAFE}/${DATASET_TAGS[$j]}/exp_error_${RUN_TAG_SAFE}"
+          fi
+          write_error_md_for_exp "${exp_dir_from_log}" "${status}" "${DATASET_TAGS[$j]}" "${CFG_PATHS[$j]}" "${DATA_YAMLS[$j]}" "${log_path}"
+        fi
       else
         echo "[multi-dataset:${DATASET_TAGS[$j]}] success log=${log_path}"
         if [[ "${RUNNER_MODE}" == "baseline" ]]; then

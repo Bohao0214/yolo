@@ -6,10 +6,10 @@ BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/yolo11/enhance241/defect241.yaml"
 
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 MATRIX_TAG="${MATRIX_TAG:-module_combo_$(date +%y%m%d%H%M%S)}"
-EPOCHS_OVERRIDE="${EPOCHS_OVERRIDE:-10}"
-FORCE_MODE="${FORCE_MODE:-train_test}"
+EPOCHS_OVERRIDE="${EPOCHS_OVERRIDE:-}"
+FORCE_MODE="${FORCE_MODE:-}"
 SEED_OVERRIDE="${SEED_OVERRIDE:-}"
-BATCH_OVERRIDE="${BATCH_OVERRIDE:-6}"
+BATCH_OVERRIDE="${BATCH_OVERRIDE:-}"
 D1_WORKERS_OVERRIDE="${D1_WORKERS_OVERRIDE:-4}"
 VRAM_GUARD_OVERRIDE="${VRAM_GUARD_OVERRIDE:-auto}" # auto|on|off
 GUARD_MAX_GB_OVERRIDE="${GUARD_MAX_GB_OVERRIDE:-10}"
@@ -118,7 +118,7 @@ write_experiment_metrics_for_exp() {
 usage() {
   cat <<'USAGE'
 Usage:
-  bash tools/run_yolov11_241_module_combo.sh [base_config.yaml] [--epochs N] [--batch N] [--combos LIST] [--tag NAME] [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [--dry-run]
+  bash tools/run_yolov11_241_module_combo.sh [--base-config FILE] [base_config.yaml] [--epochs N] [--batch N] [--combos LIST] [--tag NAME] [--vram-guard auto|on|off] [--guard-max-gb N] [--safe-batch N] [--safe-workers N] [--dry-run]
 
 Runs S2 quick A/B matrix with identical seed/data/epochs:
   baseline, a3, b3, d3, a3+b3, a3+d3, b3+d3, a3+b3+d3
@@ -133,8 +133,10 @@ Behavior:
 
 Options:
   --epoch N    Override epochs for all cases (same as --epochs)
-  --epochs N   Override epochs for all cases (default from EPOCHS_OVERRIDE, default 10)
-  --batch N    Override batch size for all cases (same as --batch-size; default from BATCH_OVERRIDE, default 6)
+  --base-config FILE
+               Base yaml config path (same meaning as positional *.yaml)
+  --epochs N   Override epochs for all cases (default: keep base yaml)
+  --batch N    Override batch size for all cases (same as --batch-size; default: keep base yaml)
   --batch-size N
                Override batch size for all cases
   --combos L   Comma-separated cases, e.g.:
@@ -161,7 +163,7 @@ Options:
   -h, --help   Show help
 
 Env overrides:
-  BASE_CONFIG, EPOCHS_OVERRIDE, COMBOS_RAW, FORCE_MODE, SEED_OVERRIDE, BATCH_OVERRIDE(default 6)
+  BASE_CONFIG, EPOCHS_OVERRIDE, COMBOS_RAW, FORCE_MODE, SEED_OVERRIDE, BATCH_OVERRIDE
   D1_WORKERS_OVERRIDE(default 4), VRAM_GUARD_OVERRIDE(auto|on|off), GUARD_MAX_GB_OVERRIDE(default 10)
   SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4), RESULT_GROUP_ROOT(default batch_runs/<tag>)
   TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN
@@ -204,6 +206,11 @@ while [[ $# -gt 0 ]]; do
     --tag)
       [[ $# -ge 2 ]] || { echo "[error] --tag requires a value" >&2; exit 2; }
       MATRIX_TAG="$2"
+      shift 2
+      ;;
+    --base-config)
+      [[ $# -ge 2 ]] || { echo "[error] --base-config requires a file path" >&2; exit 2; }
+      BASE_CONFIG="$2"
       shift 2
       ;;
     --vram-guard)
@@ -514,7 +521,7 @@ SUMMARY_TSV="${LOG_ROOT}/summary.tsv"
 } > "${SUMMARY_TSV}"
 
 echo "[module-combo] base_config=${BASE_CONFIG}"
-echo "[module-combo] epochs=${EPOCHS_OVERRIDE} mode=${FORCE_MODE} seed=${SEED_OVERRIDE:-<keep>} batch=${BATCH_OVERRIDE:-<keep>}"
+echo "[module-combo] epochs=${EPOCHS_OVERRIDE:-<keep>} mode=${FORCE_MODE:-<keep>} seed=${SEED_OVERRIDE:-<keep>} batch=${BATCH_OVERRIDE:-<keep>}"
 echo "[module-combo] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OVERRIDE} safe_batch=${SAFE_BATCH_OVERRIDE} safe_workers=${SAFE_WORKERS_OVERRIDE}"
 echo "[module-combo] combos_raw=${COMBOS_RAW}"
 echo "[module-combo] combos_resolved=${CASE_TAGS[*]}"
