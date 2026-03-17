@@ -11,6 +11,7 @@ EVAL_WORKERS="2"
 TRAIN_BATCH_OVERRIDE=""
 MAX_PARALLEL="1"
 EXECUTE="false"
+INCLUDE_FROM_SCRATCH="false"
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +23,7 @@ Usage:
     --parallel 1 \
     [--train-batch N] \
     [--eval-workers 2] \
+    [--include-from-scratch] \
     [--execute]
 
 Purpose:
@@ -51,6 +53,13 @@ With --execute:
       eval_batch=<eval-batch>
       workers=<eval-workers>
       skip_post_eval_metrics=false
+
+Action selection:
+  default actionable actions:
+    - resume_finetune
+    - validate_only_low_batch
+  add --include-from-scratch to also run:
+    - from_scratch
 USAGE
 }
 
@@ -107,6 +116,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --execute)
       EXECUTE="true"
+      shift
+      ;;
+    --include-from-scratch)
+      INCLUDE_FROM_SCRATCH="true"
       shift
       ;;
     *)
@@ -280,11 +293,17 @@ for rr in run_roots:
         metrics_complete = int(eval_summary.exists() and eval_summary.stat().st_size > 0 and eval_img.exists() and eval_img.stat().st_size > 0)
         has_error = int((latest / "error.md").exists())
 
-        weight = ""
+        resume_weight = ""
+        eval_weight = ""
+        if has_last:
+            resume_weight = str(last_pt)
+        elif has_best:
+            resume_weight = str(best_pt)
         if has_best:
-            weight = str(best_pt)
+            eval_weight = str(best_pt)
         elif has_last:
-            weight = str(last_pt)
+            eval_weight = str(last_pt)
+        weight = ""
 
         action = "skip_done"
         status = "done"
@@ -296,6 +315,7 @@ for rr in run_roots:
             status = "blocked"
             note = "missing_train_config_yaml"
         elif has_ckpt and max_epoch is not None and max_epoch >= (target_epochs - 1):
+            weight = eval_weight
             if metrics_complete and not has_error:
                 action = "skip_done"
                 status = "done"
@@ -305,6 +325,7 @@ for rr in run_roots:
                 status = "repair_validate"
                 note = "complete_but_metrics_missing_or_error_md"
         elif has_ckpt:
+            weight = resume_weight
             seen = (max_epoch + 1) if max_epoch is not None else 0
             remain = target_epochs - seen
             if remain < 1:
@@ -312,6 +333,11 @@ for rr in run_roots:
             action = "resume_finetune"
             status = "resume"
             note = "partial_training_found"
+        elif metrics_complete and not has_error:
+            action = "skip_done_metric_only"
+            status = "done"
+            remain = 0
+            note = "metrics_complete_but_no_checkpoint"
         else:
             action = "from_scratch"
             status = "fresh"
@@ -347,15 +373,23 @@ else
 fi
 
 ACTIONABLE_TSV="${TMP_ROOT}/actionable.tsv"
-awk -F $'\t' 'NR==1 || $5=="resume_finetune" || $5=="validate_only_low_batch" || $5=="from_scratch" {print}' "${SUMMARY_TSV}" > "${ACTIONABLE_TSV}"
+if [[ "${INCLUDE_FROM_SCRATCH}" == "true" ]]; then
+  awk -F $'\t' 'NR==1 || $5=="resume_finetune" || $5=="validate_only_low_batch" || $5=="from_scratch" {print}' "${SUMMARY_TSV}" > "${ACTIONABLE_TSV}"
+else
+  awk -F $'\t' 'NR==1 || $5=="resume_finetune" || $5=="validate_only_low_batch" {print}' "${SUMMARY_TSV}" > "${ACTIONABLE_TSV}"
+fi
 
 action_count="$(awk -F $'\t' 'NR>1 {c++} END{print c+0}' "${ACTIONABLE_TSV}")"
 echo "[repair] actionable=${action_count}"
+include_flag=""
+if [[ "${INCLUDE_FROM_SCRATCH}" == "true" ]]; then
+  include_flag=" --include-from-scratch"
+fi
 
 if [[ "${EXECUTE}" != "true" ]]; then
   echo
   echo "[repair] preview only. To execute:"
-  echo "bash ${ROOT_DIR}/tools/repair_yolov11_241_batch_runs.sh --run-roots \"${RUN_ROOTS_RAW}\" --epochs ${EPOCHS_TARGET} --eval-batch ${EVAL_BATCH} --eval-workers ${EVAL_WORKERS} --parallel ${MAX_PARALLEL}${TRAIN_BATCH_OVERRIDE:+ --train-batch ${TRAIN_BATCH_OVERRIDE}} --execute"
+  echo "bash ${ROOT_DIR}/tools/repair_yolov11_241_batch_runs.sh --run-roots \"${RUN_ROOTS_RAW}\" --epochs ${EPOCHS_TARGET} --eval-batch ${EVAL_BATCH} --eval-workers ${EVAL_WORKERS} --parallel ${MAX_PARALLEL}${TRAIN_BATCH_OVERRIDE:+ --train-batch ${TRAIN_BATCH_OVERRIDE}}${include_flag} --execute"
   exit 0
 fi
 
@@ -498,4 +532,3 @@ if [[ "${fail_count}" -gt 0 ]]; then
   exit 1
 fi
 exit 0
-
