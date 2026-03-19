@@ -2,7 +2,7 @@
 set -u -o pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/yolo11/enhance241/defect241.yaml"
+BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 SWEEP_TAG="${SWEEP_TAG:-hparam_combo_$(date +%y%m%d%H%M%S)}"
@@ -170,7 +170,7 @@ Options:
 Notes:
   - grad_accum is recorded in generated config and summary for traceability.
   - current src/train.py may not consume grad_accum directly.
-  - output layout: experiments/<yolo_version>/<exp_group_hp>/<exp_group_hp__case_tag>/exp_*
+  - output layout: experiments/<network>/<dataset>/exp_*
 
 Env overrides:
   BASE_CONFIG, SWEEP_TAG, MODULES_RAW, HPARAMS_RAW, GRID_RAW, MAX_CASES_OVERRIDE
@@ -281,7 +281,7 @@ if [[ -z "${TMP_CFG_DIR}" ]]; then
   TMP_CFG_DIR="/tmp/yolo241_hparam_combo/${SWEEP_TAG}"
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
-  LOG_ROOT="${ROOT_DIR}/experiments/yolo11/hparam_combo_logs/${SWEEP_TAG}"
+  LOG_ROOT="${ROOT_DIR}/experiments/_logs/hparam_combo/${SWEEP_TAG}"
 fi
 
 if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
@@ -324,18 +324,35 @@ resolve_modules() {
       return
       ;;
     hmc7|abcd7|a7_b7_c7_d7|a7+b7+c7+d7)
-      MODULE_TAG="a7_b7_c7_d7"
+      MODULE_TAG="a7b7c7d7"
       MODULE_SWITCHES="a7 b7 c7 d7"
       return
       ;;
     pdd9|abcd9|a9_b9_c9_d9|a9+b9+c9+d9)
-      MODULE_TAG="a9_b9_c9_d9"
+      MODULE_TAG="a9b9c9d9"
       MODULE_SWITCHES="a9 b9 c9 d9"
       return
       ;;
   esac
 
   local expr="${token//_/+}"
+  if [[ "${expr}" != *"+"* && "${expr}" =~ ^([abcd][0-9]+)+$ ]]; then
+    local rest="${expr}"
+    local part_concat
+    local -a concat_parts=()
+    while [[ -n "${rest}" ]]; do
+      if [[ "${rest}" =~ ^([abcd][0-9]+)(.*)$ ]]; then
+        part_concat="${BASH_REMATCH[1]}"
+        rest="${BASH_REMATCH[2]}"
+        concat_parts+=("${part_concat}")
+      else
+        break
+      fi
+    done
+    if [[ -z "${rest}" && ${#concat_parts[@]} -gt 0 ]]; then
+      expr="$(IFS='+'; echo "${concat_parts[*]}")"
+    fi
+  fi
   expr="${expr//,/+}"
 
   local part
@@ -349,18 +366,19 @@ resolve_modules() {
       baseline|base|none)
         continue
         ;;
-      a3|a5|a7|a9|b1|b2|b3|b5|b7|b9|c5|c7|c9|d1|d3|d5|d7|d9)
+      a3|a4|a5|a6|a7|a9|a11|a21|b1|b2|b3|b5|b6|b7|b9|b11|b21|c4|c5|c6|c7|c9|c11|c21|d1|d3|d5|d6|d7|d9|d11|d21)
         ;;
       *)
         echo "[error] Unsupported module token '${part}' in '${raw}'" >&2
-        echo "        allowed: baseline,hmc7/pdd9,a3,a5,a7,a9,b1,b2,b3,b5,b7,b9,c5,c7,c9,d1,d3,d5,d7,d9" >&2
+        echo "        allowed: baseline,hmc7/pdd9,a3,a4,a5,a6,a7,a9,a11,a21,b1,b2,b3,b5,b6,b7,b9,b11,b21,c4,c5,c6,c7,c9,c11,c21,d1,d3,d5,d6,d7,d9,d11,d21" >&2
         exit 2
         ;;
     esac
-    if [[ -z "${seen[$part]+x}" ]]; then
-      seen["$part"]=1
-      switches+=("${part}")
-    fi
+    [[ -z "${seen[$part]+x}" ]] && seen["$part"]=1
+  done
+
+  for part in a3 a4 a5 a6 a7 a9 a11 a21 b1 b2 b3 b5 b6 b7 b9 b11 b21 c4 c5 c6 c7 c9 c11 c21 d1 d3 d5 d6 d7 d9 d11 d21; do
+    [[ -n "${seen[$part]+x}" ]] && switches+=("${part}")
   done
 
   if [[ ${#switches[@]} -eq 0 ]]; then
@@ -369,7 +387,7 @@ resolve_modules() {
     return
   fi
 
-  MODULE_TAG="$(IFS=_; echo "${switches[*]}")"
+  MODULE_TAG="$(IFS=; echo "${switches[*]}")"
   MODULE_SWITCHES="$(IFS=' '; echo "${switches[*]}")"
 }
 
@@ -595,6 +613,7 @@ generate_case_cfg() {
   "${PYTHON_CFG_BIN}" - <<'PY'
 import json
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -602,17 +621,16 @@ import yaml
 base_cfg = Path(os.environ["_M_BASE_CONFIG"]).resolve()
 out_cfg = Path(os.environ["_M_OUT_CFG"]).resolve()
 switches = [s.strip() for s in os.environ["_M_SWITCHES"].split() if s.strip()]
-case_tag = os.environ["_M_CASE_TAG"].strip()
 hparams = json.loads(os.environ["_M_HPARAM_JSON"])
 force_mode = os.environ["_M_FORCE_MODE"].strip()
 seed_override = os.environ["_M_SEED_OVERRIDE"].strip()
 d1_workers_override = os.environ["_M_D1_WORKERS_OVERRIDE"].strip()
 
 allowed_switches = {
-    "a3", "a5", "a7", "a9",
-    "b1", "b2", "b3", "b5", "b7", "b9",
-    "c5", "c7", "c9",
-    "d1", "d3", "d5", "d7", "d9",
+    "a3", "a4", "a5", "a6", "a7", "a9", "a11", "a21",
+    "b1", "b2", "b3", "b5", "b6", "b7", "b9", "b11", "b21",
+    "c4", "c5", "c6", "c7", "c9", "c11", "c21",
+    "d1", "d3", "d5", "d6", "d7", "d9", "d11", "d21",
 }
 
 with base_cfg.open("r", encoding="utf-8") as f:
@@ -639,19 +657,15 @@ for key in switches:
     else:
         enh[key] = True
 
-exp_name = str(cfg.get("exp_name", "defect241"))
-if switches:
-    module_suffix = "__" + "__".join(switches)
-    if not exp_name.endswith(module_suffix):
-        exp_name = exp_name + module_suffix
+raw_exp = str(cfg.get("exp_name", "")).strip()
+if "/" in raw_exp:
+    dataset_tag_raw = raw_exp.split("/")[-1]
+else:
+    dataset_tag_raw = Path(str(cfg.get("data_root", "dataset"))).name
+dataset_tag = re.sub(r"[^a-z0-9]+", "_", dataset_tag_raw.lower()).strip("_") or "dataset"
 
-# New layout:
-#   experiments/<yolo_version>/<group_hp>/<group_hp__case_tag>/exp_*
-# Example:
-#   experiments/yolo11/defect241__a3__c5__hp/defect241__a3__c5__hp__c001_xxx/exp_*
-exp_group_hp = exp_name if exp_name.endswith("__hp") else f"{exp_name}__hp"
-case_exp_name = f"{exp_group_hp}__{case_tag}"
-cfg["exp_name"] = f"{exp_group_hp}/{case_exp_name}"
+network_tag = "".join(switches).lower() if switches else "baseline"
+cfg["exp_name"] = f"{network_tag}/{dataset_tag}"
 
 cfg["epochs"] = int(hparams["epochs"])
 cfg["patience"] = int(hparams["patience"])
@@ -672,8 +686,6 @@ if seed_override:
 if any(k in {"d1", "d3", "d5", "d7", "d9"} for k in switches) and d1_workers_override:
     cfg["workers"] = int(d1_workers_override)
 
-yolo_version = str(cfg.get("yolo_version", "yolo11"))
-
 out_cfg.parent.mkdir(parents=True, exist_ok=True)
 with out_cfg.open("w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
@@ -689,7 +701,7 @@ hparam_text = (
     f"best_select_metric={cfg['best_select_metric']}"
 )
 
-print(f"{cfg['exp_name']}\t{yolo_version}\t{hparam_text}")
+print(f"{cfg['exp_name']}\t{hparam_text}")
 PY
 }
 
@@ -734,9 +746,8 @@ for i in "${!CASE_TAGS[@]}"; do
 
   meta="$(generate_case_cfg "${cfg_path}" "${MODULE_SWITCHES}" "${case_tag}" "${case_json}")"
   exp_name="$(echo "${meta}" | awk -F $'\t' '{print $1}')"
-  yolo_version="$(echo "${meta}" | awk -F $'\t' '{print $2}')"
-  hparam_text="$(echo "${meta}" | awk -F $'\t' '{print $3}')"
-  exp_root="${ROOT_DIR}/experiments/${yolo_version}/${exp_name}"
+  hparam_text="$(echo "${meta}" | awk -F $'\t' '{print $2}')"
+  exp_root="${ROOT_DIR}/experiments/${exp_name}"
 
   before_tmp="$(mktemp)"
   after_tmp="$(mktemp)"
@@ -846,7 +857,7 @@ bash tools/run_yolov11_241_hparam_combo.sh \
 
 # 4) baseline module with explicit seed
 bash tools/run_yolov11_241_hparam_combo.sh \
-  configs/yolo11/defect.yaml \
+  configs/baseline/datasetm6c.yaml \
   --modules baseline \
   --seed 42 \
   --hparams "epochs=120,patience=0,batch=8,grad_accum=1,lr0=0.008,lrf=0.12,warmup_epochs=2"

@@ -60,13 +60,20 @@ def _read_latest_epoch(results_csv: Path) -> Optional[int]:
 
 def _resolve_exp_root(cfg: Dict[str, object], root_dir: Path) -> Path:
     project_root = Path(str(cfg.get("project_root", root_dir))).resolve()
-    yolo_version = str(cfg.get("yolo_version", "yolo11")).strip() or "yolo11"
     exp_name = str(cfg.get("exp_name", "defect")).strip() or "defect"
     run_name = str(cfg.get("run_name", "")).strip()
-    exp_root = project_root / "experiments" / yolo_version / exp_name
+    exp_root_new = project_root / "experiments" / exp_name
     if run_name:
-        exp_root = exp_root / run_name
-    return exp_root
+        exp_root_new = exp_root_new / run_name
+    if exp_root_new.exists():
+        return exp_root_new
+
+    # Backward-compatible fallback for old layout: experiments/<yolo_version>/<exp_name>
+    yolo_version = str(cfg.get("yolo_version", "yolo11")).strip() or "yolo11"
+    exp_root_old = project_root / "experiments" / yolo_version / exp_name
+    if run_name:
+        exp_root_old = exp_root_old / run_name
+    return exp_root_old
 
 
 def _latest_exp_dir(exp_root: Path) -> Optional[Path]:

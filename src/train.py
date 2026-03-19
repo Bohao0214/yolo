@@ -62,7 +62,7 @@ from src.eval import (
 )
 
 FIXED_AUDIT_PATH = Path(
-    "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect/exp_base2/train/audit_enhance241.md"
+    "/home/ubuntu/hpproject/yolo/experiments/baseline/datasetm6c/fixed_audit/train/audit_enhance241.md"
 )
 
 
@@ -288,8 +288,10 @@ def _collect_file_hashes(project_root: Path) -> List[Dict[str, str]]:
         project_root / "src" / "train.py",
         project_root / "tools" / "run_yolov11_241.sh",
         project_root / "tools" / "run_yolov11.sh",
-        project_root / "configs" / "yolo11" / "enhance241" / "defect241.yaml",
-        project_root / "configs" / "yolo11" / "enhance241" / "defect241b2.yaml",
+        project_root / "configs" / "enhance" / "datasetm6c" / "defect241.yaml",
+        project_root / "configs" / "enhance" / "datasetmy" / "defect241.yaml",
+        project_root / "configs" / "baseline" / "datasetm6c.yaml",
+        project_root / "configs" / "baseline" / "datasetmy.yaml",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a3.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a4.py",
         project_root / "third_party" / "yolo11" / "enhance241" / "yolo11_241a21.py",
@@ -1651,7 +1653,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=str,
         required=True,
-        help="Path to configs/yolo11/*.yaml",
+        help="Path to configs/**/*.yaml",
     )
     return parser.parse_args()
 
@@ -1661,10 +1663,12 @@ def main() -> None:
     cfg_path = Path(args.config).resolve()
     cfg = load_yaml(cfg_path)
     root = resolve_root()
-    yolo_version = cfg.get("yolo_version", "yolo11")
-    exp_name = cfg.get("exp_name", "defect")
+    exp_name = str(cfg.get("exp_name", "baseline/dataset")).strip() or "baseline/dataset"
     project_root = Path(cfg.get("project_root", root)).resolve()
-    exp_root = project_root / "experiments" / yolo_version / exp_name
+    exp_rel = Path(exp_name)
+    if exp_rel.is_absolute():
+        exp_rel = Path(*exp_rel.parts[1:])
+    exp_root = project_root / "experiments" / exp_rel
     run_name = str(cfg.get("run_name", "")).strip()
     timestamp = dt.datetime.now().strftime("%y%m%d%H%M")
     if run_name:

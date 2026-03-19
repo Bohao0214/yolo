@@ -37,10 +37,10 @@ from src.eval import compute_image_level_results, save_image_level_report
 
 
 DEFAULT_WEIGHTS = (
-    "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__b7__c11__d11/"
+    "/home/ubuntu/hpproject/yolo/experiments/a3b7c11d11/datasetm6c/"
     "exp_2602280003/train/weights/best.pt"
 )
-DEFAULT_CFG = "/home/ubuntu/hpproject/yolo/configs/yolo11/enhance241/defect241.yaml"
+DEFAULT_CFG = "/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml"
 DEFAULT_OUT_ROOT = "/home/ubuntu/hpproject/yolo/analyze/result"
 
 
@@ -519,7 +519,7 @@ def main() -> None:
 if __name__ == "__main__":
     """""
     python3 /home/ubuntu/hpproject/yolo/analyze/code/expfindtrain.py \
-  --weights /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__b7__c11__d11/exp_2602280003/train/weights/best.pt \
+  --weights /home/ubuntu/hpproject/yolo/experiments/a3b7c11d11/datasetm6c/exp_2602280003/train/weights/best.pt \
   --tag a3_b7_d11
     """""
     main()

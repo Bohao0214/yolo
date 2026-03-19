@@ -6,7 +6,7 @@ export LC_ALL=C.UTF-8
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/yolo11/enhance241/defect241.yaml"
+BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 E241_SAFE_BATCH="${E241_SAFE_BATCH:-6}"
@@ -212,9 +212,9 @@ Examples:
   bash tools/run_yolov11_241.sh a9_b9_c9_d9
   bash tools/run_yolov11_241.sh a3 b3 d3
   bash tools/run_yolov11_241.sh a3 b3 d1
-  bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1
-  bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b2
-  bash tools/run_yolov11_241.sh configs/yolo11/enhance241/defect241.yaml b1 b2
+  bash tools/run_yolov11_241.sh configs/enhance/datasetm6c/defect241.yaml b1
+  bash tools/run_yolov11_241.sh configs/enhance/datasetm6c/defect241.yaml b2
+  bash tools/run_yolov11_241.sh configs/enhance/datasetm6c/defect241.yaml b1 b2
 
 Env:
   PYTHON_BIN=/path/to/python
@@ -410,6 +410,9 @@ if [[ ${#UNKNOWN[@]} -gt 0 ]]; then
 fi
 
 CONFIG_TO_RUN="${BASE_CONFIG}"
+BASE_CONFIG_DIR="$(cd "$(dirname "${BASE_CONFIG}")" >/dev/null 2>&1 && pwd)"
+BASE_CONFIG_NAME="$(basename "${BASE_CONFIG}")"
+BASE_CONFIG_PREFIX="${BASE_CONFIG_NAME%.*}"
 
 if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == "true" || "${ENABLE_A6}" == "true" || "${ENABLE_A7}" == "true" || "${ENABLE_A9}" == "true" || "${ENABLE_A11}" == "true" || "${ENABLE_A21}" == "true" || "${ENABLE_B1}" == "true" || "${ENABLE_B2}" == "true" || "${ENABLE_B3}" == "true" || "${ENABLE_B5}" == "true" || "${ENABLE_B6}" == "true" || "${ENABLE_B7}" == "true" || "${ENABLE_B9}" == "true" || "${ENABLE_B11}" == "true" || "${ENABLE_B21}" == "true" || "${ENABLE_C4}" == "true" || "${ENABLE_C5}" == "true" || "${ENABLE_C6}" == "true" || "${ENABLE_C7}" == "true" || "${ENABLE_C9}" == "true" || "${ENABLE_C11}" == "true" || "${ENABLE_C21}" == "true" || "${ENABLE_D5}" == "true" || "${ENABLE_D6}" == "true" || "${ENABLE_D7}" == "true" || "${ENABLE_D9}" == "true" || "${ENABLE_D11}" == "true" || "${ENABLE_D21}" == "true" || "${ENABLE_D3}" == "true" ]]; then
   ENABLED_KEYS=()
@@ -450,139 +453,11 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
   fi
 
   if [[ ${#ENABLED_KEYS[@]} -eq 1 ]]; then
-    case "${ENABLED_KEYS[0]}" in
-      b1 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b1.yaml"
-        DERIVED_SUFFIX="__b1"
-        ;;
-      b2 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b2.yaml"
-        DERIVED_SUFFIX="__b2"
-        ;;
-      a3 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a3.yaml"
-        DERIVED_SUFFIX="__a3"
-        ;;
-      a4 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a4.yaml"
-        DERIVED_SUFFIX="__a4"
-        ;;
-      a5 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a5.yaml"
-        DERIVED_SUFFIX="__a5"
-        ;;
-      a6 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a6.yaml"
-        DERIVED_SUFFIX="__a6"
-        ;;
-      a7 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a7.yaml"
-        DERIVED_SUFFIX="__a7"
-        ;;
-      a9 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a9.yaml"
-        DERIVED_SUFFIX="__a9"
-        ;;
-      a11 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a11.yaml"
-        DERIVED_SUFFIX="__a11"
-        ;;
-      a21 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241a21.yaml"
-        DERIVED_SUFFIX="__a21"
-        ;;
-      b3 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b3.yaml"
-        DERIVED_SUFFIX="__b3"
-        ;;
-      b5 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b5.yaml"
-        DERIVED_SUFFIX="__b5"
-        ;;
-      b6 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b6.yaml"
-        DERIVED_SUFFIX="__b6"
-        ;;
-      b7 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b7.yaml"
-        DERIVED_SUFFIX="__b7"
-        ;;
-      b9 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b9.yaml"
-        DERIVED_SUFFIX="__b9"
-        ;;
-      b11 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b11.yaml"
-        DERIVED_SUFFIX="__b11"
-        ;;
-      b21 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241b21.yaml"
-        DERIVED_SUFFIX="__b21"
-        ;;
-      c4 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c4.yaml"
-        DERIVED_SUFFIX="__c4"
-        ;;
-      c5 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c5.yaml"
-        DERIVED_SUFFIX="__c5"
-        ;;
-      c6 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c6.yaml"
-        DERIVED_SUFFIX="__c6"
-        ;;
-      c7 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c7.yaml"
-        DERIVED_SUFFIX="__c7"
-        ;;
-      c9 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c9.yaml"
-        DERIVED_SUFFIX="__c9"
-        ;;
-      c11 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c11.yaml"
-        DERIVED_SUFFIX="__c11"
-        ;;
-      c21 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241c21.yaml"
-        DERIVED_SUFFIX="__c21"
-        ;;
-      d5 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d5.yaml"
-        DERIVED_SUFFIX="__d5"
-        ;;
-      d6 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d6.yaml"
-        DERIVED_SUFFIX="__d6"
-        ;;
-      d7 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d7.yaml"
-        DERIVED_SUFFIX="__d7"
-        ;;
-      d9 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d9.yaml"
-        DERIVED_SUFFIX="__d9"
-        ;;
-      d11 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d11.yaml"
-        DERIVED_SUFFIX="__d11"
-        ;;
-      d21 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d21.yaml"
-        DERIVED_SUFFIX="__d21"
-        ;;
-      d1 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d1.yaml"
-        DERIVED_SUFFIX="__d1"
-        ;;
-      d3 )
-        DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241d3.yaml"
-        DERIVED_SUFFIX="__d3"
-        ;;
-    esac
+    DERIVED_CONFIG="${BASE_CONFIG_DIR}/${BASE_CONFIG_PREFIX}${ENABLED_KEYS[0]}.yaml"
+    DERIVED_SUFFIX="__${ENABLED_KEYS[0]}"
   else
     JOINED="$(IFS=_; echo "${ENABLED_KEYS[*]}")"
-    DERIVED_CONFIG="${ROOT_DIR}/configs/yolo11/enhance241/defect241${JOINED}.yaml"
+    DERIVED_CONFIG="${BASE_CONFIG_DIR}/${BASE_CONFIG_PREFIX}${JOINED}.yaml"
     DERIVED_SUFFIX="$(printf "__%s" "${ENABLED_KEYS[@]}")"
   fi
 
@@ -590,9 +465,9 @@ if [[ "${ENABLE_A3}" == "true" || "${ENABLE_A4}" == "true" || "${ENABLE_A5}" == 
     export _E241_BASE="${BASE_CONFIG}"
     export _E241_OUT="${DERIVED_CONFIG}"
     export _E241_KEYS="${ENABLED_KEYS[*]}"
-    export _E241_SUFFIX="${DERIVED_SUFFIX}"
     "${PYTHON_BIN}" - <<'PY'
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -600,7 +475,6 @@ import yaml
 base = Path(os.environ["_E241_BASE"]).resolve()
 out = Path(os.environ["_E241_OUT"]).resolve()
 keys = os.environ["_E241_KEYS"].split()
-suffix = os.environ["_E241_SUFFIX"]
 
 with base.open("r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f) or {}
@@ -653,9 +527,17 @@ for k in keys:
 if enh.get("b1"):
     enh["b1_version"] = "v3"
 
-exp = str(cfg.get("exp_name", "defect241"))
-if not exp.endswith(suffix):
-    cfg["exp_name"] = exp + suffix
+raw_exp = str(cfg.get("exp_name", "")).strip()
+if "/" in raw_exp:
+    dataset_tag_raw = raw_exp.split("/")[-1]
+else:
+    dataset_tag_raw = Path(str(cfg.get("data_root", "dataset"))).name
+dataset_tag = re.sub(r"[^a-z0-9]+", "_", dataset_tag_raw.lower()).strip("_") or "dataset"
+
+network_tag = "".join(keys).lower()
+if not network_tag:
+    network_tag = "baseline"
+cfg["exp_name"] = f"{network_tag}/{dataset_tag}"
 
 out.parent.mkdir(parents=True, exist_ok=True)
 with out.open("w", encoding="utf-8") as f:

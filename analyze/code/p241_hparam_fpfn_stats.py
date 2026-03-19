@@ -16,13 +16,13 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
             "Count image-level FN/FP files for each hparam case directory under "
-            "experiments/yolo11/<hp_root>/<case>/exp_xxx/{test_vis,val_vis}/image_{fn,fp}."
+            "experiments/<hp_root>/<case>/exp_xxx/{test_vis,val_vis}/image_{fn,fp}."
         )
     )
     p.add_argument(
         "--hp_root",
         type=str,
-        default="/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5__hp",
+        default="/home/ubuntu/hpproject/yolo/experiments/a3c5/datasetm6c",
         help="HP root directory that contains case folders.",
     )
     p.add_argument(

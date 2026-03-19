@@ -1082,8 +1082,8 @@ def write_markdown_report(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="P2.4.1 hyper-parameter validation runner/analyzer.")
     p.add_argument("--out_root", type=str, default="/home/ubuntu/hpproject/yolo/analyze/result")
-    p.add_argument("--baseline_config", type=str, default="/home/ubuntu/hpproject/yolo/configs/yolo11/defect.yaml")
-    p.add_argument("--enhanced_base_config", type=str, default="/home/ubuntu/hpproject/yolo/configs/yolo11/enhance241/defect241.yaml")
+    p.add_argument("--baseline_config", type=str, default="/home/ubuntu/hpproject/yolo/configs/baseline/datasetm6c.yaml")
+    p.add_argument("--enhanced_base_config", type=str, default="/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml")
     p.add_argument("--run_name_prefix", type=str, default="p241")
     p.add_argument("--variants", nargs="+", default=["baseline", "a3c5"])
     p.add_argument("--steps", nargs="+", default=["0", "1", "2"])

@@ -27,7 +27,7 @@ Usage:
     [--execute]
 
 Purpose:
-  Repair existing batch run directories under experiments/yolo11/batch_runs:
+  Repair existing legacy batch run directories (typically under experiments/*/batch_runs):
   - Unfinished runs: resume training from last/best checkpoint.
   - Finished but post-eval incomplete (or error.md exists): run test-only with smaller eval batch.
   - Finished and metrics complete: skip.

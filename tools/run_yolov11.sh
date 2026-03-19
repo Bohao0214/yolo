@@ -5,7 +5,7 @@ export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:-${ROOT_DIR}/configs/yolo11/defect.yaml}"
+CONFIG="${1:-${ROOT_DIR}/configs/baseline/datasetm6c.yaml}"
 ACTIVE_CHILD_PID=""
 INTERRUPT_IN_PROGRESS=0
 INTERRUPT_COUNT=0
@@ -93,4 +93,4 @@ wait "${ACTIVE_CHILD_PID}" || train_status=$?
 ACTIVE_CHILD_PID=""
 exit "${train_status}"
 
-# bash tools/run_yolov11.sh configs/yolo11/defect.yaml
+# bash tools/run_yolov11.sh configs/baseline/datasetm6c.yaml

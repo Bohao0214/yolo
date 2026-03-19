@@ -12,14 +12,14 @@ from typing import Dict, List
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Move old hparam experiment dirs from experiments/yolo11/<prefix>__* "
-            "to experiments/yolo11/<prefix>/<prefix>__*."
+            "Move old hparam experiment dirs from experiments/<prefix>__* "
+            "to experiments/<prefix>/<prefix>__*."
         )
     )
     p.add_argument(
         "--experiments_root",
         type=str,
-        default="/home/ubuntu/hpproject/yolo/experiments/yolo11",
+        default="/home/ubuntu/hpproject/yolo/experiments",
         help="Root directory that contains experiment folders.",
     )
     p.add_argument(

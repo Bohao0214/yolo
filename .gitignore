@@ -5,6 +5,7 @@ experiments
 # =====================
 # YOLO dataset images
 # =====================
+dataset/**/*.png
 dataset/**/images/**/*.jpg
 dataset/**/images/**/*.png
 dataset/**/images/**/*.jpeg

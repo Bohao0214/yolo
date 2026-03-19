@@ -2,7 +2,7 @@
 set -u -o pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/yolo11/enhance241/defect241.yaml"
+BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 RUN_TAG="${RUN_TAG:-multi_dataset_$(date +%y%m%d%H%M%S)}"
@@ -202,7 +202,7 @@ Purpose:
   Run one or more datasets in parallel using:
   - baseline runner (tools/run_yolov11_241.sh)
   - module combo runner (tools/run_yolov11_241_module_combo.sh)
-  - Batch outputs are grouped under experiments/<yolo_version>/batch_runs/<tag>/...
+  - Experiments are grouped under experiments/<network>/<dataset>/exp_*
   - After each successful run, writes metrics/experiment_metrics.{csv,md,json} in the exp dir
 
 Dataset inputs:
@@ -444,7 +444,7 @@ if [[ -z "${TMP_CFG_DIR}" ]]; then
   TMP_CFG_DIR="/tmp/yolo241_multi_dataset/${RUN_TAG_SAFE}"
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
-  LOG_ROOT="${ROOT_DIR}/experiments/yolo11/multi_dataset_logs/${RUN_TAG_SAFE}"
+  LOG_ROOT="${ROOT_DIR}/experiments/_logs/multi_dataset/${RUN_TAG_SAFE}"
 fi
 
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
@@ -944,7 +944,7 @@ out_data.parent.mkdir(parents=True, exist_ok=True)
 with out_data.open("w", encoding="utf-8") as f:
     yaml.safe_dump(data_doc, f, sort_keys=False, allow_unicode=True)
 
-cfg["exp_name"] = f"batch_runs/{run_tag}/{dataset_tag}"
+cfg["exp_name"] = f"baseline/{dataset_tag}"
 
 cfg["data"] = str(out_data)
 cfg["data_root"] = str(dataset_root)
@@ -1138,7 +1138,7 @@ else
         if [[ "${RUNNER_MODE}" == "baseline" ]]; then
           exp_dir_from_log="$(extract_exp_dir_from_log "${log_path}")"
           if [[ -z "${exp_dir_from_log}" ]]; then
-            exp_dir_from_log="${ROOT_DIR}/experiments/yolo11/batch_runs/${RUN_TAG_SAFE}/${DATASET_TAGS[$j]}/exp_error_${RUN_TAG_SAFE}"
+            exp_dir_from_log="${ROOT_DIR}/experiments/baseline/${DATASET_TAGS[$j]}/exp_error_${RUN_TAG_SAFE}"
           fi
           write_error_md_for_exp "${exp_dir_from_log}" "${status}" "${DATASET_TAGS[$j]}" "${CFG_PATHS[$j]}" "${DATA_YAMLS[$j]}" "${log_path}"
         fi

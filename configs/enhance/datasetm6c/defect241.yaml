@@ -22,7 +22,7 @@
 #   其中 α 初始很小（约 0.10）且可学习；Δ 的最后一层卷积零初始化以保证初始 Δ≈0；避免新增 BN（batch<8 约束）。
 
 yolo_version: yolo11
-exp_name: defect241
+exp_name: baseline/datasetm6c
 run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c

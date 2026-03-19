@@ -1,5 +1,5 @@
 yolo_version: yolo11
-exp_name: defect241__a3__c5
+exp_name: a3c5/datasetm6c
 run_name: ''
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c

@@ -1,0 +1,306 @@
+# 2.4.1 增强实验体系 enhance241（总配置）
+# ============================================================
+# 统一评估口径：P2.3.0（必须严格遵循；不要引入 near/strict 等概念）
+# 后处理链路：预测框(pred) -> conf 过滤 -> NMS(非极大值抑制) -> max_det 限制 -> 最终 pred 集合用于评估
+# 默认参数（允许扫参，但必须记录扫描方式与参数）：
+#   conf=0.30
+#   评估 IoU(交并比)=0.20（用于 gt↔pred 一对一匹配与 TP/FP/FN 判定）
+#   NMS IoU(非极大值抑制)=0.60
+#   max_det=20
+#
+# 结构改造包定义（未来可扩展开关分类；A/B/C/D 互不冲突，可串联）：
+#   A：特征提取增强（backbone→P3）
+#   B：语义融合增强（neck：P4→P3 融合点）
+#   C：抑噪/选择机制（neck→head 前）
+#   D：检测头稳定（head：P3 分支）
+#
+# 本次实现 b1_v3 / b2（属于 B 类语义融合增强，可串联）：
+# - 功能来源：P2.3 小尺度问题以“无响应/低分”为主，后处理非主因，因此优先改 neck 的 P4→P3 融合点以提升小目标候选与分数稳定性。
+# - b1_v3（ASFF-lite）：空间自适应融合，仅改 P4→P3 融合点，强化小目标候选。
+# - b2-safe（残差式融合）：默认等价 baseline，训练后逐步学到增益：
+#     F3_new = F3_old + α * Δ(P4_up, F3_old)
+#   其中 α 初始很小（约 0.10）且可学习；Δ 的最后一层卷积零初始化以保证初始 Δ≈0；避免新增 BN（batch<8 约束）。
+
+yolo_version: yolo11
+exp_name: baseline/datasetmy
+run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
+data: configs/data/defect.yaml
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetmy
+model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
+epochs: 150
+imgsz: 640
+batch: 6  # 约束：batchsize < 8，显存 ≤24GB
+device: ""
+
+workers: 4
+
+# P2.3.0 评估/推理参数（写入配置，训练日志也会打印一次）
+conf: 0.25
+nms_iou: 0.7  # 评估/可视化/推理使用的 NMS IoU（默认 0.7）
+max_det: 100  # NMS 后最多保留的检测框数量
+match_iou: 0.3  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值）
+
+mode: train_test  # test / train_test / finetune_test
+weights: ""  # mode=test 时必须提供；mode=train_test 默认从 model 加载预训练权重
+patience: 0        # 0 表示禁用早停；数值越大，在验证集无提升时停止得越晚
+lr0: 0.012          # 值越大 → 初期收敛更快但不稳定风险更高；值越小 → 更安全但收敛更慢
+lrf: 0.12           # 值越大 → 最终学习率更高；值越小 → 后期训练更保守
+warmup_epochs: 0  # 较长的 warmup 有助于稳定初期训练；0 表示关闭 warmup
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+save_weights: true  # false 时不保存 best.pt/last.pt（轻量探索用）
+skip_eval_visuals: false  # true 时关闭 val/test 可视化输出
+skip_post_eval_metrics: false  # true 时跳过训练后综合评估曲线与诊断
+best_select_metric: "fitness"  # fitness(默认YOLO规则) | iFN | iAUROC@fpr0.5
+record_epoch_image_metrics: false  # true 时逐 epoch 记录 val/test 图像级 FN/FP 等
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ""  # 设为 "cpu" 可避免评估指标时 GPU 显存溢出
+
+threshold_sweep:
+  fix: iou              # 固定变量：iou 或 conf
+  fix_list: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  curve: [0.01, 0.01, 1.00]   # start, step, end
+  table: [0.00, 0.05, 1.00]   # start, step, end
+
+# enhance241 开关（实现 a3/a4/a5/a6/a7/a9/a11/a21/b1/b2/b3/b5/b6/b7/b9/b11/b21/c4/c5/c6/c7/c9/c11/c21/d3/d5/d6/d7/d9/d11/d21；d1 保留为 d3 兼容别名）
+enhance241:
+  a2: false
+  a3: false
+  a3_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
+  a3_pre_div: 4
+  a3_alpha_init: 0.05
+  a3_alpha_cap: 0.5
+  a4: false
+  a4_refine: "dw"   # a4=fuse(a3,a7) dual-delta
+  a4_pre_div: 4
+  a4_order: 3
+  a4_alpha1_init: 0.05
+  a4_alpha1_cap: 0.5
+  a4_alpha2_init: 0.0
+  a4_alpha2_cap: 0.5
+  a6: false
+  a6_pre_div: 4
+  a6_refine: "dw"   # 几何保真沿用 a4 的 SPD 支路
+  a6_lsk_kernel: 7  # 兼容旧字段（保留，不再使用）
+  a6_lsk_dilation: 3  # 兼容旧字段（保留，不再使用）
+  a6_pki_dilation: 3  # PKI 三路膨胀卷积: d=1,2,d3
+  a6_attn_reduction: 16
+  a6_alpha_init: 0.02
+  a6_alpha_cap: 0.5
+  a5: false
+  a5_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
+  a5_depth: 1
+  a7: false
+  a7_order: 3
+  a7_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
+  a7_alpha_init: 0.05
+  a7_alpha_cap: 0.5
+  a9: false
+  a9_reduction: 16
+  a9_spatial_kernel: 7
+  a9_act: "hswish"        # silu | hswish | mish
+  a9_alpha_init: 0.0
+  a9_alpha_cap: 0.5
+  a11: false
+  a11_where: ["stage_P3_out"]
+  a11_mc_reduction: 16
+  a11_ms_kernel: 7
+  a11_mode: "safe_residual"
+  a11_alpha_init: 0.0
+  a11_alpha_cap: 0.5
+  a21: false
+  a21_refine: "dw"  # a21 组合包：a3为主+a7弱注入
+  a21_pre_div: 4
+  a21_order: 3
+  a21_alpha1_init: 0.05
+  a21_alpha1_cap: 0.5
+  a21_alpha2_init: 0.0
+  a21_alpha2_cap: 0.5
+  b1: false
+  b2: false
+  b1_version: "v3"
+  b1_alpha_init: 0.02
+  b1_alpha_cap: 0.3
+  b1_weight_hidden: 64
+  b1_refine: "dw"   # dw=depthwise separable; conv=3x3 conv
+  b1_upsample: "nearest"
+  b2_align: "flow"        # dcn | flow | off (dcn 不可用会直接报错)
+  b2_mode: "safe"         # safe | strong（影响 gate_init）
+  b2_gate_init: 0.0       # 0 表示由 mode 控制（safe=0.02, strong=0.20）
+  b2_flow_max: 2.0        # 像素级最大位移（flow 模式用）
+  b2_refine: "dw"         # dw=depthwise separable, conv=普通3x3
+  b2_upsample: "nearest"
+  b3: false
+  b3_weight_init: 1.0
+  b3_weight_temp: 1.0
+  b3_refine: "dw"         # dw=depthwise separable, conv=普通3x3
+  b3_upsample: "nearest"
+  b3_eps: 0.0001
+  b3_alpha_init: 0.02
+  b3_alpha_cap: 0.3
+  b5: false
+  b5_depth: 2
+  b5_expansion: 0.5
+  b5_refine: "dw"         # dw=depthwise separable, conv=普通3x3
+  b5_upsample: "nearest"
+  b6: false
+  b6_offset_max: 1.5      # 兼容旧字段（保留，不作为主路径）
+  b6_canvas_mode: "bilinear"  # 高频残差上采样模式
+  b6_kernel_size: 5
+  b6_compress: 64
+  b6_chunk_channels: 64
+  b6_hf_kernel: 3
+  b6_hf_gain_init: 0.1
+  b6_alpha_init: 0.02
+  b6_alpha_cap: 0.3
+  b7: false
+  b7_kernel_size: 5
+  b7_compress: 64
+  b7_chunk_channels: 64   # CARAFE 重组分块通道数，减小显存峰值
+  b7_use_hf: true         # 高频残差辅助核预测
+  b7_hf_kernel: 3
+  b7_hf_gain_init: 0.1
+  b7_alpha_init: 0.02
+  b7_alpha_cap: 0.3
+  b9: false
+  b9_depth: 2
+  b9_shortcut: true
+  b9_upsample: "nearest"
+  b9_alpha_init: 0.0
+  b9_alpha_cap: 0.5
+  b11: false
+  b11_stride: 4
+  b11_channels: 128
+  b11_fuse_from: "backbone_l3"
+  b11_fuse_mode: "concat+conv"  # concat+conv | add+conv
+  b11_refine: "dw"
+  b11_upsample: "nearest"
+  b11_alpha_init: 0.0
+  b11_alpha_cap: 0.5
+  b21: false
+  b21_kernel_size: 5
+  b21_compress: 64
+  b21_chunk_channels: 64
+  b21_alpha_init: 0.02
+  b21_alpha_cap: 0.3
+  debug_stats: false
+  c1: false
+  c4: false
+  c4_topk: 4
+  c4_window_size: 8
+  c4_num_heads: 4
+  c4_kv_downsample_mode: "avg"
+  c4_soft_routing: true
+  c4_gate_mode: "se"
+  c4_gate_reduction: 16
+  c4_alpha5_init: 0.05
+  c4_alpha5_cap: 0.5
+  c4_alpha11_init: 0.01
+  c4_alpha11_cap: 0.5
+  c5: false
+  c5_topk: 4
+  c5_window_size: 8
+  c5_num_heads: 4
+  c5_kv_downsample_mode: "avg"  # avg | max | identity
+  c5_soft_routing: true
+  c5_alpha_by_conf: true        # 根据路由置信度自适应缩放 alpha
+  c5_conf_floor: 0.2
+  c5_conf_detach: false
+  c5_alpha_init: 0.05
+  c5_alpha_cap: 0.5
+  c6: false
+  c6_topk: 4              # 兼容旧字段（EMA 路径忽略）
+  c6_window_size: 8       # 兼容旧字段（EMA 路径忽略）
+  c6_num_heads: 4         # 兼容旧字段；作为 EMA groups 的回退值
+  c6_kv_downsample_mode: "avg"  # 兼容旧字段（EMA 路径忽略）
+  c6_soft_routing: true   # 兼容旧字段（EMA 路径忽略）
+  c6_groups: 4
+  c6_reduction: 16
+  c6_gate_scale: 6.0      # 兼容旧字段（仅 legacy 回退路径使用）
+  c6_gate_bias: -0.5      # 兼容旧字段（仅 legacy 回退路径使用）
+  c6_alpha_init: 0.05
+  c6_alpha_cap: 0.5
+  c7: false
+  c7_n: 3
+  c7_mode: "full"         # full | channel | spatial
+  c7_reduction: 16
+  c7_alpha_init: 0.02
+  c7_alpha_cap: 0.3
+  c9: false
+  c9_mode: "full"         # full | channel | spatial
+  c9_reduction: 16
+  c9_kernel_size: 7
+  c9_alpha_init: 0.0
+  c9_alpha_cap: 0.3
+  c11: false
+  c11_mode: "se"          # se | 1x1_gate | reuse_c5
+  c11_apply_to: ["P3", "P2_new"]
+  c11_alpha_init: 0.0
+  c11_alpha_cap: 0.5
+  c21: false
+  c21_topk: 4
+  c21_window_size: 8
+  c21_num_heads: 4
+  c21_kv_downsample_mode: "avg"
+  c21_soft_routing: true
+  c21_gate_mode: "se"
+  c21_gate_reduction: 16
+  c21_alpha5_init: 0.05
+  c21_alpha5_cap: 0.5
+  c21_alpha11_init: 0.01
+  c21_alpha11_cap: 0.5
+  d3: false
+  d3_temp_init: 1.0
+  d3_temp_min: 0.7
+  d3_temp_max: 2.0
+  d6: false
+  d6_apply_to: ["P3", "P2_new"]
+  d6_temp_init: 1.0
+  d6_temp_min: 0.5
+  d6_temp_max: 4.0
+  d6_p3_bias: 0.20          # S-D11: stride==8 时注入偏置，其他 stride 为 0
+  d6_scale_beta: 0.20       # 兼容旧字段（作为 d6_p3_bias 回退）
+  d6_scale_lambda: 64.0     # 兼容旧字段（保留，不再参与 d6 公式）
+  d6_scale_threshold: 64.0  # 兼容旧字段（保留，不再参与 d6 公式）
+  d6_stride_gamma_mul: 4.0  # 兼容旧字段（保留，不再参与 d6 公式）
+  d6_score_domain: true
+  d6_alpha_init: 0.05
+  d6_alpha_cap: 0.5
+  d5: false
+  d5_downsample: "dw"     # d5(P2 head) 融合 refine 类型：dw=depthwise separable, conv=普通3x3
+  d5_upsample: "nearest"  # P3 -> P2 对齐插值：nearest | bilinear
+  d5_alpha_init: 0.02
+  d5_alpha_cap: 0.3
+  d7: false
+  d7_mode: "bias_only"      # bias_only | p3_only
+  d7_cls_bias_shift: -0.15  # d7 轻量分类偏置校准
+  d9: false
+  d9_mode: "dw"             # dw | conv
+  d9_alpha_init: 0.0
+  d9_alpha_cap: 0.3
+  d11: false
+  d11_apply_to: ["P3", "P2_new"]
+  d11_temp_init: 1.0
+  d11_temp_min: 0.5
+  d11_temp_max: 4.0
+  d11_bias_shift_init: 0.0
+  d11_scale_beta: 0.0
+  d11_scale_lambda: 32.0
+  d11_scale_threshold: 64.0
+  d11_stride_gamma_mul: 4.0
+  d11_score_domain: true
+  d11_alpha_init: 0.0
+  d11_alpha_cap: 0.5
+  d21: false
+  d21_apply_to: ["P3", "P2_new"]
+  d21_temp_init: 1.0
+  d21_temp_min: 0.7
+  d21_temp_max: 2.0
+  d21_bias_shift_init: 0.0
+  d21_alpha_init: 0.0
+  d21_alpha_cap: 0.5
+  d1: false               # legacy alias of d3

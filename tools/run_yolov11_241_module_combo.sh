@@ -2,7 +2,7 @@
 set -u -o pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/yolo11/enhance241/defect241.yaml"
+BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 MATRIX_TAG="${MATRIX_TAG:-module_combo_$(date +%y%m%d%H%M%S)}"
@@ -18,7 +18,6 @@ SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
 PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
-RESULT_GROUP_ROOT="${RESULT_GROUP_ROOT:-batch_runs/${MATRIX_TAG}}"
 DRY_RUN="false"
 COMBOS_RAW="${COMBOS_RAW:-}"
 ACTIVE_CHILD_PID=""
@@ -127,7 +126,7 @@ Runs S2 quick A/B matrix with identical seed/data/epochs:
 
 Behavior:
   - Generates per-case temp configs under TMP_CFG_DIR
-  - Uses original experiment layout: experiments/<yolo_version>/<exp_name>/exp_*
+  - Uses unified experiment layout: experiments/<network>/<dataset>/exp_*
   - If one case fails, continues other cases
   - Writes a visible error.md into that failed case's experiment path
 
@@ -165,7 +164,7 @@ Options:
 Env overrides:
   BASE_CONFIG, EPOCHS_OVERRIDE, COMBOS_RAW, FORCE_MODE, SEED_OVERRIDE, BATCH_OVERRIDE
   D1_WORKERS_OVERRIDE(default 4), VRAM_GUARD_OVERRIDE(auto|on|off), GUARD_MAX_GB_OVERRIDE(default 10)
-  SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4), RESULT_GROUP_ROOT(default batch_runs/<tag>)
+  SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4)
   TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN
 USAGE
 }
@@ -263,7 +262,7 @@ if [[ -z "${TMP_CFG_DIR}" ]]; then
   TMP_CFG_DIR="/tmp/yolo241_module_combo/${MATRIX_TAG}"
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
-  LOG_ROOT="${ROOT_DIR}/experiments/yolo11/module_combo_logs/${MATRIX_TAG}"
+  LOG_ROOT="${ROOT_DIR}/experiments/_logs/module_combo/${MATRIX_TAG}"
 fi
 
 if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
@@ -379,8 +378,28 @@ normalize_and_add_case() {
       ;;
   esac
 
-  # Generic parser: supports raw switch expression like a3+b3+d1 or a3_b3_d1.
+  # Generic parser: supports:
+  # - a3+b3+d1
+  # - a3_b3_d1
+  # - a3c5b7 (concatenated)
   local expr="${token//_/+}"
+  if [[ "${expr}" != *"+"* && "${expr}" =~ ^([abcd][0-9]+)+$ ]]; then
+    local rest="${expr}"
+    local part_concat
+    local -a concat_parts=()
+    while [[ -n "${rest}" ]]; do
+      if [[ "${rest}" =~ ^([abcd][0-9]+)(.*)$ ]]; then
+        part_concat="${BASH_REMATCH[1]}"
+        rest="${BASH_REMATCH[2]}"
+        concat_parts+=("${part_concat}")
+      else
+        break
+      fi
+    done
+    if [[ -z "${rest}" && ${#concat_parts[@]} -gt 0 ]]; then
+      expr="$(IFS='+'; echo "${concat_parts[*]}")"
+    fi
+  fi
   local part
   local -a parts=()
   local -a switches=()
@@ -396,10 +415,12 @@ normalize_and_add_case() {
         exit 2
         ;;
     esac
-    if [[ -z "${seen[$part]+x}" ]]; then
-      seen["$part"]=1
-      switches+=("${part}")
-    fi
+    [[ -z "${seen[$part]+x}" ]] && seen["$part"]=1
+  done
+
+  # Canonical order: a -> b -> c -> d
+  for part in a3 a4 a5 a6 a7 a9 a11 a21 b1 b2 b3 b5 b6 b7 b9 b11 b21 c4 c5 c6 c7 c9 c11 c21 d1 d3 d5 d6 d7 d9 d11 d21; do
+    [[ -n "${seen[$part]+x}" ]] && switches+=("${part}")
   done
 
   if [[ ${#switches[@]} -eq 0 ]]; then
@@ -439,7 +460,6 @@ generate_case_cfg() {
   _M_OUT_CFG="${out_cfg}" \
   _M_SWITCHES="${switches}" \
   _M_CASE_TAG="${case_tag}" \
-  _M_RESULT_GROUP_ROOT="${RESULT_GROUP_ROOT}" \
   _M_EPOCHS="${EPOCHS_OVERRIDE}" \
   _M_FORCE_MODE="${FORCE_MODE}" \
   _M_SEED_OVERRIDE="${SEED_OVERRIDE}" \
@@ -447,6 +467,7 @@ generate_case_cfg() {
   _M_D1_WORKERS_OVERRIDE="${D1_WORKERS_OVERRIDE}" \
   "${PYTHON_CFG_BIN}" - <<'PY'
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -454,8 +475,6 @@ import yaml
 base_cfg = Path(os.environ["_M_BASE_CONFIG"]).resolve()
 out_cfg = Path(os.environ["_M_OUT_CFG"]).resolve()
 switches = [s.strip() for s in os.environ["_M_SWITCHES"].split() if s.strip()]
-case_tag = os.environ["_M_CASE_TAG"].strip()
-result_group_root = os.environ.get("_M_RESULT_GROUP_ROOT", "").strip().strip("/")
 epochs = os.environ["_M_EPOCHS"].strip()
 force_mode = os.environ["_M_FORCE_MODE"].strip()
 seed_override = os.environ["_M_SEED_OVERRIDE"].strip()
@@ -485,15 +504,15 @@ for key in switches:
     else:
         enh[key] = True
 
-exp_name = str(cfg.get("exp_name", "defect241"))
-if result_group_root and not exp_name.startswith("batch_runs/"):
-    leaf = case_tag or ("baseline" if not switches else "__".join(switches))
-    exp_name = f"{result_group_root}/{leaf}"
-elif switches:
-    suffix = "__" + "__".join(switches)
-    if not exp_name.endswith(suffix):
-        exp_name = exp_name + suffix
-cfg["exp_name"] = exp_name
+raw_exp = str(cfg.get("exp_name", "")).strip()
+if "/" in raw_exp:
+    dataset_tag_raw = raw_exp.split("/")[-1]
+else:
+    dataset_tag_raw = Path(str(cfg.get("data_root", "dataset"))).name
+dataset_tag = re.sub(r"[^a-z0-9]+", "_", dataset_tag_raw.lower()).strip("_") or "dataset"
+
+network_tag = "".join(switches).lower() if switches else "baseline"
+cfg["exp_name"] = f"{network_tag}/{dataset_tag}"
 
 if force_mode:
     cfg["mode"] = force_mode
@@ -510,8 +529,7 @@ out_cfg.parent.mkdir(parents=True, exist_ok=True)
 with out_cfg.open("w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
 
-yolo_version = str(cfg.get("yolo_version", "yolo11"))
-print(f"{exp_name}\t{yolo_version}")
+print(cfg["exp_name"])
 PY
 }
 
@@ -525,7 +543,6 @@ echo "[module-combo] epochs=${EPOCHS_OVERRIDE:-<keep>} mode=${FORCE_MODE:-<keep>
 echo "[module-combo] guard mode=${VRAM_GUARD_OVERRIDE} max_gb=${GUARD_MAX_GB_OVERRIDE} safe_batch=${SAFE_BATCH_OVERRIDE} safe_workers=${SAFE_WORKERS_OVERRIDE}"
 echo "[module-combo] combos_raw=${COMBOS_RAW}"
 echo "[module-combo] combos_resolved=${CASE_TAGS[*]}"
-echo "[module-combo] result_group_root=${RESULT_GROUP_ROOT}"
 echo "[module-combo] tmp_cfg_dir=${TMP_CFG_DIR}"
 echo "[module-combo] log_root=${LOG_ROOT}"
 
@@ -538,9 +555,8 @@ for i in "${!CASE_TAGS[@]}"; do
   log_path="${LOG_ROOT}/${tag}.log"
 
   meta="$(generate_case_cfg "${cfg_path}" "${switches}" "${tag}")"
-  exp_name="$(echo "${meta}" | awk -F $'\t' '{print $1}')"
-  yolo_version="$(echo "${meta}" | awk -F $'\t' '{print $2}')"
-  exp_root="${ROOT_DIR}/experiments/${yolo_version}/${exp_name}"
+  exp_name="$(echo "${meta}" | sed -E 's/[[:space:]]+$//')"
+  exp_root="${ROOT_DIR}/experiments/${exp_name}"
 
   before_tmp="$(mktemp)"
   after_tmp="$(mktemp)"
@@ -656,7 +672,7 @@ bash tools/run_yolov11_241_module_combo.sh \
 # 5) 指定基础配置（例如用 defect.yaml 只跑纯 baseline）
 # 场景：做“增强框架 vs 原始流程”的公平对比。
 bash tools/run_yolov11_241_module_combo.sh \
-  configs/yolo11/defect.yaml \
+  configs/baseline/datasetm6c.yaml \
   --epochs 100 \
   --batch 10 \
   --combos baseline
