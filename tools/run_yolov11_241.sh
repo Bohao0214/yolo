@@ -728,7 +728,8 @@ for name in ("train.cache", "val.cache", "test.cache"):
         print(str(p))
 PY
 )
-  for _cache in "${_E241_CACHE_FILES[@]:-}"; do
+  for _cache in "${_E241_CACHE_FILES[@]}"; do
+    [[ -n "${_cache}" ]] || continue
     rm -f "${_cache}" || true
     echo "[run-241][cache] removed ${_cache}"
   done

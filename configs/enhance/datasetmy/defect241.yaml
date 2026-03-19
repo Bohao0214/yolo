@@ -43,12 +43,14 @@ match_iou: 0.3  # GT↔Pred 匹配 IoU 阈值（用于TP/FP/FN判定的默认值
 mode: train_test  # test / train_test / finetune_test
 weights: ""  # mode=test 时必须提供；mode=train_test 默认从 model 加载预训练权重
 patience: 0        # 0 表示禁用早停；数值越大，在验证集无提升时停止得越晚
-lr0: 0.012          # 值越大 → 初期收敛更快但不稳定风险更高；值越小 → 更安全但收敛更慢
-lrf: 0.12           # 值越大 → 最终学习率更高；值越小 → 后期训练更保守
-warmup_epochs: 0  # 较长的 warmup 有助于稳定初期训练；0 表示关闭 warmup
+lr0: 0.008          # datasetmy + a4/b7/d6 先保守一点，优先稳定收敛、降低漏检
+lrf: 0.08
+warmup_epochs: 3
 hsv_h: 0.005
 hsv_s: 0.20
 hsv_v: 0.20
+mosaic: 0.20        # 降低强拼图导致的小缺陷语义破坏
+close_mosaic: 20
 save_train_pic: false
 save_val_pic: true
 save_test_pic: true
@@ -263,16 +265,16 @@ enhance241:
   d6: false
   d6_apply_to: ["P3", "P2_new"]
   d6_temp_init: 1.0
-  d6_temp_min: 0.5
-  d6_temp_max: 4.0
-  d6_p3_bias: 0.20          # S-D11: stride==8 时注入偏置，其他 stride 为 0
-  d6_scale_beta: 0.20       # 兼容旧字段（作为 d6_p3_bias 回退）
+  d6_temp_min: 0.8
+  d6_temp_max: 1.8
+  d6_p3_bias: 0.08          # 降低分数校准强度，避免正样本分数被压低导致 FN
+  d6_scale_beta: 0.08       # 兼容旧字段（作为 d6_p3_bias 回退）
   d6_scale_lambda: 64.0     # 兼容旧字段（保留，不再参与 d6 公式）
   d6_scale_threshold: 64.0  # 兼容旧字段（保留，不再参与 d6 公式）
   d6_stride_gamma_mul: 4.0  # 兼容旧字段（保留，不再参与 d6 公式）
   d6_score_domain: true
-  d6_alpha_init: 0.05
-  d6_alpha_cap: 0.5
+  d6_alpha_init: 0.02
+  d6_alpha_cap: 0.2
   d5: false
   d5_downsample: "dw"     # d5(P2 head) 融合 refine 类型：dw=depthwise separable, conv=普通3x3
   d5_upsample: "nearest"  # P3 -> P2 对齐插值：nearest | bilinear
