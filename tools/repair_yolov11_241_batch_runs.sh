@@ -496,35 +496,114 @@ mapfile -t JOB_LINES < <(awk -F $'\t' 'NR>1 {print $0}' "${JOBS_TSV}")
 total="${#JOB_LINES[@]}"
 fail_count=0
 
-echo "[repair] starting execution parallel=${MAX_PARALLEL}"
+echo "[repair] starting execution (retry-safe mode, sequential)"
+if [[ "${MAX_PARALLEL}" != "1" ]]; then
+  echo "[repair] note: MAX_PARALLEL=${MAX_PARALLEL} requested, but retry-safe mode currently runs sequentially."
+fi
 
-for ((i=0; i<total; i+=MAX_PARALLEL)); do
-  pids=()
-  descs=()
-  chunk_end=$((i + MAX_PARALLEL))
-  [[ "${chunk_end}" -gt "${total}" ]] && chunk_end="${total}"
+apply_retry_profile() {
+  local cfg_in="$1"
+  local cfg_out="$2"
+  local action="$3"
+  local attempt="$4"
+  _RR_CFG_IN="${cfg_in}" \
+  _RR_CFG_OUT="${cfg_out}" \
+  _RR_ACTION="${action}" \
+  _RR_ATTEMPT="${attempt}" \
+  "${PYTHON_BIN}" - <<'PY'
+import os
+from pathlib import Path
+import yaml
 
-  for ((j=i; j<chunk_end; j++)); do
-    IFS=$'\t' read -r run_tag leaf_tag action runtime_cfg log_path cmd <<< "${JOB_LINES[$j]}"
-    echo "[repair:start] run=${run_tag} leaf=${leaf_tag} action=${action}"
-    echo "[repair:start] cmd=${cmd}"
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-      "${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${runtime_cfg}" > "${log_path}" 2>&1 &
-    pids+=("$!")
-    descs+=("${run_tag}/${leaf_tag}/${action}")
-  done
+cfg_in = Path(os.environ["_RR_CFG_IN"]).resolve()
+cfg_out = Path(os.environ["_RR_CFG_OUT"]).resolve()
+action = os.environ["_RR_ACTION"].strip()
+attempt = int(os.environ["_RR_ATTEMPT"])
 
-  for k in "${!pids[@]}"; do
-    pid="${pids[$k]}"
-    desc="${descs[$k]}"
-    if wait "${pid}"; then
-      echo "[repair:done] ${desc}"
+with cfg_in.open("r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f) or {}
+if not isinstance(cfg, dict):
+    raise SystemExit(f"invalid config mapping: {cfg_in}")
+
+# Base safety
+cfg["eval_batch"] = 1
+cfg["workers"] = 0
+cfg["amp"] = False
+cfg["cache"] = False
+
+def _to_int(v, d):
+    try:
+        return int(v)
+    except Exception:
+        return d
+
+if action in {"resume_finetune", "from_scratch"}:
+    cur_batch = _to_int(cfg.get("batch", 8), 8)
+    if attempt == 2:
+        cfg["batch"] = min(cur_batch, 6)
+    else:
+        cfg["batch"] = min(cur_batch, 4)
+        try:
+            imgsz = _to_int(cfg.get("imgsz", 640), 640)
+            cfg["imgsz"] = min(imgsz, 512)
+        except Exception:
+            pass
+elif action == "validate_only_low_batch":
+    cfg["batch"] = 1
+    if attempt >= 3:
+        cfg["device"] = "cpu"
+
+cfg_out.parent.mkdir(parents=True, exist_ok=True)
+with cfg_out.open("w", encoding="utf-8") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+PY
+}
+
+for line in "${JOB_LINES[@]}"; do
+  IFS=$'\t' read -r run_tag leaf_tag action runtime_cfg log_path cmd <<< "${line}"
+  desc="${run_tag}/${leaf_tag}/${action}"
+  echo "[repair:start] run=${run_tag} leaf=${leaf_tag} action=${action}"
+  echo "[repair:start] cmd=${cmd}"
+
+  base_cfg="${runtime_cfg%.yaml}__base.yaml"
+  cp "${runtime_cfg}" "${base_cfg}"
+
+  success="false"
+  last_status=0
+  last_try_log="${log_path}"
+
+  for attempt in 1 2 3; do
+    try_cfg="${runtime_cfg%.yaml}__try${attempt}.yaml"
+    try_log="${log_path%.log}.try${attempt}.log"
+    last_try_log="${try_log}"
+
+    if [[ "${attempt}" == "1" ]]; then
+      cp "${base_cfg}" "${try_cfg}"
     else
-      status=$?
-      fail_count=$((fail_count + 1))
-      echo "[repair:fail] ${desc} status=${status}"
+      apply_retry_profile "${base_cfg}" "${try_cfg}" "${action}" "${attempt}"
+    fi
+
+    echo "[repair:try] ${desc} attempt=${attempt} cfg=${try_cfg}"
+    if PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      "${PYTHON_BIN}" "${ROOT_DIR}/src/train.py" --config "${try_cfg}" > "${try_log}" 2>&1; then
+      success="true"
+      cp "${try_log}" "${log_path}"
+      echo "[repair:done] ${desc} attempt=${attempt}"
+      break
+    else
+      last_status=$?
+      echo "[repair:retry] ${desc} attempt=${attempt} status=${last_status}"
+      cp "${try_log}" "${log_path}"
+      if [[ "${attempt}" == "3" ]]; then
+        break
+      fi
     fi
   done
+
+  if [[ "${success}" != "true" ]]; then
+    fail_count=$((fail_count + 1))
+    echo "[repair:fail] ${desc} status=${last_status} log=${last_try_log}"
+  fi
 done
 
 echo "[repair] finished fail_count=${fail_count}"
