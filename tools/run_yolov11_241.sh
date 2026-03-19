@@ -14,6 +14,7 @@ E241_SAFE_WORKERS="${E241_SAFE_WORKERS:-4}"
 E241_VRAM_GUARD="${E241_VRAM_GUARD:-auto}"   # auto|on|off
 E241_GUARD_MAX_GB="${E241_GUARD_MAX_GB:-10}" # apply guard when total VRAM <= this value in auto mode
 E241_RESUME_POLICY="${E241_RESUME_POLICY:-auto}" # auto|off
+E241_CLEAR_LABEL_CACHE="${E241_CLEAR_LABEL_CACHE:-on}" # on|off
 CLEANUP_FILES=()
 ACTIVE_CHILD_PID=""
 INTERRUPT_IN_PROGRESS=0
@@ -223,6 +224,7 @@ Env:
   E241_GUARD_MAX_GB=10
   E241_SAFE_BATCH=6
   E241_RESUME_POLICY=auto|off  # auto: read latest results.csv and choose fresh/resume/validate-only
+  E241_CLEAR_LABEL_CACHE=on|off  # on: remove dataset labels/*.cache before each run (default on)
   E241_SAFE_WORKERS=4  # worker cap for non-low-VRAM path (avoid CPU/IO bottleneck on strong GPU machines)
 USAGE
 }
@@ -280,6 +282,11 @@ fi
 
 if [[ "${E241_RESUME_POLICY}" != "auto" && "${E241_RESUME_POLICY}" != "off" ]]; then
   echo "[error] invalid --resume-policy='${E241_RESUME_POLICY}', expected auto|off" >&2
+  exit 2
+fi
+
+if [[ "${E241_CLEAR_LABEL_CACHE}" != "on" && "${E241_CLEAR_LABEL_CACHE}" != "off" ]]; then
+  echo "[error] invalid E241_CLEAR_LABEL_CACHE='${E241_CLEAR_LABEL_CACHE}', expected on|off" >&2
   exit 2
 fi
 
@@ -703,6 +710,34 @@ print(
     f"safe_batch={safe_batch} safe_workers={safe_workers} changed={changed}"
 )
 PY
+
+if [[ "${E241_CLEAR_LABEL_CACHE}" == "on" ]]; then
+  export _E241_RUN_CFG="${RUNTIME_CONFIG}"
+  mapfile -t _E241_CACHE_FILES < <("${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+import yaml
+import os
+
+cfg_path = Path(os.environ["_E241_RUN_CFG"]).resolve()
+with cfg_path.open("r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f) or {}
+if not isinstance(cfg, dict):
+    raise SystemExit(0)
+data_root = str(cfg.get("data_root", "")).strip()
+if not data_root:
+    raise SystemExit(0)
+labels_dir = Path(data_root) / "labels"
+for name in ("train.cache", "val.cache", "test.cache"):
+    p = labels_dir / name
+    if p.exists():
+        print(str(p))
+PY
+)
+  for _cache in "${_E241_CACHE_FILES[@]:-}"; do
+    rm -f "${_cache}" || true
+    echo "[run-241][cache] removed ${_cache}"
+  done
+fi
 
 RECOVERY_PRE_ACTION="fresh"
 if [[ "${E241_RESUME_POLICY}" == "auto" ]]; then
