@@ -28,7 +28,7 @@ data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetmy
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
 epochs: 150
-imgsz: 640
+imgsz: 350
 batch: 6  # 约束：batchsize < 8，显存 ≤24GB
 device: ""
 
@@ -46,6 +46,9 @@ patience: 0        # 0 表示禁用早停；数值越大，在验证集无提升
 lr0: 0.012          # 值越大 → 初期收敛更快但不稳定风险更高；值越小 → 更安全但收敛更慢
 lrf: 0.12           # 值越大 → 最终学习率更高；值越小 → 后期训练更保守
 warmup_epochs: 0  # 较长的 warmup 有助于稳定初期训练；0 表示关闭 warmup
+hsv_h: 0.005
+hsv_s: 0.20
+hsv_v: 0.20
 save_train_pic: false
 save_val_pic: true
 save_test_pic: true

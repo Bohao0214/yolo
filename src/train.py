@@ -1859,6 +1859,28 @@ def main() -> None:
             exist_ok=True,
             save=True,
         )
+        # Optional augmentation/optimizer knobs passed from YAML when provided.
+        for key in (
+            "hsv_h",
+            "hsv_s",
+            "hsv_v",
+            "degrees",
+            "translate",
+            "scale",
+            "shear",
+            "perspective",
+            "flipud",
+            "fliplr",
+            "mosaic",
+            "mixup",
+            "copy_paste",
+            "erasing",
+            "close_mosaic",
+            "optimizer",
+            "weight_decay",
+        ):
+            if key in cfg:
+                train_kwargs[key] = cfg[key]
         trainer_cls = _build_enhance241_trainer_cls(model, cfg, audit_state)
         if trainer_cls is not None:
             model.train(trainer=trainer_cls, **train_kwargs)
