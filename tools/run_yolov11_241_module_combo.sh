@@ -17,7 +17,7 @@ SAFE_BATCH_OVERRIDE="${SAFE_BATCH_OVERRIDE:-${E241_SAFE_BATCH:-6}}"
 SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
-PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
+PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-python}"
 DRY_RUN="false"
 COMBOS_RAW="${COMBOS_RAW:-}"
 ACTIVE_CHILD_PID=""
@@ -165,7 +165,7 @@ Env overrides:
   BASE_CONFIG, EPOCHS_OVERRIDE, COMBOS_RAW, FORCE_MODE, SEED_OVERRIDE, BATCH_OVERRIDE
   D1_WORKERS_OVERRIDE(default 4), VRAM_GUARD_OVERRIDE(auto|on|off), GUARD_MAX_GB_OVERRIDE(default 10)
   SAFE_BATCH_OVERRIDE(default 6), SAFE_WORKERS_OVERRIDE(default 4)
-  TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN
+  TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN
 USAGE
 }
 
@@ -265,19 +265,14 @@ if [[ -z "${LOG_ROOT}" ]]; then
   LOG_ROOT="${ROOT_DIR}/experiments/_logs/module_combo/${MATRIX_TAG}"
 fi
 
-if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
+python_has_pyyaml() {
+  local py="$1"
+  "${py}" - <<'PY' >/dev/null 2>&1
 import yaml  # noqa: F401
 PY
-then
-  if [[ -x "/home/ubuntu/anaconda3/envs/yolo11/bin/python" ]]; then
-    PYTHON_CFG_BIN="/home/ubuntu/anaconda3/envs/yolo11/bin/python"
-  fi
-fi
+}
 
-if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
-import yaml  # noqa: F401
-PY
-then
+if ! python_has_pyyaml "${PYTHON_CFG_BIN}"; then
   echo "[error] python for config generation has no PyYAML: ${PYTHON_CFG_BIN}" >&2
   exit 3
 fi

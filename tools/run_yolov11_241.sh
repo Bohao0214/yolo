@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+PYTHON_BIN="python"
 E241_SAFE_BATCH="${E241_SAFE_BATCH:-6}"
 E241_SAFE_WORKERS="${E241_SAFE_WORKERS:-4}"
 E241_VRAM_GUARD="${E241_VRAM_GUARD:-auto}"   # auto|on|off
@@ -218,7 +218,6 @@ Examples:
   bash tools/run_yolov11_241.sh configs/enhance/datasetm6c/defect241.yaml b1 b2
 
 Env:
-  PYTHON_BIN=/path/to/python
   BASE_CONFIG=/path/to/base_config.yaml
   E241_VRAM_GUARD=auto|on|off
   E241_GUARD_MAX_GB=10
@@ -310,12 +309,8 @@ PY
 }
 
 if ! ensure_ultralytics "${PYTHON_BIN}"; then
-  if [[ -x "/home/ubuntu/anaconda3/envs/yolo11/bin/python" ]] && ensure_ultralytics "/home/ubuntu/anaconda3/envs/yolo11/bin/python"; then
-    PYTHON_BIN="/home/ubuntu/anaconda3/envs/yolo11/bin/python"
-  else
-    echo "[error] Failed to import ultralytics. Activate conda env 'yolo11' or set PYTHON_BIN." >&2
-    exit 3
-  fi
+  echo "[error] Failed to import ultralytics with current python. Activate conda env 'yolo11' first." >&2
+  exit 3
 fi
 
 RAW_SWITCHES=("$@")

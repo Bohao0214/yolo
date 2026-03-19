@@ -14,7 +14,7 @@ TRAIN_MODE_OVERRIDE="${TRAIN_MODE_OVERRIDE:-}"
 MAX_PARALLEL="${MAX_PARALLEL:-2}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
-PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
+PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-python}"
 DATASET_REGISTRY="${DATASET_REGISTRY:-${ROOT_DIR}/dataset/yolo/public_dataset_registry.yaml}"
 CLEAR_LABEL_CACHE="${CLEAR_LABEL_CACHE:-on}" # on|off
 VRAM_GUARD_OVERRIDE="${VRAM_GUARD_OVERRIDE:-auto}" # auto|on|off
@@ -253,7 +253,7 @@ Examples:
 
 Env overrides:
   BASE_CONFIG, RUN_TAG, RUNNER_MODE, COMBOS_RAW, BATCH_OVERRIDE, EPOCHS_OVERRIDE,
-  TRAIN_MODE_OVERRIDE, MAX_PARALLEL, TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN,
+  TRAIN_MODE_OVERRIDE, MAX_PARALLEL, TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN,
   DATASET_REGISTRY, CLEAR_LABEL_CACHE, VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
 USAGE
 }
@@ -420,19 +420,14 @@ if [[ ${#DATASET_PATHS[@]} -eq 0 ]]; then
   exit 2
 fi
 
-if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
+python_has_pyyaml() {
+  local py="$1"
+  "${py}" - <<'PY' >/dev/null 2>&1
 import yaml  # noqa: F401
 PY
-then
-  if [[ -x "/home/ubuntu/anaconda3/envs/yolo11/bin/python" ]]; then
-    PYTHON_CFG_BIN="/home/ubuntu/anaconda3/envs/yolo11/bin/python"
-  fi
-fi
+}
 
-if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
-import yaml  # noqa: F401
-PY
-then
+if ! python_has_pyyaml "${PYTHON_CFG_BIN}"; then
   echo "[error] python for config generation has no PyYAML: ${PYTHON_CFG_BIN}" >&2
   exit 3
 fi

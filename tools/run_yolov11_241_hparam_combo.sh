@@ -19,7 +19,7 @@ SAFE_BATCH_OVERRIDE="${SAFE_BATCH_OVERRIDE:-${E241_SAFE_BATCH:-6}}"
 SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 TMP_CFG_DIR="${TMP_CFG_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-}"
-PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-${PYTHON_BIN:-python}}"
+PYTHON_CFG_BIN="${PYTHON_CFG_BIN:-python}"
 DRY_RUN="false"
 ACTIVE_CHILD_PID=""
 INTERRUPT_IN_PROGRESS=0
@@ -176,7 +176,7 @@ Env overrides:
   BASE_CONFIG, SWEEP_TAG, MODULES_RAW, HPARAMS_RAW, GRID_RAW, MAX_CASES_OVERRIDE
   FORCE_MODE, SEED_OVERRIDE, D1_WORKERS_OVERRIDE
   VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
-  TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN, PYTHON_BIN
+  TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN
 USAGE
 }
 
@@ -282,15 +282,6 @@ if [[ -z "${TMP_CFG_DIR}" ]]; then
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
   LOG_ROOT="${ROOT_DIR}/experiments/_logs/hparam_combo/${SWEEP_TAG}"
-fi
-
-if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
-import yaml  # noqa: F401
-PY
-then
-  if [[ -x "/home/ubuntu/anaconda3/envs/yolo11/bin/python" ]]; then
-    PYTHON_CFG_BIN="/home/ubuntu/anaconda3/envs/yolo11/bin/python"
-  fi
 fi
 
 if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1
