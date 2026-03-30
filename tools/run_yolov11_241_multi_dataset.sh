@@ -22,6 +22,7 @@ GUARD_MAX_GB_OVERRIDE="${GUARD_MAX_GB_OVERRIDE:-10}"
 SAFE_BATCH_OVERRIDE="${SAFE_BATCH_OVERRIDE:-${E241_SAFE_BATCH:-6}}"
 SAFE_WORKERS_OVERRIDE="${SAFE_WORKERS_OVERRIDE:-${E241_SAFE_WORKERS:-4}}"
 DRY_RUN="false"
+METHOD_TAG_OVERRIDE="${METHOD_TAG_OVERRIDE:-}"
 
 DATASET_PATHS=()
 RUNNING_PIDS=()
@@ -217,6 +218,7 @@ Main options:
   --batch N          Override batch size for all datasets
   --epochs N         Override epochs for all datasets
   --train-mode MODE  Override cfg mode (test | train_test | finetune_test)
+  --method-tag NAME  Force output structure: experiments/NAME/<dataset>/exp_*
   --parallel N       Max datasets running at the same time (default 2)
   --clear-label-cache MODE
                     on|off (default on). Remove stale label *.cache before launch.
@@ -253,7 +255,7 @@ Examples:
 
 Env overrides:
   BASE_CONFIG, RUN_TAG, RUNNER_MODE, COMBOS_RAW, BATCH_OVERRIDE, EPOCHS_OVERRIDE,
-  TRAIN_MODE_OVERRIDE, MAX_PARALLEL, TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN,
+  TRAIN_MODE_OVERRIDE, METHOD_TAG_OVERRIDE, MAX_PARALLEL, TMP_CFG_DIR, LOG_ROOT, PYTHON_CFG_BIN,
   DATASET_REGISTRY, CLEAR_LABEL_CACHE, VRAM_GUARD_OVERRIDE, GUARD_MAX_GB_OVERRIDE, SAFE_BATCH_OVERRIDE, SAFE_WORKERS_OVERRIDE
 USAGE
 }
@@ -313,6 +315,11 @@ while [[ $# -gt 0 ]]; do
     --train-mode)
       [[ $# -ge 2 ]] || { echo "[error] --train-mode requires a value" >&2; exit 2; }
       TRAIN_MODE_OVERRIDE="$2"
+      shift 2
+      ;;
+    --method-tag)
+      [[ $# -ge 2 ]] || { echo "[error] --method-tag requires a value" >&2; exit 2; }
+      METHOD_TAG_OVERRIDE="$2"
       shift 2
       ;;
     --parallel)
@@ -497,6 +504,7 @@ generate_dataset_bundle() {
   _M_BATCH_OVERRIDE="${BATCH_OVERRIDE}" \
   _M_EPOCHS_OVERRIDE="${EPOCHS_OVERRIDE}" \
   _M_TRAIN_MODE_OVERRIDE="${TRAIN_MODE_OVERRIDE}" \
+  _M_METHOD_TAG="${METHOD_TAG_OVERRIDE}" \
   _M_DATASET_REGISTRY="${DATASET_REGISTRY}" \
   "${PYTHON_CFG_BIN}" - <<'PY'
 import ast
@@ -781,6 +789,7 @@ run_tag = os.environ["_M_RUN_TAG"].strip()
 batch_override = os.environ["_M_BATCH_OVERRIDE"].strip()
 epochs_override = os.environ["_M_EPOCHS_OVERRIDE"].strip()
 train_mode_override = os.environ["_M_TRAIN_MODE_OVERRIDE"].strip()
+method_tag_override = os.environ["_M_METHOD_TAG"].strip()
 dataset_registry_path_s = os.environ.get("_M_DATASET_REGISTRY", "").strip()
 
 if not dataset_root.is_dir():
@@ -939,7 +948,9 @@ out_data.parent.mkdir(parents=True, exist_ok=True)
 with out_data.open("w", encoding="utf-8") as f:
     yaml.safe_dump(data_doc, f, sort_keys=False, allow_unicode=True)
 
-cfg["exp_name"] = f"baseline/{dataset_tag}"
+if method_tag_override:
+    cfg["yolo_version"] = method_tag_override
+cfg["exp_name"] = dataset_tag
 
 cfg["data"] = str(out_data)
 cfg["data_root"] = str(dataset_root)
