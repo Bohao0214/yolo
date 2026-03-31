@@ -110,13 +110,49 @@ write_experiment_metrics_for_exp() {
   local log_path="$2"
   local tag="$3"
   local out
+  local rc=0
   [[ -d "${exp_dir}" ]] || return 0
   out="$("${PYTHON_CFG_BIN}" "${ROOT_DIR}/tools/generate_paper_metrics.py" \
     --exp-dir "${exp_dir}" \
     --log "${log_path}" \
-    --tag "${tag}" 2>/dev/null || true)"
+    --tag "${tag}" 2>/dev/null)" || rc=$?
+  if [[ "${rc}" -ne 0 ]]; then
+    echo "[multi-dataset:${tag}] warn: generate_paper_metrics failed (rc=${rc})"
+    return 1
+  fi
   if [[ -n "${out}" ]]; then
     echo "[multi-dataset:${tag}] ${out}"
+  fi
+  if [[ ! -f "${exp_dir}/metrics/experiment_metrics.csv" ]]; then
+    echo "[multi-dataset:${tag}] warn: metrics snapshot missing: ${exp_dir}/metrics/experiment_metrics.csv"
+    return 1
+  fi
+  return 0
+}
+
+infer_exp_root_from_cfg() {
+  local cfg_path="$1"
+  _M_CFG_PATH="${cfg_path}" _M_ROOT_DIR="${ROOT_DIR}" "${PYTHON_CFG_BIN}" - <<'PY'
+import os
+from pathlib import Path
+import yaml
+
+cfg_path = Path(os.environ["_M_CFG_PATH"]).resolve()
+root_dir = Path(os.environ["_M_ROOT_DIR"]).resolve()
+with cfg_path.open("r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f) or {}
+if not isinstance(cfg, dict):
+    raise SystemExit(0)
+yolo_version = str(cfg.get("yolo_version", "yolo11")).strip() or "yolo11"
+exp_name = str(cfg.get("exp_name", "defect")).strip() or "defect"
+print(str(root_dir / "experiments" / yolo_version / exp_name))
+PY
+}
+
+latest_exp_dir_under_root() {
+  local exp_root="$1"
+  if [[ -d "${exp_root}" ]]; then
+    ls -1dt "${exp_root}"/exp_* 2>/dev/null | head -n 1 || true
   fi
 }
 
@@ -954,6 +990,7 @@ cfg["exp_name"] = dataset_tag
 
 cfg["data"] = str(out_data)
 cfg["data_root"] = str(dataset_root)
+cfg["single_cls"] = bool(int(nc) == 1)
 
 if batch_override:
     cfg["batch"] = int(batch_override)
@@ -1137,6 +1174,8 @@ else
       prune_running_pid "${pid}"
       j="${PID_TO_INDEX[$pid]}"
       log_path="${LOG_ROOT}/${DATASET_TAGS[$j]}.log"
+      exp_root_from_cfg="$(infer_exp_root_from_cfg "${CFG_PATHS[$j]}")"
+      exp_dir_from_log=""
 
       if [[ "${status}" != "0" ]]; then
         fail_count=$((fail_count + 1))
@@ -1144,7 +1183,10 @@ else
         if [[ "${RUNNER_MODE}" == "baseline" ]]; then
           exp_dir_from_log="$(extract_exp_dir_from_log "${log_path}")"
           if [[ -z "${exp_dir_from_log}" ]]; then
-            exp_dir_from_log="${ROOT_DIR}/experiments/baseline/${DATASET_TAGS[$j]}/exp_error_${RUN_TAG_SAFE}"
+            exp_dir_from_log="$(latest_exp_dir_under_root "${exp_root_from_cfg}")"
+          fi
+          if [[ -z "${exp_dir_from_log}" ]]; then
+            exp_dir_from_log="${exp_root_from_cfg}/exp_error_${RUN_TAG_SAFE}"
           fi
           write_error_md_for_exp "${exp_dir_from_log}" "${status}" "${DATASET_TAGS[$j]}" "${CFG_PATHS[$j]}" "${DATA_YAMLS[$j]}" "${log_path}"
         fi
@@ -1152,9 +1194,18 @@ else
         echo "[multi-dataset:${DATASET_TAGS[$j]}] success log=${log_path}"
         if [[ "${RUNNER_MODE}" == "baseline" ]]; then
           exp_dir_from_log="$(extract_exp_dir_from_log "${log_path}")"
+          if [[ -z "${exp_dir_from_log}" ]]; then
+            exp_dir_from_log="$(latest_exp_dir_under_root "${exp_root_from_cfg}")"
+          fi
           if [[ -n "${exp_dir_from_log}" ]]; then
-            write_experiment_metrics_for_exp "${exp_dir_from_log}" "${log_path}" "${DATASET_TAGS[$j]}"
+            if ! write_experiment_metrics_for_exp "${exp_dir_from_log}" "${log_path}" "${DATASET_TAGS[$j]}"; then
+              fail_count=$((fail_count + 1))
+              write_error_md_for_exp "${exp_dir_from_log}" "metrics_missing" "${DATASET_TAGS[$j]}" "${CFG_PATHS[$j]}" "${DATA_YAMLS[$j]}" "${log_path}"
+            fi
           else
+            fail_count=$((fail_count + 1))
+            exp_dir_from_log="${exp_root_from_cfg}/exp_error_${RUN_TAG_SAFE}"
+            write_error_md_for_exp "${exp_dir_from_log}" "exp_dir_missing" "${DATASET_TAGS[$j]}" "${CFG_PATHS[$j]}" "${DATA_YAMLS[$j]}" "${log_path}"
             echo "[multi-dataset:${DATASET_TAGS[$j]}] warn: unable to resolve exp_dir from log for experiment metrics"
           fi
         fi
