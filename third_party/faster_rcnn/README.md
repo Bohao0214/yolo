@@ -6,7 +6,7 @@
 conda run -n yolo11 python third_party/faster_rcnn/train.py \
   --dataset-root /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c \
   --output-dir /home/ubuntu/hpproject/yolo/experiments/det_bench/datasetm6c/faster_rcnn \
-  --epochs 30 --batch-size 4 --device 0
+  --epochs 30 --batch-size 4 --lr 0.0025 --pretrained-coco --device 0
 ```
 
 推理并导出 JSON 预测:
@@ -24,3 +24,4 @@ conda run -n yolo11 python third_party/faster_rcnn/predict.py \
 
 - 标签读取支持 YOLO 框格式（`cls xc yc w h`）和 YOLO 分割格式（`cls x1 y1 ...`，自动转最小外接框）。
 - 导出的 JSON 可直接用于 `tools/eval_detection_benchmark.py` 做统一主表对比。
+- 建议优先使用 `--pretrained-coco` 做微调，通常显著好于从头训练。

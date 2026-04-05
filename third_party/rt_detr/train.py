@@ -14,7 +14,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train RT-DETR on datasetm6c-style YOLO dataset.")
     p.add_argument("--dataset-root", type=Path, required=True, help="Dataset root, e.g. dataset/yolo/datasetm6c")
     p.add_argument("--output-dir", type=Path, required=True, help="Output dir for run and copied best/last weights.")
-    p.add_argument("--model", type=str, default="rtdetr-l.yaml", help="Ultralytics model yaml/pt.")
+    p.add_argument("--model", type=str, default="rtdetr-l.pt", help="Ultralytics model yaml/pt.")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--batch", type=int, default=8)
@@ -26,6 +26,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--patience", type=int, default=0)
     p.add_argument("--cache", action="store_true")
     p.add_argument("--pretrained", action="store_true", help="Use Ultralytics pretrained init when supported.")
+    p.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Enable deterministic training in Ultralytics (may trigger CUDA deterministic warnings).",
+    )
     return p.parse_args()
 
 
@@ -80,12 +85,17 @@ def main() -> None:
         seed=int(args.seed),
         patience=max(0, int(args.patience)),
         verbose=True,
+        deterministic=bool(args.deterministic),
     )
     model_name = str(args.model).lower()
     if bool(args.pretrained):
         train_kwargs["pretrained"] = True
     elif model_name.endswith(".yaml") or model_name.endswith(".yml"):
         train_kwargs["pretrained"] = False
+        print(
+            "[warn] training from YAML without --pretrained means training from scratch; "
+            "this is often much worse on small datasets."
+        )
     if args.device:
         train_kwargs["device"] = args.device
     if args.cache:
