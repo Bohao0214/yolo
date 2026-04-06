@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+用法说明（典型样本可视化）：
+
+基于 tables/metadata.json 与 raw_preds/*/preds_*.json 生成对比样例图，
+输出到 figures/compare_cases、figures/fp_cases、figures/fn_cases。
+默认报告根目录为：
+/home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+
+示例：
+conda run -n yolo11 python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/code/draw_qualitative_cases.py \
+  --report-root /home/ubuntu/hpproject/yolo/analyze/code/ch4tool \
+  --max-per-cat 5
+
+可选参数：
+--highlight-thr --dup-iou --score-thr
+"""
 from __future__ import annotations
 
 import argparse

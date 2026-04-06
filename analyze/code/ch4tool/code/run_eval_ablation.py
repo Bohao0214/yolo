@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+"""
+用法说明（消融表生成）：
+
+本脚本读取 compare_main.csv，自动归类并输出 ablation_main.csv / ablation_main.md。
+默认报告根目录为脚本上一级：
+/home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+
+示例：
+conda run -n yolo11 python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/code/run_eval_ablation.py \
+  --report-root /home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+"""
 from __future__ import annotations
 
 import argparse

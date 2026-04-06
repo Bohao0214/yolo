@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+"""
+用法说明（汇总报告生成）：
+
+读取 tables/*.csv 与 tables/*.json，生成 report.md（论文写作版）。
+默认报告根目录为：
+/home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+
+示例：
+conda run -n yolo11 python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/code/build_report.py \
+  --report-root /home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+"""
 from __future__ import annotations
 
 import argparse

@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+用法说明（热力图/响应图）：
+
+优先级：EigenCAM -> 中间特征响应 -> 框分数密度图（自动回退）。
+输出到 figures/heatmaps，并记录方法到 tables/heatmap_method.json。
+默认报告根目录为：
+/home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+
+示例：
+conda run -n yolo11 python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/code/draw_heatmap.py \
+  --report-root /home/ubuntu/hpproject/yolo/analyze/code/ch4tool \
+  --num-cases 5
+
+可选参数：
+--imgsz
+"""
 from __future__ import annotations
 
 import argparse

@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+用法说明（统一对比评估，不重训）：
+
+默认会把当前脚本所在目录的上一级作为报告根目录：
+/home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+
+执行前请先填写：
+1. models_to_eval.txt（每行一个模型权重绝对路径）
+2. dataset_override.txt（可选，写 dataset_root=/abs/path 和 data_yaml=/abs/path）
+
+示例：
+conda run -n yolo11 python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/code/run_eval_compare.py \
+  --report-root /home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+
+可选参数（覆盖自动参数）：
+--imgsz --conf --iou --max-det --batch --device --score-thr --obj-iou --split
+"""
 from __future__ import annotations
 
 import argparse
