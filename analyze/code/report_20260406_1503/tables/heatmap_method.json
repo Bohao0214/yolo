@@ -1,0 +1,9 @@
+{
+  "status": "skipped",
+  "reason": "no successful model rows",
+  "method_priority": [
+    "EigenCAM",
+    "feature_response",
+    "score_box_density"
+  ]
+}

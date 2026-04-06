@@ -1,0 +1,187 @@
+{
+  "report_root": "/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503",
+  "project_root": "/home/ubuntu/hpproject/yolo",
+  "models_txt": "/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503/models_to_eval.txt",
+  "dataset_override_txt": "/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503/dataset_override.txt",
+  "data_yaml": "",
+  "dataset_root": "",
+  "split_requested": "test",
+  "split_used": "test",
+  "split_note": "",
+  "eval_params": {
+    "imgsz": 640,
+    "conf": 0.001,
+    "iou": 0.7,
+    "max_det": 300,
+    "batch": 8,
+    "device": "0",
+    "score_thr": 0.25,
+    "obj_iou": 0.5
+  },
+  "pending_user_inputs": [
+    "imgsz",
+    "conf",
+    "iou",
+    "max_det",
+    "batch",
+    "device",
+    "dataset_root",
+    "data_yaml",
+    "eval_split(test/val)"
+  ],
+  "baseline_model": null,
+  "best_model": null,
+  "baseline_note": "no model evaluated successfully",
+  "model_specs": [
+    {
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt",
+      "model_name": "yolo_a7+b7+c7+d7",
+      "exp_name": "a7b7c7d7/datasetm6c/exp_2604050107",
+      "ablation_tags": [
+        "a7",
+        "b7",
+        "c7",
+        "d7"
+      ],
+      "module_groups": [
+        "feature_extraction",
+        "feature_fusion",
+        "classification_calibration"
+      ],
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt",
+      "config_path": "",
+      "data_yaml": ""
+    },
+    {
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt",
+      "model_name": "yolo_a4+b7+d6",
+      "exp_name": "a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619",
+      "ablation_tags": [
+        "a4",
+        "b7",
+        "d6"
+      ],
+      "module_groups": [
+        "feature_extraction",
+        "feature_fusion",
+        "classification_calibration"
+      ],
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt",
+      "config_path": "",
+      "data_yaml": ""
+    },
+    {
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt",
+      "model_name": "yolo_a3+b3+d3",
+      "exp_name": "a3b3d3/datasetm6c/exp_2604050042",
+      "ablation_tags": [
+        "a3",
+        "b3",
+        "d3"
+      ],
+      "module_groups": [
+        "feature_extraction",
+        "feature_fusion",
+        "classification_calibration"
+      ],
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt",
+      "config_path": "",
+      "data_yaml": ""
+    },
+    {
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt",
+      "model_name": "yolo_a3+c5",
+      "exp_name": "yolo11/defect241__a3__c5/exp_2603032345",
+      "ablation_tags": [
+        "a3",
+        "c5"
+      ],
+      "module_groups": [
+        "feature_extraction",
+        "classification_calibration"
+      ],
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt",
+      "config_path": "",
+      "data_yaml": ""
+    }
+  ],
+  "compare_rows": [
+    {
+      "model_name": "yolo_a7+b7+c7+d7",
+      "exp_name": "a7b7c7d7/datasetm6c/exp_2604050107",
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt",
+      "ablation_tags": "a7+b7+c7+d7",
+      "module_groups": "feature_extraction+feature_fusion+classification_calibration",
+      "n_tags": 4,
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt",
+      "precision": "",
+      "recall": "",
+      "map50": "",
+      "map50_95": "",
+      "tp": "",
+      "fp": "",
+      "fn": "",
+      "image_fp_rate": ""
+    },
+    {
+      "model_name": "yolo_a4+b7+d6",
+      "exp_name": "a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619",
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt",
+      "ablation_tags": "a4+b7+d6",
+      "module_groups": "feature_extraction+feature_fusion+classification_calibration",
+      "n_tags": 3,
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt",
+      "precision": "",
+      "recall": "",
+      "map50": "",
+      "map50_95": "",
+      "tp": "",
+      "fp": "",
+      "fn": "",
+      "image_fp_rate": ""
+    },
+    {
+      "model_name": "yolo_a3+b3+d3",
+      "exp_name": "a3b3d3/datasetm6c/exp_2604050042",
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt",
+      "ablation_tags": "a3+b3+d3",
+      "module_groups": "feature_extraction+feature_fusion+classification_calibration",
+      "n_tags": 3,
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt",
+      "precision": "",
+      "recall": "",
+      "map50": "",
+      "map50_95": "",
+      "tp": "",
+      "fp": "",
+      "fn": "",
+      "image_fp_rate": ""
+    },
+    {
+      "model_name": "yolo_a3+c5",
+      "exp_name": "yolo11/defect241__a3__c5/exp_2603032345",
+      "model_path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt",
+      "ablation_tags": "a3+c5",
+      "module_groups": "feature_extraction+classification_calibration",
+      "n_tags": 2,
+      "status": "missing_model",
+      "error": "weights not found: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt",
+      "precision": "",
+      "recall": "",
+      "map50": "",
+      "map50_95": "",
+      "tp": "",
+      "fp": "",
+      "fn": "",
+      "image_fp_rate": ""
+    }
+  ],
+  "note": "统一口径：掩膜转最小外接框后对比的是检测能力，不是分割精度。"
+}

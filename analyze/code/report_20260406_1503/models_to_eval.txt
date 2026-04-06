@@ -1,0 +1,11 @@
+# 每行一个模型权重绝对路径（best.pt/last.pt）
+# 你只需要在这个文件里填写路径：
+# /abs/path/to/model1/best.pt
+# /abs/path/to/model2/best.pt
+# /abs/path/to/model3/best.pt
+# /abs/path/to/model4/best.pt
+
+/home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt
+/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt
+/home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt
+/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt

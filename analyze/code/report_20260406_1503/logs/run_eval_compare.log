@@ -1,0 +1,14 @@
+[2026-04-06 15:15:08] report_root=/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503
+[2026-04-06 15:15:08] models_txt=/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503/models_to_eval.txt
+[2026-04-06 15:15:08] dataset root unresolved; will export status-only tables
+[2026-04-06 15:15:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt
+[2026-04-06 15:15:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt
+[2026-04-06 15:15:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt
+[2026-04-06 15:15:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt
+[2026-04-06 15:16:06] report_root=/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503
+[2026-04-06 15:16:06] models_txt=/home/ubuntu/hpproject/yolo/analyze/result/report_20260406_1503/models_to_eval.txt
+[2026-04-06 15:16:06] dataset root unresolved; will export status-only tables
+[2026-04-06 15:16:06] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt
+[2026-04-06 15:16:06] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt
+[2026-04-06 15:16:06] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt
+[2026-04-06 15:16:06] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt
