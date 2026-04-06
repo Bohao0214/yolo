@@ -51,3 +51,4 @@ conda_env.yml
 # OS
 .DS_Store
 Thumbs.db
+rtdetr-l.pt
