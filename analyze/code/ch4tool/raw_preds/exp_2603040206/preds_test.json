@@ -1,0 +1,1127 @@
+{
+  "format": "det_preds_v1",
+  "model": "exp_2603040206",
+  "weights": "/home/ubuntu/hpproject/yolo/experiments/baseline/datasetm6c/exp_2603040206/train/weights/best.pt",
+  "dataset_root": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c",
+  "split": "test",
+  "predictions": [
+    {
+      "image_id": "0031",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0031.png",
+      "boxes": [
+        [
+          78.0773696899414,
+          118.63153839111328,
+          116.76202392578125,
+          170.7196044921875
+        ],
+        [
+          77.96675872802734,
+          118.63081359863281,
+          133.6905517578125,
+          171.0993194580078
+        ],
+        [
+          79.06050109863281,
+          105.66301727294922,
+          168.97735595703125,
+          202.94444274902344
+        ]
+      ],
+      "scores": [
+        0.6036377549171448,
+        0.5215581655502319,
+        0.30174046754837036
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0032",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0032.png",
+      "boxes": [
+        [
+          206.62554931640625,
+          58.09324264526367,
+          321.18658447265625,
+          297.8316345214844
+        ]
+      ],
+      "scores": [
+        0.9680419564247131
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0039",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0039.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0043",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0043.png",
+      "boxes": [
+        [
+          128.4644317626953,
+          73.78495025634766,
+          160.18051147460938,
+          107.17461395263672
+        ]
+      ],
+      "scores": [
+        0.6074793934822083
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0045",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0045.png",
+      "boxes": [
+        [
+          167.0125732421875,
+          106.08246612548828,
+          304.71429443359375,
+          154.46763610839844
+        ]
+      ],
+      "scores": [
+        0.7612385153770447
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0048",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0048.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0049",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0049.png",
+      "boxes": [
+        [
+          140.3584747314453,
+          163.08839416503906,
+          247.1004638671875,
+          206.03564453125
+        ]
+      ],
+      "scores": [
+        0.3081546723842621
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0071",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0071.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0096",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0096.png",
+      "boxes": [
+        [
+          317.03765869140625,
+          90.2287826538086,
+          355.2817077636719,
+          139.83389282226562
+        ],
+        [
+          206.35935974121094,
+          145.42779541015625,
+          232.3384552001953,
+          197.20289611816406
+        ]
+      ],
+      "scores": [
+        0.723772406578064,
+        0.6400682926177979
+      ],
+      "labels": [
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0097",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0097.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0107",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0107.png",
+      "boxes": [
+        [
+          170.2886199951172,
+          66.55726623535156,
+          385.5494384765625,
+          218.01983642578125
+        ]
+      ],
+      "scores": [
+        0.49477002024650574
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0112",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0112.png",
+      "boxes": [
+        [
+          274.0674743652344,
+          156.22268676757812,
+          306.5377197265625,
+          195.3137664794922
+        ],
+        [
+          306.114990234375,
+          117.02743530273438,
+          340.05462646484375,
+          159.57540893554688
+        ]
+      ],
+      "scores": [
+        0.7484004497528076,
+        0.32299357652664185
+      ],
+      "labels": [
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0127",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0127.png",
+      "boxes": [
+        [
+          191.64712524414062,
+          154.83883666992188,
+          320.72772216796875,
+          208.4195556640625
+        ]
+      ],
+      "scores": [
+        0.7389311790466309
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0139",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0139.png",
+      "boxes": [
+        [
+          200.79254150390625,
+          83.02676391601562,
+          366.60400390625,
+          224.90072631835938
+        ],
+        [
+          357.81585693359375,
+          152.89389038085938,
+          403.94061279296875,
+          205.31326293945312
+        ],
+        [
+          242.9518280029297,
+          190.02993774414062,
+          342.0521545410156,
+          227.11659240722656
+        ]
+      ],
+      "scores": [
+        0.8554379940032959,
+        0.5194380283355713,
+        0.3884381651878357
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0140",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0140.png",
+      "boxes": [
+        [
+          226.08152770996094,
+          55.77095031738281,
+          308.105712890625,
+          146.19375610351562
+        ]
+      ],
+      "scores": [
+        0.2974779009819031
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0149",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0149.png",
+      "boxes": [
+        [
+          250.29685974121094,
+          85.87852478027344,
+          278.9298095703125,
+          126.75038146972656
+        ],
+        [
+          250.69589233398438,
+          91.10958862304688,
+          273.65386962890625,
+          125.08715057373047
+        ],
+        [
+          250.75538635253906,
+          155.3292694091797,
+          285.9439392089844,
+          208.0875701904297
+        ]
+      ],
+      "scores": [
+        0.6241703033447266,
+        0.5549790263175964,
+        0.4998435974121094
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0152",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0152.png",
+      "boxes": [
+        [
+          223.65399169921875,
+          49.67666244506836,
+          310.6778869628906,
+          99.13837432861328
+        ],
+        [
+          220.8693084716797,
+          49.57948303222656,
+          361.3878173828125,
+          100.05298614501953
+        ]
+      ],
+      "scores": [
+        0.7503644824028015,
+        0.3517686724662781
+      ],
+      "labels": [
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0161",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0161.png",
+      "boxes": [
+        [
+          292.6273193359375,
+          180.7710418701172,
+          330.4753112792969,
+          239.2487030029297
+        ]
+      ],
+      "scores": [
+        0.8970707058906555
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0162",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0162.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0171",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0171.png",
+      "boxes": [
+        [
+          200.73780822753906,
+          290.333984375,
+          336.0826416015625,
+          361.06866455078125
+        ],
+        [
+          217.06787109375,
+          153.12364196777344,
+          300.4550476074219,
+          194.30615234375
+        ],
+        [
+          178.9910888671875,
+          218.25289916992188,
+          239.18653869628906,
+          249.82102966308594
+        ],
+        [
+          311.8274841308594,
+          220.47894287109375,
+          358.4809265136719,
+          273.16241455078125
+        ]
+      ],
+      "scores": [
+        0.8846821188926697,
+        0.7533611059188843,
+        0.5346488356590271,
+        0.4112360179424286
+      ],
+      "labels": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0173",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0173.png",
+      "boxes": [
+        [
+          265.58880615234375,
+          102.28634643554688,
+          298.92828369140625,
+          149.57664489746094
+        ],
+        [
+          200.92669677734375,
+          109.72887420654297,
+          246.01913452148438,
+          163.79161071777344
+        ]
+      ],
+      "scores": [
+        0.8426174521446228,
+        0.7501606345176697
+      ],
+      "labels": [
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0174",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0174.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0175",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0175.png",
+      "boxes": [
+        [
+          232.2010955810547,
+          135.12583923339844,
+          409.9857482910156,
+          257.3000793457031
+        ]
+      ],
+      "scores": [
+        0.7661212086677551
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0186",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0186.png",
+      "boxes": [
+        [
+          302.3826904296875,
+          187.05735778808594,
+          425.7386779785156,
+          251.91964721679688
+        ]
+      ],
+      "scores": [
+        0.7482860088348389
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0193",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0193.png",
+      "boxes": [
+        [
+          96.04248809814453,
+          91.04999542236328,
+          236.3955078125,
+          181.11114501953125
+        ]
+      ],
+      "scores": [
+        0.8810408711433411
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0204",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0204.png",
+      "boxes": [
+        [
+          314.2032165527344,
+          82.49735260009766,
+          362.24517822265625,
+          139.16317749023438
+        ]
+      ],
+      "scores": [
+        0.5581289529800415
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0213",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0213.png",
+      "boxes": [
+        [
+          131.66818237304688,
+          64.39793395996094,
+          276.4726257324219,
+          192.96507263183594
+        ]
+      ],
+      "scores": [
+        0.883051335811615
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0218",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0218.png",
+      "boxes": [
+        [
+          126.23067474365234,
+          91.91326141357422,
+          294.8565673828125,
+          177.58131408691406
+        ],
+        [
+          122.38444519042969,
+          93.9892349243164,
+          288.1965026855469,
+          112.73063659667969
+        ],
+        [
+          118.35620880126953,
+          155.71499633789062,
+          157.48886108398438,
+          197.46560668945312
+        ]
+      ],
+      "scores": [
+        0.8568127155303955,
+        0.3759807050228119,
+        0.26672232151031494
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0232",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0232.png",
+      "boxes": [
+        [
+          374.061279296875,
+          156.9164581298828,
+          400.13177490234375,
+          200.9652557373047
+        ]
+      ],
+      "scores": [
+        0.40743517875671387
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0238",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0238.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0241",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0241.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0249",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0249.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0256",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0256.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0258",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0258.png",
+      "boxes": [
+        [
+          401.0361633300781,
+          273.10565185546875,
+          419.34686279296875,
+          312.4740295410156
+        ]
+      ],
+      "scores": [
+        0.6277881264686584
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0259",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0259.png",
+      "boxes": [
+        [
+          249.8590087890625,
+          151.69305419921875,
+          287.9665832519531,
+          190.10964965820312
+        ],
+        [
+          324.3212890625,
+          207.88674926757812,
+          402.7796325683594,
+          257.8582763671875
+        ],
+        [
+          248.74957275390625,
+          136.818115234375,
+          307.55718994140625,
+          191.02369689941406
+        ]
+      ],
+      "scores": [
+        0.799766480922699,
+        0.5451574325561523,
+        0.25346341729164124
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0275",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0275.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0278",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0278.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0293",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0293.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0295",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0295.png",
+      "boxes": [
+        [
+          256.1711730957031,
+          201.39463806152344,
+          303.47784423828125,
+          269.9044189453125
+        ]
+      ],
+      "scores": [
+        0.7872670292854309
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0299",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0299.png",
+      "boxes": [
+        [
+          457.96356201171875,
+          375.8883972167969,
+          525.4786987304688,
+          446.45623779296875
+        ]
+      ],
+      "scores": [
+        0.47939833998680115
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0308",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0308.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0340",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0340.png",
+      "boxes": [
+        [
+          221.02984619140625,
+          353.6348876953125,
+          246.15220642089844,
+          381.9089660644531
+        ],
+        [
+          226.40771484375,
+          192.2501678466797,
+          256.1755065917969,
+          246.3285369873047
+        ],
+        [
+          321.4108581542969,
+          344.5131530761719,
+          352.7662658691406,
+          377.7757263183594
+        ]
+      ],
+      "scores": [
+        0.4468599259853363,
+        0.3580998182296753,
+        0.3495413064956665
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0344",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0344.png",
+      "boxes": [
+        [
+          313.16650390625,
+          133.38246154785156,
+          360.7312927246094,
+          172.16690063476562
+        ]
+      ],
+      "scores": [
+        0.6494735479354858
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0345",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0345.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0357",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0357.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0362",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0362.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0365",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0365.png",
+      "boxes": [
+        [
+          160.63909912109375,
+          75.06959533691406,
+          263.97283935546875,
+          131.4249267578125
+        ],
+        [
+          147.8700408935547,
+          140.75845336914062,
+          233.21624755859375,
+          178.08566284179688
+        ]
+      ],
+      "scores": [
+        0.49369391798973083,
+        0.25399360060691833
+      ],
+      "labels": [
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0374",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0374.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0378",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0378.png",
+      "boxes": [
+        [
+          216.37142944335938,
+          211.66949462890625,
+          316.58984375,
+          258.7486267089844
+        ],
+        [
+          266.77606201171875,
+          335.20233154296875,
+          313.5538330078125,
+          360.5702209472656
+        ],
+        [
+          334.51678466796875,
+          312.5113525390625,
+          397.81390380859375,
+          355.390380859375
+        ],
+        [
+          343.99285888671875,
+          314.2728271484375,
+          383.6963806152344,
+          355.73748779296875
+        ]
+      ],
+      "scores": [
+        0.7755234837532043,
+        0.3552681505680084,
+        0.3381786346435547,
+        0.31867706775665283
+      ],
+      "labels": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0391",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0391.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0407",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0407.png",
+      "boxes": [
+        [
+          176.236328125,
+          145.2181854248047,
+          257.80450439453125,
+          201.72154235839844
+        ]
+      ],
+      "scores": [
+        0.269580602645874
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0411",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0411.png",
+      "boxes": [
+        [
+          375.05584716796875,
+          310.4478454589844,
+          435.3917236328125,
+          368.65264892578125
+        ]
+      ],
+      "scores": [
+        0.6814941167831421
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0413",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0413.png",
+      "boxes": [
+        [
+          339.43280029296875,
+          245.07373046875,
+          386.9526062011719,
+          299.3717041015625
+        ],
+        [
+          268.4200744628906,
+          265.1078796386719,
+          341.73895263671875,
+          348.7964782714844
+        ]
+      ],
+      "scores": [
+        0.8623731732368469,
+        0.8450708985328674
+      ],
+      "labels": [
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0415",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0415.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0419",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0419.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0422",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0422.png",
+      "boxes": [
+        [
+          224.5458984375,
+          302.1375427246094,
+          292.535888671875,
+          361.0460205078125
+        ]
+      ],
+      "scores": [
+        0.8282080292701721
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0423",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0423.png",
+      "boxes": [
+        [
+          171.26759338378906,
+          319.3719177246094,
+          227.73971557617188,
+          373.823486328125
+        ],
+        [
+          189.0102996826172,
+          223.21116638183594,
+          287.61376953125,
+          266.3132019042969
+        ],
+        [
+          245.74557495117188,
+          348.051025390625,
+          281.2457580566406,
+          378.39752197265625
+        ],
+        [
+          193.34201049804688,
+          293.9845886230469,
+          277.6934814453125,
+          325.25579833984375
+        ],
+        [
+          159.79347229003906,
+          116.5277099609375,
+          293.3833923339844,
+          204.754638671875
+        ],
+        [
+          95.54634094238281,
+          191.7884521484375,
+          117.62940216064453,
+          216.99661254882812
+        ]
+      ],
+      "scores": [
+        0.8723688125610352,
+        0.8050573468208313,
+        0.7851593494415283,
+        0.729437530040741,
+        0.43780049681663513,
+        0.2561236321926117
+      ],
+      "labels": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0426",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0430",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0430.png",
+      "boxes": [
+        [
+          192.8140411376953,
+          163.9617156982422,
+          253.92344665527344,
+          188.93267822265625
+        ]
+      ],
+      "scores": [
+        0.6748096346855164
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0432",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0432.png",
+      "boxes": [
+        [
+          366.9104919433594,
+          258.9989929199219,
+          411.85992431640625,
+          300.519775390625
+        ],
+        [
+          278.83575439453125,
+          138.69912719726562,
+          308.4768371582031,
+          172.75657653808594
+        ],
+        [
+          322.2740478515625,
+          358.1818542480469,
+          354.2414855957031,
+          383.048583984375
+        ]
+      ],
+      "scores": [
+        0.837661623954773,
+        0.8046263456344604,
+        0.6633672714233398
+      ],
+      "labels": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image_id": "0436",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0436.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    },
+    {
+      "image_id": "0441",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0441.png",
+      "boxes": [
+        [
+          270.1070556640625,
+          270.7975158691406,
+          347.6273193359375,
+          339.61676025390625
+        ]
+      ],
+      "scores": [
+        0.8881961703300476
+      ],
+      "labels": [
+        0
+      ]
+    },
+    {
+      "image_id": "0450",
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0450.png",
+      "boxes": [],
+      "scores": [],
+      "labels": []
+    }
+  ]
+}

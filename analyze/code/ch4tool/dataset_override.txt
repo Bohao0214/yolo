@@ -1,3 +1,6 @@
 # 可选：手动覆盖数据集路径与 data.yaml
 # dataset_root=/abs/path/to/dataset_root
 # data_yaml=/abs/path/to/data.yaml
+
+data_yaml=/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml
+dataset_root=/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c

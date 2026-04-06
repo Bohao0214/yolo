@@ -1,0 +1,789 @@
+{
+  "fn_cases": [
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0031.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.302150",
+      "best_score": "0.711774",
+      "gt_box": "73.00,101.00,303.00,239.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0043.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.390527",
+      "best_score": "0.459186",
+      "gt_box": "129.00,75.00,193.00,105.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0112.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.809641",
+      "gt_box": "299.00,116.00,353.00,159.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0127.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.323595",
+      "best_score": "0.803442",
+      "gt_box": "223.00,166.00,322.00,208.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0127.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.197908",
+      "best_score": "0.803442",
+      "gt_box": "173.00,129.00,230.00,177.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0140.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.189910",
+      "best_score": "0.283280",
+      "gt_box": "324.00,143.00,355.00,183.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0140.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.381953",
+      "best_score": "0.294848",
+      "gt_box": "234.00,82.00,279.00,155.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0149.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000006",
+      "best_score": "0.475778",
+      "gt_box": "284.00,132.00,311.00,161.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0161.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.321870",
+      "best_score": "0.344255",
+      "gt_box": "280.00,156.00,343.00,265.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0161.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.344255",
+      "gt_box": "150.00,88.00,208.00,150.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0171.png",
+      "gt_index": 2,
+      "diag_type": "regression_poor",
+      "best_iou": "0.245264",
+      "best_score": "0.295153",
+      "gt_box": "179.00,221.00,240.00,253.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0173.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.425457",
+      "gt_box": "261.00,102.00,299.00,151.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0193.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.045724",
+      "best_score": "0.863420",
+      "gt_box": "245.00,152.00,275.00,189.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0204.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.478829",
+      "gt_box": "246.00,149.00,288.00,207.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0213.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.852272",
+      "gt_box": "163.00,243.00,189.00,288.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0213.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.852272",
+      "gt_box": "119.00,230.00,154.00,290.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0218.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.322753",
+      "best_score": "0.264681",
+      "gt_box": "131.00,94.00,289.00,120.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0232.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "375.80,154.64,402.44,191.47"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0232.png",
+      "gt_index": 1,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "391.47,235.35,422.03,316.05"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0241.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.277351",
+      "best_score": "0.310636",
+      "gt_box": "188.00,142.00,307.00,195.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0258.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.311073",
+      "gt_box": "394.00,266.00,422.00,316.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0295.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "303.00,134.00,358.00,175.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0299.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "246.00,168.00,282.00,216.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0299.png",
+      "gt_index": 1,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "241.00,109.00,283.00,150.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0299.png",
+      "gt_index": 2,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "450.00,388.00,505.00,442.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0308.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "201.00,159.00,239.00,214.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0308.png",
+      "gt_index": 1,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "197.00,120.00,217.00,142.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0340.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "225.00,357.00,239.00,376.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0340.png",
+      "gt_index": 1,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "331.42,346.81,349.48,377.19"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0340.png",
+      "gt_index": 2,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "227.96,250.75,246.03,270.45"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0344.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.494498",
+      "best_score": "0.291302",
+      "gt_box": "260.00,376.00,297.00,404.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0362.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "170.04,131.12,197.43,169.20"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0365.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.249041",
+      "best_score": "0.553577",
+      "gt_box": "191.00,152.00,225.00,175.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0365.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.318152",
+      "best_score": "0.553577",
+      "gt_box": "146.00,141.00,180.00,180.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0365.png",
+      "gt_index": 2,
+      "diag_type": "regression_poor",
+      "best_iou": "0.332432",
+      "best_score": "0.273792",
+      "gt_box": "188.00,75.00,264.00,132.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0374.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.201458",
+      "best_score": "0.421155",
+      "gt_box": "290.00,192.00,350.00,220.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0374.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.233841",
+      "best_score": "0.421155",
+      "gt_box": "351.00,143.00,390.00,196.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0378.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.655178",
+      "gt_box": "263.00,327.00,313.00,359.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0378.png",
+      "gt_index": 2,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.655178",
+      "gt_box": "335.00,309.00,380.00,355.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0378.png",
+      "gt_index": 4,
+      "diag_type": "regression_poor",
+      "best_iou": "0.079355",
+      "best_score": "0.364011",
+      "gt_box": "296.00,190.00,323.00,216.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0407.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.645841",
+      "gt_box": "167.00,328.00,190.00,354.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0411.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "379.00,315.00,436.00,370.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0413.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.468172",
+      "best_score": "0.378605",
+      "gt_box": "265.00,243.00,388.00,357.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0419.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "139.42,142.89,183.31,203.62"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0419.png",
+      "gt_index": 1,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "188.44,172.89,233.80,208.01"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0423.png",
+      "gt_index": 2,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.759438",
+      "gt_box": "95.00,275.00,116.00,302.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0423.png",
+      "gt_index": 4,
+      "diag_type": "regression_poor",
+      "best_iou": "0.065674",
+      "best_score": "0.759438",
+      "gt_box": "266.00,116.00,302.00,147.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0423.png",
+      "gt_index": 5,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.759438",
+      "gt_box": "228.00,97.00,263.00,123.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.426048",
+      "best_score": "0.619030",
+      "gt_box": "232.00,282.00,281.00,313.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 2,
+      "diag_type": "regression_poor",
+      "best_iou": "0.225097",
+      "best_score": "0.619030",
+      "gt_box": "190.00,260.00,237.00,295.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 3,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "185.00,194.00,253.00,227.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 4,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "234.00,147.00,271.00,176.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 5,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "166.00,141.00,195.00,158.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 6,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "214.00,126.00,235.00,159.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 7,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "281.00,122.00,312.00,158.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 8,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "248.00,108.00,285.00,138.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "gt_index": 9,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.619030",
+      "gt_box": "179.00,98.00,243.00,123.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0430.png",
+      "gt_index": 0,
+      "diag_type": "regression_poor",
+      "best_iou": "0.372658",
+      "best_score": "0.341618",
+      "gt_box": "194.00,163.00,254.00,189.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0430.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.341618",
+      "gt_box": "200.00,127.00,284.00,160.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0432.png",
+      "gt_index": 2,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.817180",
+      "gt_box": "385.00,143.00,414.00,197.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0432.png",
+      "gt_index": 4,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.817180",
+      "gt_box": "340.00,102.00,364.00,133.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0436.png",
+      "gt_index": 0,
+      "diag_type": "no_response",
+      "best_iou": "0.000000",
+      "best_score": "0.000000",
+      "gt_box": "135.00,286.00,174.00,328.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0450.png",
+      "gt_index": 1,
+      "diag_type": "regression_poor",
+      "best_iou": "0.000000",
+      "best_score": "0.391398",
+      "gt_box": "207.00,119.00,282.00,154.00"
+    }
+  ],
+  "fp_cases": [
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0031.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.302150",
+      "pred_score": "0.711774",
+      "pred_box": "73.39,119.34,170.28,218.32"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0043.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.390527",
+      "pred_score": "0.459186",
+      "pred_box": "124.77,65.71,162.02,108.87"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0045.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.415393",
+      "pred_score": "0.433047",
+      "pred_box": "169.72,119.59,288.71,154.15"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0049.png",
+      "pred_index": 1,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.348717",
+      "pred_box": "161.40,101.34,207.06,133.34"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0071.png",
+      "pred_index": 0,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.554343",
+      "pred_box": "129.93,381.49,191.59,425.36"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0071.png",
+      "pred_index": 1,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.311987",
+      "pred_box": "178.68,101.27,216.69,144.47"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0127.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.323595",
+      "pred_score": "0.803442",
+      "pred_box": "176.36,125.54,322.91,213.22"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0139.png",
+      "pred_index": 1,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.066881",
+      "pred_score": "0.379567",
+      "pred_box": "358.69,154.01,404.41,203.18"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0140.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.381953",
+      "pred_score": "0.294848",
+      "pred_box": "229.87,54.32,313.89,153.22"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0140.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.189910",
+      "pred_score": "0.283280",
+      "pred_box": "303.22,120.36,384.15,201.04"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0152.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.475170",
+      "pred_score": "0.277702",
+      "pred_box": "224.80,49.76,368.78,105.01"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0161.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.321870",
+      "pred_score": "0.344255",
+      "pred_box": "300.36,178.23,336.21,239.89"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0186.png",
+      "pred_index": 1,
+      "fp_type": "FP_other",
+      "texture_type": "other",
+      "best_iou": "0.603670",
+      "pred_score": "0.512293",
+      "pred_box": "304.39,197.43,420.47,251.64"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0218.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.322753",
+      "pred_score": "0.264681",
+      "pred_box": "131.48,93.36,196.20,114.69"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0218.png",
+      "pred_index": 2,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.292254",
+      "pred_score": "0.257917",
+      "pred_box": "124.86,91.02,292.64,174.80"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0241.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.184687",
+      "pred_score": "0.416315",
+      "pred_box": "187.19,141.10,239.00,165.08"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0241.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.277351",
+      "pred_score": "0.310636",
+      "pred_box": "186.76,140.28,241.82,175.20"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0258.png",
+      "pred_index": 0,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.311073",
+      "pred_box": "223.94,189.98,307.42,238.44"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0259.png",
+      "pred_index": 2,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.291971",
+      "pred_box": "265.20,306.63,381.82,336.32"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0344.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.494498",
+      "pred_score": "0.291302",
+      "pred_box": "258.91,368.10,305.07,413.49"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0365.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.318152",
+      "pred_score": "0.553577",
+      "pred_box": "149.78,144.33,235.33,181.03"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0365.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.332432",
+      "pred_score": "0.273792",
+      "pred_box": "148.93,75.14,276.38,177.06"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0374.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.233841",
+      "pred_score": "0.421155",
+      "pred_box": "282.69,145.43,390.98,222.44"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0378.png",
+      "pred_index": 2,
+      "fp_type": "FP_other",
+      "texture_type": "other",
+      "best_iou": "0.647654",
+      "pred_score": "0.364011",
+      "pred_box": "215.80,189.54,322.98,272.00"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0413.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.194735",
+      "pred_score": "0.484613",
+      "pred_box": "337.99,234.81,387.81,299.40"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0413.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.468172",
+      "pred_score": "0.378605",
+      "pred_box": "266.36,265.86,343.25,351.25"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0415.png",
+      "pred_index": 0,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.334422",
+      "pred_box": "208.52,214.42,232.11,238.10"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0423.png",
+      "pred_index": 2,
+      "fp_type": "FP_unmatched",
+      "texture_type": "other",
+      "best_iou": "0.000000",
+      "pred_score": "0.349330",
+      "pred_box": "171.13,340.96,203.83,370.97"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0426.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.426048",
+      "pred_score": "0.619030",
+      "pred_box": "196.37,272.56,279.21,312.61"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0430.png",
+      "pred_index": 0,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.372658",
+      "pred_score": "0.341618",
+      "pred_box": "220.02,171.55,255.02,188.85"
+    },
+    {
+      "image_path": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c/images/test/0430.png",
+      "pred_index": 1,
+      "fp_type": "FP_near",
+      "texture_type": "other",
+      "best_iou": "0.325266",
+      "pred_score": "0.292692",
+      "pred_box": "193.18,163.38,218.51,184.31"
+    }
+  ]
+}
