@@ -45,3 +45,14 @@ See https://docs.ultralytics.com/modes
 [2026-04-06 18:08:33] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b6__c6__d6/exp_2603060222/train/weights/best.pt
 [2026-04-06 18:08:33] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b7__d11/exp_2603060315/train/weights/best.pt
 [2026-04-06 18:08:33] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603012344/train/weights/best.pt
+[2026-04-06 18:31:07] report_root=/home/ubuntu/hpproject/yolo/analyze/code/ch4tool
+[2026-04-06 18:31:07] models_txt=/home/ubuntu/hpproject/yolo/analyze/code/ch4tool/models_to_eval.txt
+[2026-04-06 18:31:08] dataset_root=/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c, split_used=test, n_images=63
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060619/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/baseline/datasetm6c/exp_2603040206/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603032345/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b6__c6__d6/exp_2603060222/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b7__d11/exp_2603060315/train/weights/best.pt
+[2026-04-06 18:31:08] skip missing model: /home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603012344/train/weights/best.pt

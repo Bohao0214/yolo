@@ -225,6 +225,8 @@ def parse_eval_params_from_cfg(cfg_path: Optional[Path]) -> dict:
         "max_det": None,
         "batch": None,
         "device": None,
+        "score_thr": None,
+        "obj_iou": None,
     }
     if cfg_path is None:
         return out
@@ -236,6 +238,10 @@ def parse_eval_params_from_cfg(cfg_path: Optional[Path]) -> dict:
         "max_det": ["max_det"],
         "batch": ["batch", "eval_batch"],
         "device": ["device", "eval_device"],
+        # Prefer explicit score_thr, then conf (for object PR), metric_conf as last fallback.
+        "score_thr": ["score_thr", "conf", "metric_conf"],
+        # Historical names in previous scripts/configs.
+        "obj_iou": ["obj_iou", "match_iou", "tp_iou"],
     }
     for k, keys in keymap.items():
         for kk in keys:
@@ -261,7 +267,7 @@ def choose_unified_eval_params(param_dicts: List[dict], overrides: dict) -> Tupl
     pending = []
     out = dict(defaults)
 
-    for key in ["imgsz", "conf", "iou", "max_det", "batch", "device"]:
+    for key in ["imgsz", "conf", "iou", "max_det", "batch", "device", "score_thr", "obj_iou"]:
         vals = [d.get(key) for d in param_dicts if d.get(key) not in [None, ""]]
         if vals:
             out[key] = vals[0]
@@ -273,6 +279,12 @@ def choose_unified_eval_params(param_dicts: List[dict], overrides: dict) -> Tupl
             out[k] = v
             if k in pending:
                 pending.remove(k)
+
+    # If score threshold is still missing, keep object-level threshold aligned with conf.
+    if out.get("score_thr") in [None, ""]:
+        out["score_thr"] = out.get("conf", 0.3)
+        if "score_thr" in pending:
+            pending.remove("score_thr")
 
     # normalize numeric types
     out["imgsz"] = int(float(out["imgsz"]))

@@ -175,6 +175,9 @@ def main() -> None:
     report_lines.append(f"- split(requested/used): `{meta.get('split_requested', '')}` / `{meta.get('split_used', '')}`")
     report_lines.append(f"- split备注: `{meta.get('split_note', '')}`")
     report_lines.append(f"- eval_params: `{json.dumps(meta.get('eval_params', {}), ensure_ascii=False)}`")
+    eps = meta.get("eval_param_source", {})
+    if eps:
+        report_lines.append(f"- eval_param_source: `{json.dumps(eps.get('priority', ''), ensure_ascii=False)}`")
     report_lines.append("")
 
     report_lines.append("## 4. 对比实验结果")

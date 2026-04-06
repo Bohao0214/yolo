@@ -1,11 +1,11 @@
 # 检测实验报告（YOLO系列）
 
-生成时间: 2026-04-06 18:09:18
+生成时间: 2026-04-06 18:31:25
 报告目录: `/home/ubuntu/hpproject/yolo/analyze/code/ch4tool`
 
 ## 待用户补充
 
-- 待确认项: batch、conf、device、heatmap_sample_list(optional)、imgsz、iou、max_det
+- 待确认项: device、heatmap_sample_list(optional)
 - 模型路径填写文件: `/home/ubuntu/hpproject/yolo/analyze/code/ch4tool/models_to_eval.txt`
 - 数据集覆盖配置: `/home/ubuntu/hpproject/yolo/analyze/code/ch4tool/dataset_override.txt`
 
@@ -35,7 +35,8 @@
 - dataset_root: `/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c`
 - split(requested/used): `test` / `test`
 - split备注: ``
-- eval_params: `{"imgsz": 640, "conf": 0.3, "iou": 0.6, "max_det": 20, "batch": 4, "device": "0", "score_thr": 0.3, "obj_iou": 0.2}`
+- eval_params: `{"imgsz": 640, "conf": 0.25, "iou": 0.7, "max_det": 100, "batch": 6, "device": "0", "score_thr": 0.25, "obj_iou": 0.3}`
+- eval_param_source: `"cli_overrides > selected_data_yaml > model_nearby_cfg > fallback_defaults"`
 
 ## 4. 对比实验结果
 

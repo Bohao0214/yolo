@@ -10,20 +10,42 @@
   "split_note": "",
   "eval_params": {
     "imgsz": 640,
-    "conf": 0.3,
-    "iou": 0.6,
-    "max_det": 20,
-    "batch": 4,
+    "conf": 0.25,
+    "iou": 0.7,
+    "max_det": 100,
+    "batch": 6,
     "device": "0",
-    "score_thr": 0.3,
-    "obj_iou": 0.2
+    "score_thr": 0.25,
+    "obj_iou": 0.3
+  },
+  "eval_param_source": {
+    "priority": "cli_overrides > selected_data_yaml > model_nearby_cfg > fallback_defaults",
+    "cli_overrides": {
+      "imgsz": null,
+      "conf": null,
+      "iou": null,
+      "max_det": null,
+      "batch": null,
+      "device": null,
+      "score_thr": null,
+      "obj_iou": null
+    },
+    "data_yaml_params": {
+      "path": "/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml",
+      "params": {
+        "imgsz": 640,
+        "conf": 0.25,
+        "iou": 0.7,
+        "max_det": 100,
+        "batch": 6,
+        "device": null,
+        "score_thr": 0.25,
+        "obj_iou": 0.3
+      }
+    },
+    "model_cfg_params": []
   },
   "pending_user_inputs": [
-    "imgsz",
-    "conf",
-    "iou",
-    "max_det",
-    "batch",
     "device"
   ],
   "baseline_model": null,

@@ -133,7 +133,7 @@ def _resolve_dataset_and_params(
     specs: List[ModelSpec],
     args: argparse.Namespace,
     override_kv: Dict[str, str],
-) -> Tuple[Optional[Path], Optional[Path], Dict[str, object], List[str]]:
+) -> Tuple[Optional[Path], Optional[Path], Dict[str, object], List[str], dict]:
     for spec in specs:
         wp = Path(spec.model_path).expanduser().resolve()
         if not wp.exists():
@@ -165,11 +165,22 @@ def _resolve_dataset_and_params(
                     data_yaml = p
                     break
 
-    # eval params from existing configs
+    # eval params from existing configs (priority handled by append order below)
     param_dicts = []
+    param_source = {"cli_overrides": {}, "data_yaml_params": {}, "model_cfg_params": []}
+
+    # Source 1 (preferred baseline): selected data_yaml itself (e.g., defect241.yaml).
+    if data_yaml is not None and data_yaml.exists():
+        dcfg_params = parse_eval_params_from_cfg(Path(data_yaml))
+        param_dicts.append(dcfg_params)
+        param_source["data_yaml_params"] = {"path": str(data_yaml), "params": dcfg_params}
+
+    # Source 2: nearby model cfg files (args.yaml etc.)
     for s in specs:
         if s.config_path:
-            param_dicts.append(parse_eval_params_from_cfg(Path(s.config_path)))
+            cfg_params = parse_eval_params_from_cfg(Path(s.config_path))
+            param_dicts.append(cfg_params)
+            param_source["model_cfg_params"].append({"path": str(s.config_path), "params": cfg_params})
     overrides = {
         "imgsz": args.imgsz,
         "conf": args.conf,
@@ -181,6 +192,7 @@ def _resolve_dataset_and_params(
         "obj_iou": args.obj_iou,
     }
     eval_params, pending_eval = choose_unified_eval_params(param_dicts, overrides)
+    param_source["cli_overrides"] = overrides
 
     # dataset root
     ds_root_override: Optional[Path] = None
@@ -191,7 +203,7 @@ def _resolve_dataset_and_params(
 
     dataset_root, pending_ds = parse_dataset_root(data_yaml=data_yaml, fallback_root=ds_root_override)
     pending = list(dict.fromkeys(pending_eval + pending_ds))
-    return dataset_root, data_yaml, eval_params, pending
+    return dataset_root, data_yaml, eval_params, pending, param_source
 
 
 def _load_gt_with_possible_fallback(dataset_root: Path, split: str):
@@ -230,7 +242,7 @@ def main() -> None:
     specs = build_model_specs(model_paths)
     override_kv = _read_override_file(override_txt)
 
-    dataset_root, data_yaml, eval_params, pending = _resolve_dataset_and_params(specs, args, override_kv)
+    dataset_root, data_yaml, eval_params, pending, param_source = _resolve_dataset_and_params(specs, args, override_kv)
 
     gt_ready = False
     image_paths = []
@@ -446,6 +458,10 @@ def main() -> None:
         "split_used": split_used,
         "split_note": split_note,
         "eval_params": eval_params,
+        "eval_param_source": {
+            "priority": "cli_overrides > selected_data_yaml > model_nearby_cfg > fallback_defaults",
+            **param_source,
+        },
         "pending_user_inputs": pending,
         "baseline_model": baseline_model,
         "best_model": best_model,
