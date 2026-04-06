@@ -1,7 +1,0 @@
-category,n_selected,n_candidates
-small_defect,0,0
-medium_defect,0,0
-highlight_interference,0,0
-baseline_miss_best_hit,0,0
-baseline_fp_best_suppress,0,0
-duplicate_prediction,0,0
