@@ -246,15 +246,17 @@ def parse_eval_params_from_cfg(cfg_path: Optional[Path]) -> dict:
 
 
 def choose_unified_eval_params(param_dicts: List[dict], overrides: dict) -> Tuple[dict, List[str]]:
+    # Historical P2.3.x defaults (frozen pipeline): conf -> NMS(iou) -> max_det.
+    # Keeping these as fallback avoids drifting away from previous experiments.
     defaults = {
         "imgsz": 640,
-        "conf": 0.001,
-        "iou": 0.7,
-        "max_det": 300,
-        "batch": 8,
+        "conf": 0.3,
+        "iou": 0.6,
+        "max_det": 20,
+        "batch": 4,
         "device": "0",
-        "score_thr": 0.25,
-        "obj_iou": 0.5,
+        "score_thr": 0.3,
+        "obj_iou": 0.2,
     }
     pending = []
     out = dict(defaults)
@@ -405,34 +407,173 @@ def _bucket_name(min_side: float) -> str:
     return SCALE_BUCKETS[-1][0]
 
 
-def _greedy_match_for_image(gt_dets: List[Det], pred_dets: List[Det], score_thr: float, iou_thr: float) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
-    # Match per class with one-to-one greedy by prediction score.
+def _iou_matrix_xyxy(gt_boxes: np.ndarray, pred_boxes: np.ndarray) -> np.ndarray:
+    if gt_boxes.size == 0 or pred_boxes.size == 0:
+        return np.zeros((gt_boxes.shape[0], pred_boxes.shape[0]), dtype=np.float32)
+    ix1 = np.maximum(gt_boxes[:, None, 0], pred_boxes[None, :, 0])
+    iy1 = np.maximum(gt_boxes[:, None, 1], pred_boxes[None, :, 1])
+    ix2 = np.minimum(gt_boxes[:, None, 2], pred_boxes[None, :, 2])
+    iy2 = np.minimum(gt_boxes[:, None, 3], pred_boxes[None, :, 3])
+    iw = np.maximum(0.0, ix2 - ix1)
+    ih = np.maximum(0.0, iy2 - iy1)
+    inter = iw * ih
+    gt_area = np.maximum(0.0, (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1]))
+    pred_area = np.maximum(0.0, (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1]))
+    union = gt_area[:, None] + pred_area[None, :] - inter
+    return np.where(union > 0, inter / union, 0.0).astype(np.float32)
+
+
+def _hungarian_assign(cost: np.ndarray) -> List[int]:
+    """Hungarian algorithm (min-cost), returns row->col assignment."""
+    n, m = cost.shape
+    if n == 0:
+        return []
+    if n > m:
+        pad = np.full((n, n - m), 1.0, dtype=cost.dtype)
+        cost = np.hstack([cost, pad])
+        m = n
+    u = np.zeros(n + 1, dtype=np.float32)
+    v = np.zeros(m + 1, dtype=np.float32)
+    p = np.zeros(m + 1, dtype=np.int64)
+    way = np.zeros(m + 1, dtype=np.int64)
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = np.full(m + 1, np.inf, dtype=np.float32)
+        used = np.zeros(m + 1, dtype=bool)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = np.inf
+            j1 = 0
+            for j in range(1, m + 1):
+                if used[j]:
+                    continue
+                cur = cost[i0 - 1, j - 1] - u[i0] - v[j]
+                if cur < minv[j]:
+                    minv[j] = cur
+                    way[j] = j0
+                if minv[j] < delta:
+                    delta = minv[j]
+                    j1 = j
+            for j in range(m + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    assignment = [-1] * n
+    for j in range(1, m + 1):
+        if p[j] != 0:
+            assignment[p[j] - 1] = j - 1
+    return assignment
+
+
+def _match_one_to_one_for_image(
+    gt_dets: List[Det],
+    pred_dets: List[Det],
+    score_thr: float,
+    iou_thr: float,
+    class_aware: bool = True,
+) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+    # P2.3.x frozen style: one-to-one matching by maximizing total IoU (Hungarian),
+    # with IoU threshold gating (IoU >= iou_thr).
     matches: List[Tuple[int, int]] = []
     gt_unmatched = set(range(len(gt_dets)))
     pred_unmatched = set(i for i, d in enumerate(pred_dets) if d.score >= score_thr)
 
-    classes = sorted(set([d.label for d in gt_dets] + [d.label for d in pred_dets]))
+    if not class_aware:
+        classes = [0]
+    else:
+        classes = sorted(set([d.label for d in gt_dets] + [d.label for d in pred_dets]))
     for cls in classes:
-        gi = [i for i, d in enumerate(gt_dets) if d.label == cls]
-        pi = [i for i, d in enumerate(pred_dets) if d.label == cls and d.score >= score_thr]
-        pi_sorted = sorted(pi, key=lambda i: pred_dets[i].score, reverse=True)
-        if not gi or not pi_sorted:
+        if class_aware:
+            gi = [i for i, d in enumerate(gt_dets) if d.label == cls]
+            pi = [i for i, d in enumerate(pred_dets) if d.label == cls and d.score >= score_thr]
+        else:
+            gi = [i for i, _ in enumerate(gt_dets)]
+            pi = [i for i, d in enumerate(pred_dets) if d.score >= score_thr]
+
+        if not gi or not pi:
             continue
-        gt_boxes = np.asarray([gt_dets[i].box for i in gi], dtype=np.float32)
-        gt_used = np.zeros((len(gi),), dtype=bool)
-        for pidx in pi_sorted:
-            ious = iou_one_to_many(pred_dets[pidx].box, gt_boxes)
-            if ious.size == 0:
+
+        gt_boxes = np.asarray([gt_dets[i].box for i in gi], dtype=np.float32).reshape(-1, 4)
+        pred_boxes = np.asarray([pred_dets[i].box for i in pi], dtype=np.float32).reshape(-1, 4)
+        iou_mat = _iou_matrix_xyxy(gt_boxes, pred_boxes)
+        cost = np.where(iou_mat >= float(iou_thr), 1.0 - iou_mat, 1.0)
+        assign = _hungarian_assign(cost)
+        for local_gi, local_pj in enumerate(assign):
+            if local_pj < 0 or local_pj >= len(pi):
                 continue
-            best_local = int(np.argmax(ious))
-            if ious[best_local] >= float(iou_thr) and not gt_used[best_local]:
-                gidx = gi[best_local]
-                gt_used[best_local] = True
-                matches.append((gidx, pidx))
-                gt_unmatched.discard(gidx)
-                pred_unmatched.discard(pidx)
+            if iou_mat[local_gi, local_pj] < float(iou_thr):
+                continue
+            gidx = gi[local_gi]
+            pidx = pi[local_pj]
+            matches.append((gidx, pidx))
+            gt_unmatched.discard(gidx)
+            pred_unmatched.discard(pidx)
 
     return matches, sorted(gt_unmatched), sorted(pred_unmatched)
+
+
+def _greedy_match_for_image(
+    gt_dets: List[Det],
+    pred_dets: List[Det],
+    score_thr: float,
+    iou_thr: float,
+) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+    # Backward-compatible alias. Internally we use one-to-one Hungarian matching
+    # to keep consistency with historical P2.3.x experiments.
+    return _match_one_to_one_for_image(
+        gt_dets=gt_dets,
+        pred_dets=pred_dets,
+        score_thr=score_thr,
+        iou_thr=iou_thr,
+        class_aware=True,
+    )
+
+
+def compute_obj_pr_counts(
+    gt_map: Dict[str, List[Det]],
+    pred_map: Dict[str, List[Det]],
+    score_thr: float,
+    iou_thr: float,
+) -> Dict[str, float]:
+    tp = 0
+    fp = 0
+    fn = 0
+    for img_path in sorted(set(gt_map.keys()) | set(pred_map.keys())):
+        gt_dets = gt_map.get(img_path, [])
+        pred_dets = pred_map.get(img_path, [])
+        matches, gt_unmatched, pred_unmatched = _match_one_to_one_for_image(
+            gt_dets=gt_dets,
+            pred_dets=pred_dets,
+            score_thr=score_thr,
+            iou_thr=iou_thr,
+            class_aware=True,
+        )
+        tp += len(matches)
+        fn += len(gt_unmatched)
+        fp += len(pred_unmatched)
+
+    precision = float(tp) / float(tp + fp) if (tp + fp) > 0 else 0.0
+    recall = float(tp) / float(tp + fn) if (tp + fn) > 0 else 0.0
+    return {
+        "tp": int(tp),
+        "fp": int(fp),
+        "fn": int(fn),
+        "object_precision": precision,
+        "object_recall": recall,
+    }
 
 
 def compute_scale_recall_and_image_fp(
@@ -449,7 +590,7 @@ def compute_scale_recall_and_image_fp(
 
     for img_path, gt_dets in gt_map.items():
         preds = pred_map.get(img_path, [])
-        matches, gt_unmatched, _ = _greedy_match_for_image(gt_dets, preds, score_thr=score_thr, iou_thr=iou_thr)
+        matches, gt_unmatched, _ = _match_one_to_one_for_image(gt_dets, preds, score_thr=score_thr, iou_thr=iou_thr)
         matched_gt = {g for g, _ in matches}
 
         for i, g in enumerate(gt_dets):
@@ -537,6 +678,7 @@ def compute_fn_fp_breakdown(
     fp_counter = {
         "FP_unmatched": 0,
         "FP_pred_dup": 0,
+        "FP_both": 0,
         "FP_near": 0,
         "FP_other": 0,
         "FP_highlight": 0,
@@ -551,12 +693,16 @@ def compute_fn_fp_breakdown(
         if img is None:
             img = np.zeros((10, 10, 3), dtype=np.uint8)
         pred_dets = pred_map.get(img_path, [])
-        matches, gt_unmatched, pred_unmatched = _greedy_match_for_image(gt_dets, pred_dets, score_thr=score_thr, iou_thr=iou_thr)
+        pred_valid = [p for p in pred_dets if p.score >= score_thr]
+        matches, gt_unmatched, pred_unmatched_valid = _match_one_to_one_for_image(
+            gt_dets, pred_valid, score_thr=score_thr, iou_thr=iou_thr
+        )
+        pred_unmatched = pred_unmatched_valid
 
         # FN mechanisms
         for gi in gt_unmatched:
             g = gt_dets[gi]
-            same_cls = [p for p in pred_dets if p.label == g.label]
+            same_cls = [p for p in pred_valid if p.label == g.label]
             if not same_cls:
                 mtype = "no_response"
                 best_iou = 0.0
@@ -591,21 +737,30 @@ def compute_fn_fp_breakdown(
 
         # FP structure + texture/highlight
         gt_boxes_all = np.asarray([g.box for g in gt_dets], dtype=np.float32) if gt_dets else np.zeros((0, 4), dtype=np.float32)
-        matched_pred = {pi for _, pi in matches}
+        # pred-dup condition: one GT overlapped by >=2 predicted boxes (IoU >= iou_thr).
+        pred_dup_idx = set()
+        if gt_boxes_all.shape[0] > 0 and len(pred_valid) > 1:
+            pred_boxes_arr = np.asarray([p.box for p in pred_valid], dtype=np.float32).reshape(-1, 4)
+            iou_mat = _iou_matrix_xyxy(gt_boxes_all, pred_boxes_arr)
+            for gi in range(iou_mat.shape[0]):
+                cand = np.where(iou_mat[gi] >= float(iou_thr))[0].tolist()
+                if len(cand) >= 2:
+                    for pi in cand:
+                        pred_dup_idx.add(int(pi))
         for pi in pred_unmatched:
-            p = pred_dets[pi]
-            if p.score < score_thr:
-                continue
+            p = pred_valid[pi]
             best_iou = 0.0
             if gt_boxes_all.shape[0] > 0:
                 ious = iou_one_to_many(p.box, gt_boxes_all)
                 best_iou = float(np.max(ious)) if ious.size else 0.0
-            if best_iou < 0.1:
+            is_unmatched = best_iou < float(iou_thr)
+            is_pred_dup = pi in pred_dup_idx
+            if is_unmatched and is_pred_dup:
+                fptype = "FP_both"
+            elif is_unmatched:
                 fptype = "FP_unmatched"
-            elif best_iou >= iou_thr and any(i == pi for i in matched_pred):
+            elif is_pred_dup:
                 fptype = "FP_pred_dup"
-            elif best_iou < iou_thr:
-                fptype = "FP_near"
             else:
                 fptype = "FP_other"
 

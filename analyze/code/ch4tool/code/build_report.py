@@ -157,6 +157,7 @@ def main() -> None:
     report_lines.append("")
     report_lines.append("- 约束: 不改模型结构、不重训，仅做读取已有模型并统一评估。")
     report_lines.append("- 评估口径: 统一脚本、统一数据划分、统一参数；掩膜转最小外接框时比较的是检测能力而非分割精度。")
+    report_lines.append(f"- 指标公式文档: `{report_root / '指标计算说明.md'}`")
     report_lines.append("")
 
     report_lines.append("## 2. 模型清单与路径")

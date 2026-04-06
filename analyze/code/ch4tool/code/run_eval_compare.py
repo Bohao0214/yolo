@@ -42,6 +42,7 @@ from utils_common import (
     build_model_specs,
     choose_unified_eval_params,
     compute_fn_fp_breakdown,
+    compute_obj_pr_counts,
     compute_scale_recall_and_image_fp,
     compute_metrics,
     ensure_dir,
@@ -74,8 +75,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch", type=int, default=None)
     p.add_argument("--device", type=str, default=None)
 
-    p.add_argument("--score-thr", type=float, default=0.25, help="Object-level score threshold for Precision/Recall.")
-    p.add_argument("--obj-iou", type=float, default=0.5, help="Object-level IoU threshold for Precision/Recall.")
+    p.add_argument("--score-thr", type=float, default=None, help="Object-level score threshold for Precision/Recall.")
+    p.add_argument("--obj-iou", type=float, default=None, help="Object-level IoU threshold for Precision/Recall.")
     return p.parse_args()
 
 
@@ -318,12 +319,18 @@ def main() -> None:
             )
 
             classes = gt_classes if gt_classes else [0]
-            metrics = compute_metrics(
+            map_metrics = compute_metrics(
                 gt_map=gt_map,
                 pred_map=pred_map,
                 classes=classes,
                 score_thr=float(eval_params["score_thr"]),
                 obj_iou=float(eval_params["obj_iou"]),
+            )
+            obj_metrics = compute_obj_pr_counts(
+                gt_map=gt_map,
+                pred_map=pred_map,
+                score_thr=float(eval_params["score_thr"]),
+                iou_thr=float(eval_params["obj_iou"]),
             )
 
             scale_rows, img_stats = compute_scale_recall_and_image_fp(
@@ -353,13 +360,13 @@ def main() -> None:
                 {
                     "status": "ok",
                     "error": "",
-                    "precision": f"{metrics['object_precision']:.6f}",
-                    "recall": f"{metrics['object_recall']:.6f}",
-                    "map50": f"{metrics['map50']:.6f}",
-                    "map50_95": f"{metrics['map50_95']:.6f}",
-                    "tp": int(metrics["tp"]),
-                    "fp": int(metrics["fp"]),
-                    "fn": int(metrics["fn"]),
+                    "precision": f"{obj_metrics['object_precision']:.6f}",
+                    "recall": f"{obj_metrics['object_recall']:.6f}",
+                    "map50": f"{map_metrics['map50']:.6f}",
+                    "map50_95": f"{map_metrics['map50_95']:.6f}",
+                    "tp": int(obj_metrics["tp"]),
+                    "fp": int(obj_metrics["fp"]),
+                    "fn": int(obj_metrics["fn"]),
                     "image_fp_rate": f"{img_stats['image_fp_rate']:.6f}",
                 }
             )
@@ -445,6 +452,15 @@ def main() -> None:
         "baseline_note": baseline_note,
         "model_specs": [asdict(s) for s in specs],
         "compare_rows": compare_rows,
+        "matching_rule": "one-to-one Hungarian maximize IoU, IoU>=obj_iou as valid TP",
+        "metrics_formula": {
+            "object_precision": "TP / (TP + FP)",
+            "object_recall": "TP / (TP + FN)",
+            "map50": "mean(AP_101 at IoU=0.5 across classes)",
+            "map50_95": "mean(AP_101 at IoU={0.50,0.55,...,0.95} across classes)",
+            "scale_recall": "TP_bucket / GT_bucket",
+            "image_fp_rate": "img_gt0_pred1 / (img_gt0_pred1 + img_gt0_pred0)",
+        },
         "note": "统一口径：掩膜转最小外接框后对比的是检测能力，不是分割精度。",
     }
     write_json(tables_dir / "metadata.json", metadata)
