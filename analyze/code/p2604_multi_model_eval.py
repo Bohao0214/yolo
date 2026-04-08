@@ -27,11 +27,17 @@ import gc
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+# 让自定义 checkpoint（含 third_party.* 模块）在任意 cwd 下都可反序列化
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 try:
     import cv2
@@ -56,6 +62,11 @@ except Exception as exc:  # pragma: no cover
     ULTRALYTICS_IMPORT_ERROR = exc
 else:
     ULTRALYTICS_IMPORT_ERROR = None
+
+try:  # 提前触发 namespace 包注册，避免部分环境下 torch.load 找不到 third_party
+    import third_party  # type: ignore # noqa: F401
+except Exception:
+    pass
 
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
