@@ -113,6 +113,7 @@ USER_EDIT_CONFIG: Dict[str, Any] = {
         "device": "0",
         "batch": 4,
         "tp_iou": 0.2,
+        "match_metric": "ios",  # iou | ios (ios=intersection over smaller box)
         "score_floor": 0.01,
         "raw_max_det": 3000,
     },
@@ -144,6 +145,7 @@ class InferParams:
     device: str
     batch: int
     tp_iou: float
+    match_metric: str
     score_floor: float
     raw_max_det: int
 
@@ -601,18 +603,29 @@ def scale_bin_name(short_side: float) -> str:
     return ">=64"
 
 
-def compute_iou_matrix(gt_boxes: np.ndarray, pred_boxes: np.ndarray) -> np.ndarray:
+def _intersection_and_areas(gt_boxes: np.ndarray, pred_boxes: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     if gt_boxes.size == 0 or pred_boxes.size == 0:
-        return np.zeros((gt_boxes.shape[0], pred_boxes.shape[0]), dtype=np.float32)
+        return (
+            np.zeros((gt_boxes.shape[0], pred_boxes.shape[0]), dtype=np.float32),
+            np.zeros((gt_boxes.shape[0],), dtype=np.float32),
+            np.zeros((pred_boxes.shape[0],), dtype=np.float32),
+        )
     ix1 = np.maximum(gt_boxes[:, None, 0], pred_boxes[None, :, 0])
     iy1 = np.maximum(gt_boxes[:, None, 1], pred_boxes[None, :, 1])
     ix2 = np.minimum(gt_boxes[:, None, 2], pred_boxes[None, :, 2])
     iy2 = np.minimum(gt_boxes[:, None, 3], pred_boxes[None, :, 3])
     iw = np.maximum(0.0, ix2 - ix1)
     ih = np.maximum(0.0, iy2 - iy1)
-    inter = iw * ih
-    gt_area = np.maximum(0.0, (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1]))
-    pred_area = np.maximum(0.0, (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1]))
+    inter = (iw * ih).astype(np.float32)
+    gt_area = np.maximum(0.0, (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1])).astype(np.float32)
+    pred_area = np.maximum(0.0, (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1])).astype(np.float32)
+    return inter, gt_area, pred_area
+
+
+def compute_iou_matrix(gt_boxes: np.ndarray, pred_boxes: np.ndarray) -> np.ndarray:
+    if gt_boxes.size == 0 or pred_boxes.size == 0:
+        return np.zeros((gt_boxes.shape[0], pred_boxes.shape[0]), dtype=np.float32)
+    inter, gt_area, pred_area = _intersection_and_areas(gt_boxes, pred_boxes)
     union = gt_area[:, None] + pred_area[None, :] - inter
     return np.where(union > 0.0, inter / union, 0.0).astype(np.float32)
 
@@ -631,6 +644,52 @@ def compute_iou_vec(gt_box: np.ndarray, pred_boxes: np.ndarray) -> np.ndarray:
     pred_area = np.maximum(0.0, (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1]))
     union = gt_area + pred_area - inter
     return np.where(union > 0.0, inter / union, 0.0).astype(np.float32)
+
+
+def compute_ios_matrix(gt_boxes: np.ndarray, pred_boxes: np.ndarray) -> np.ndarray:
+    """
+    IoS = Intersection over Smaller box area.
+    定义：inter / min(area_gt, area_pred)
+    """
+    if gt_boxes.size == 0 or pred_boxes.size == 0:
+        return np.zeros((gt_boxes.shape[0], pred_boxes.shape[0]), dtype=np.float32)
+    inter, gt_area, pred_area = _intersection_and_areas(gt_boxes, pred_boxes)
+    den = np.minimum(gt_area[:, None], pred_area[None, :])
+    return np.where(den > 0.0, inter / den, 0.0).astype(np.float32)
+
+
+def compute_ios_vec(gt_box: np.ndarray, pred_boxes: np.ndarray) -> np.ndarray:
+    if pred_boxes.size == 0:
+        return np.zeros((0,), dtype=np.float32)
+    ix1 = np.maximum(gt_box[0], pred_boxes[:, 0])
+    iy1 = np.maximum(gt_box[1], pred_boxes[:, 1])
+    ix2 = np.minimum(gt_box[2], pred_boxes[:, 2])
+    iy2 = np.minimum(gt_box[3], pred_boxes[:, 3])
+    iw = np.maximum(0.0, ix2 - ix1)
+    ih = np.maximum(0.0, iy2 - iy1)
+    inter = iw * ih
+    gt_area = max(0.0, (gt_box[2] - gt_box[0]) * (gt_box[3] - gt_box[1]))
+    pred_area = np.maximum(0.0, (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1]))
+    den = np.minimum(gt_area, pred_area)
+    return np.where(den > 0.0, inter / den, 0.0).astype(np.float32)
+
+
+def compute_match_matrix(gt_boxes: np.ndarray, pred_boxes: np.ndarray, metric: str) -> np.ndarray:
+    metric = str(metric).lower()
+    if metric == "iou":
+        return compute_iou_matrix(gt_boxes, pred_boxes)
+    if metric == "ios":
+        return compute_ios_matrix(gt_boxes, pred_boxes)
+    raise ValueError(f"Unsupported match metric: {metric}. Allowed: iou, ios")
+
+
+def compute_match_vec(gt_box: np.ndarray, pred_boxes: np.ndarray, metric: str) -> np.ndarray:
+    metric = str(metric).lower()
+    if metric == "iou":
+        return compute_iou_vec(gt_box, pred_boxes)
+    if metric == "ios":
+        return compute_ios_vec(gt_box, pred_boxes)
+    raise ValueError(f"Unsupported match metric: {metric}. Allowed: iou, ios")
 
 
 def hungarian_assign(cost: np.ndarray) -> List[int]:
@@ -693,6 +752,7 @@ def match_one_to_one(
     pred_boxes: np.ndarray,
     pred_cls: np.ndarray,
     tp_iou: float,
+    match_metric: str,
 ) -> Tuple[List[Tuple[int, int, float]], List[int], List[int]]:
     matches: List[Tuple[int, int, float]] = []
     if gt_boxes.shape[0] == 0:
@@ -708,32 +768,33 @@ def match_one_to_one(
         pidx = np.where(pred_cls == cid)[0]
         if gidx.size == 0 or pidx.size == 0:
             continue
-        iou = compute_iou_matrix(gt_boxes[gidx], pred_boxes[pidx])
-        cost = 1.0 - iou
+        overlap = compute_match_matrix(gt_boxes[gidx], pred_boxes[pidx], match_metric)
+        cost = 1.0 - overlap
         assign = hungarian_assign(cost)
         for gi_local, pj_local in enumerate(assign):
             if pj_local < 0 or pj_local >= pidx.size:
                 continue
-            iou_val = float(iou[gi_local, pj_local])
-            if iou_val >= float(tp_iou):
+            score_val = float(overlap[gi_local, pj_local])
+            if score_val >= float(tp_iou):
                 g_abs = int(gidx[gi_local])
                 p_abs = int(pidx[pj_local])
                 if g_abs in matched_gt or p_abs in matched_pred:
                     continue
                 matched_gt.add(g_abs)
                 matched_pred.add(p_abs)
-                matches.append((g_abs, p_abs, iou_val))
+                matches.append((g_abs, p_abs, score_val))
     unmatched_gt = [i for i in range(gt_boxes.shape[0]) if i not in matched_gt]
     unmatched_pred = [i for i in range(pred_boxes.shape[0]) if i not in matched_pred]
     return matches, unmatched_gt, unmatched_pred
 
 
-def _best_score_iou_for_gt(
+def _best_score_match_for_gt(
     gt_box: np.ndarray,
     gt_cls: int,
     pred_boxes: np.ndarray,
     pred_scores: np.ndarray,
     pred_cls: np.ndarray,
+    match_metric: str,
 ) -> Tuple[float, float]:
     if pred_boxes.shape[0] == 0:
         return 0.0, 0.0
@@ -742,16 +803,16 @@ def _best_score_iou_for_gt(
         return 0.0, 0.0
     boxes = pred_boxes[mask]
     scores = pred_scores[mask]
-    ious = compute_iou_vec(gt_box, boxes)
-    if ious.size == 0:
+    scores_match = compute_match_vec(gt_box, boxes, match_metric)
+    if scores_match.size == 0:
         return 0.0, 0.0
-    overlap_mask = ious > 0.0
+    overlap_mask = scores_match > 0.0
     if np.any(overlap_mask):
         best_score = float(np.max(scores[overlap_mask]))
     else:
         best_score = 0.0
-    best_iou = float(np.max(ious))
-    return best_score, best_iou
+    best_match = float(np.max(scores_match))
+    return best_score, best_match
 
 
 def _sanitize_name(name: str) -> str:
@@ -1110,6 +1171,7 @@ def run_one_model(
                 pred_boxes=pred_boxes,
                 pred_cls=pred_cls,
                 tp_iou=params.tp_iou,
+                match_metric=params.match_metric,
             )
             matched_gt_set = {m[0] for m in matches}
 
@@ -1145,14 +1207,14 @@ def run_one_model(
             for gi in unmatched_gt:
                 gt_box = gt_boxes[gi]
                 gt_c = int(gt_cls[gi]) if gi < gt_cls.shape[0] else 0
-                best_score_all, best_iou_all = _best_score_iou_for_gt(
-                    gt_box, gt_c, pa["boxes"], pa["scores"], pa["cls"]
+                best_score_all, best_iou_all = _best_score_match_for_gt(
+                    gt_box, gt_c, pa["boxes"], pa["scores"], pa["cls"], params.match_metric
                 )
-                _, best_iou_conf = _best_score_iou_for_gt(
-                    gt_box, gt_c, pc["boxes"], pc["scores"], pc["cls"]
+                _, best_iou_conf = _best_score_match_for_gt(
+                    gt_box, gt_c, pc["boxes"], pc["scores"], pc["cls"], params.match_metric
                 )
-                _, best_iou_final = _best_score_iou_for_gt(
-                    gt_box, gt_c, pf["boxes"], pf["scores"], pf["cls"]
+                _, best_iou_final = _best_score_match_for_gt(
+                    gt_box, gt_c, pf["boxes"], pf["scores"], pf["cls"], params.match_metric
                 )
                 if best_score_all < params.score_floor:
                     fn_type = "no_response"
@@ -1173,6 +1235,10 @@ def run_one_model(
                         "gt_idx": int(gi),
                         "scale_bin": scale_bin_name(box_short_side(rec.gt_boxes_letter[gi]) if rec.gt_boxes_letter.shape[0] > gi else 0.0),
                         "best_score_all": float(best_score_all),
+                        "match_metric": params.match_metric,
+                        "best_metric_all": float(best_iou_all),
+                        "best_metric_conf": float(best_iou_conf),
+                        "best_metric_final": float(best_iou_final),
                         "best_iou_all": float(best_iou_all),
                         "best_iou_conf": float(best_iou_conf),
                         "best_iou_final": float(best_iou_final),
@@ -1192,7 +1258,11 @@ def run_one_model(
                 pscore = float(pred_scores[pi]) if pi < pred_scores.shape[0] else 0.0
                 if gt_boxes.shape[0] > 0:
                     cls_mask = gt_cls == pcls
-                    iou_max = float(np.max(compute_iou_vec(pbox, gt_boxes[cls_mask]))) if np.any(cls_mask) else 0.0
+                    iou_max = (
+                        float(np.max(compute_match_vec(pbox, gt_boxes[cls_mask], params.match_metric)))
+                        if np.any(cls_mask)
+                        else 0.0
+                    )
                 else:
                     iou_max = 0.0
                 fp_kind = "pred_dup" if iou_max >= params.tp_iou else "background_fp"
@@ -1305,7 +1375,12 @@ def build_readme(report_dir: Path, metadata: Dict[str, Any], missing_notes: List
     lines.append("# 多模型统一评估说明")
     lines.append("")
     lines.append("## 1. 指标与计算规则")
-    lines.append("- 目标级匹配：同类别一对一 Hungarian 匹配，IoU>=tp_iou 计为 TP。")
+    metric_name = str(deep_get(metadata, "infer_params", {}).get("match_metric", "iou")).lower()
+    if metric_name == "ios":
+        lines.append("- 目标级匹配：同类别一对一 Hungarian 匹配，IoS>=tp_iou 计为 TP。")
+        lines.append("  - IoS 定义：Intersection / min(area_gt, area_pred)。")
+    else:
+        lines.append("- 目标级匹配：同类别一对一 Hungarian 匹配，IoU>=tp_iou 计为 TP。")
     lines.append("- Precision(目标级)：TP/(TP+FP)")
     lines.append("- Recall(目标级)：TP/(TP+FN)")
     lines.append("- 图像级四格（按“是否有最终预测框”判阳性）：")
@@ -1319,8 +1394,8 @@ def build_readme(report_dir: Path, metadata: Dict[str, Any], missing_notes: List
     lines.append("- FN 机制（互斥，按顺序判定）：")
     lines.append("  1) no_response：best_score_all < score_floor")
     lines.append("  2) low_score：score_floor <= best_score_all < conf")
-    lines.append("  3) regression_or_match_poor：best_score_all>=conf 且 best_iou_conf < tp_iou")
-    lines.append("  4) postproc_filtered：best_iou_conf>=tp_iou 且 best_iou_final<tp_iou")
+    lines.append("  3) regression_or_match_poor：best_score_all>=conf 且 best_metric_conf < tp_iou")
+    lines.append("  4) postproc_filtered：best_metric_conf>=tp_iou 且 best_metric_final<tp_iou")
     lines.append("- FP 结构：")
     lines.append("  - pred_dup：未匹配预测中与同类任一 GT 的 IoU>=tp_iou")
     lines.append("  - background_fp：其余 FP")
@@ -1385,6 +1460,7 @@ def main() -> None:
     device, src_device = resolve_param(infer_cfg.get("device"), ("eval_device", "device"), fallback_cfgs, "")
     batch, src_batch = resolve_param(infer_cfg.get("batch"), ("eval_batch", "batch"), fallback_cfgs, 4)
     tp_iou, src_tp_iou = resolve_param(infer_cfg.get("tp_iou"), ("tp_iou", "match_iou"), fallback_cfgs, 0.2)
+    match_metric, src_match_metric = resolve_param(infer_cfg.get("match_metric"), ("match_metric",), fallback_cfgs, "iou")
     score_floor, src_score_floor = resolve_param(infer_cfg.get("score_floor"), ("score_floor", "metric_conf"), fallback_cfgs, 0.01)
     raw_max_det, src_raw_max_det = resolve_param(infer_cfg.get("raw_max_det"), ("raw_max_det",), fallback_cfgs, 3000)
 
@@ -1396,9 +1472,12 @@ def main() -> None:
         device=str(device) if device is not None else "",
         batch=max(1, safe_int(batch, 4)),
         tp_iou=safe_float(tp_iou, 0.2),
+        match_metric=str(match_metric).lower(),
         score_floor=safe_float(score_floor, 0.01),
         raw_max_det=max(50, safe_int(raw_max_det, 3000)),
     )
+    if infer_params.match_metric not in {"iou", "ios"}:
+        raise ValueError(f"infer_params.match_metric 不支持: {infer_params.match_metric}（允许: iou / ios）")
 
     fp_cfg_raw = cfg.get("fp_rule_params", {}) if isinstance(cfg.get("fp_rule_params"), dict) else {}
     fp_params = FPTypeParams(
@@ -1447,6 +1526,7 @@ def main() -> None:
             "device": infer_params.device,
             "batch": infer_params.batch,
             "tp_iou": infer_params.tp_iou,
+            "match_metric": infer_params.match_metric,
             "score_floor": infer_params.score_floor,
             "raw_max_det": infer_params.raw_max_det,
         },
@@ -1458,6 +1538,7 @@ def main() -> None:
             "device": src_device,
             "batch": src_batch,
             "tp_iou": src_tp_iou,
+            "match_metric": src_match_metric,
             "score_floor": src_score_floor,
             "raw_max_det": src_raw_max_det,
         },
@@ -1581,6 +1662,10 @@ def main() -> None:
             "gt_idx",
             "scale_bin",
             "best_score_all",
+            "match_metric",
+            "best_metric_all",
+            "best_metric_conf",
+            "best_metric_final",
             "best_iou_all",
             "best_iou_conf",
             "best_iou_final",
@@ -1642,7 +1727,15 @@ if __name__ == "__main__":
      ],
      "data_yaml":"/abs/path/to/data.yaml",
      "split":"val",
-     "infer_params":{"imgsz":640,"conf":0.3,"iou":0.6,"max_det":20,"batch":4,"tp_iou":0.2,"score_floor":0.01}
+     "infer_params":{"imgsz":640,"conf":0.3,"iou":0.6,"max_det":20,"batch":4,"tp_iou":0.2,"match_metric":"iou","score_floor":0.01}
+   }'
+
+   小框友好匹配（IoS，交集占较小框面积）示例：
+   python analyze/code/p2604_multi_model_eval.py --config_json '{
+     "models":[{"name":"m","path":"/abs/path/to/best.pt"}],
+     "data_yaml":"/abs/path/to/data.yaml",
+     "split":"val,test",
+     "infer_params":{"match_metric":"ios","tp_iou":0.4}
    }'
 
 3) 仅检查配置是否可解析（不推理）
