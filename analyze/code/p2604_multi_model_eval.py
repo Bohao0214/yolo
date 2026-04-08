@@ -75,27 +75,30 @@ USER_EDIT_CONFIG: Dict[str, Any] = {
     "models": [
         # {"name": "baseline", "path": "/abs/path/to/best.pt"},
     ],
-    "data_yaml": "",  # /abs/path/to/data.yaml（推荐）
-    "dataset_root": "",  # 可选：若 data_yaml 为空，尝试 dataset_root/data.yaml
+    "data_yaml": "/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml",  # /abs/path/to/data.yaml（推荐，需你按实际数据集填写）
+    "dataset_root": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c",  # 可选：若 data_yaml 为空，尝试 dataset_root/data.yaml
     "split": "val",
     "infer_params": {
-        "imgsz": None,
-        "conf": None,
-        "iou": None,
-        "max_det": None,
-        "device": None,
-        "batch": None,
-        "tp_iou": None,
-        "score_floor": None,
-        "raw_max_det": None,
+        # 下面默认值来自现有评估脚本口径：
+        # p2_3_2a_fp_split.py / p23_4_eval_repro_check.py / p23_3_fn_mechanism.py
+        "imgsz": 640,
+        "conf": 0.3,
+        "iou": 0.6,  # 对应 NMS IoU
+        "max_det": 20,
+        "device": "0",
+        "batch": 4,
+        "tp_iou": 0.2,
+        "score_floor": 0.01,
+        "raw_max_det": 3000,
     },
     "fp_rule_params": {
+        # 下面默认值主要来自 p2_3_2b_fp_type.py / p23_3_fn_mechanism.py
         "white_thresh": 250,
         "highlight_frac": 0.05,
         "edge_margin_ratio": 0.05,
         "edge_white_frac": 0.33,
-        "texture_grad_percentile": 85.0,
-        "texture_grad_frac": 0.15,
+        "texture_grad_percentile": 90.0,
+        "texture_grad_frac": 0.10,
     },
     "fallback_cfg_candidates": [
         "/home/ubuntu/hpproject/yolo/configs/yolo11/enhance241/defect241.yaml",
@@ -275,7 +278,7 @@ def resolve_data_yaml(cfg: Dict[str, Any]) -> Path:
         p = Path(data_yaml)
         if not p.exists():
             raise FileNotFoundError(f"data_yaml 不存在: {p}")
-        return p
+        return _resolve_data_yaml_from_yaml_or_train_cfg(p)
     if dataset_root:
         p = Path(dataset_root)
         if not p.exists():
@@ -288,6 +291,55 @@ def resolve_data_yaml(cfg: Dict[str, Any]) -> Path:
             )
         return found
     raise ValueError("缺少数据集配置：请至少设置 data_yaml，或设置 dataset_root 且其中含 data.yaml。")
+
+
+def _looks_like_data_yaml(obj: Dict[str, Any]) -> bool:
+    return all(k in obj for k in ("train", "val"))
+
+
+def _resolve_data_yaml_from_yaml_or_train_cfg(path: Path, _depth: int = 0) -> Path:
+    if _depth > 3:
+        raise RuntimeError(f"data_yaml 解析层级过深，请检查配置引用链: {path}")
+    cfg = load_yaml(path)
+    if _looks_like_data_yaml(cfg):
+        return path
+    data_ref = cfg.get("data")
+    if isinstance(data_ref, str) and data_ref.strip():
+        ref = data_ref.strip()
+        rp = Path(ref)
+        if rp.is_absolute():
+            candidates = [rp]
+        else:
+            repo_root = Path(__file__).resolve().parents[2]
+            candidates = [
+                (path.parent / rp).resolve(),
+                (Path.cwd() / rp).resolve(),
+                (repo_root / rp).resolve(),
+            ]
+        rp = next((c for c in candidates if c.exists()), candidates[0])
+        if not rp.exists():
+            raise FileNotFoundError(
+                f"从训练配置 {path} 解析 data 引用失败，尝试路径均不存在: "
+                f"{[str(c) for c in candidates]}"
+            )
+        return _resolve_data_yaml_from_yaml_or_train_cfg(rp, _depth + 1)
+    raise ValueError(
+        f"给定 YAML 既不是 data.yaml（缺 train/val），也不包含可解析的 data 字段: {path}"
+    )
+
+
+def parse_splits(split_raw: str) -> List[str]:
+    parts = [s.strip() for s in str(split_raw).replace("+", ",").split(",") if s.strip()]
+    if not parts:
+        return ["val"]
+    allowed = {"train", "val", "test"}
+    out: List[str] = []
+    for s in parts:
+        if s not in allowed:
+            raise ValueError(f"split 不支持: {s}（允许: train/val/test，可逗号分隔）")
+        if s not in out:
+            out.append(s)
+    return out
 
 
 def resolve_path(base_dir: Path, value: str) -> Path:
@@ -833,18 +885,52 @@ def run_one_model(
     model_path: Path,
     records: List[ImageRecord],
     data_yaml: Path,
-    split: str,
+    splits: List[str],
     params: InferParams,
     fp_params: FPTypeParams,
     report_dir: Path,
 ) -> Dict[str, Any]:
     model = YOLO(str(model_path))
-    val_metrics = run_ultralytics_val(model, data_yaml, split, params)
-    if val_metrics.get("mAP50") is None or val_metrics.get("mAP50_95") is None:
-        raise RuntimeError(
-            f"模型 {model_name} 无法计算 mAP（mAP50 或 mAP50_95 为空）。"
-            f"请确认 data_yaml={data_yaml}、split={split} 与标注可用。"
-        )
+    split_metrics: Dict[str, Dict[str, Any]] = {}
+    for sp in splits:
+        m = run_ultralytics_val(model, data_yaml, sp, params)
+        if m.get("mAP50") is None or m.get("mAP50_95") is None:
+            raise RuntimeError(
+                f"模型 {model_name} 无法计算 mAP（mAP50 或 mAP50_95 为空）。"
+                f"请确认 data_yaml={data_yaml}、split={sp} 与标注可用。"
+            )
+        split_metrics[sp] = m
+
+    split_count: Dict[str, int] = {}
+    for r in records:
+        split_count[r.split] = split_count.get(r.split, 0) + 1
+    total_count = max(1, sum(split_count.get(s, 0) for s in splits))
+
+    def _wavg(key: str) -> Optional[float]:
+        num = 0.0
+        den = 0.0
+        for sp in splits:
+            val = split_metrics[sp].get(key)
+            if val is None:
+                continue
+            w = float(split_count.get(sp, 0))
+            num += float(val) * w
+            den += w
+        return (num / den) if den > 0 else None
+
+    val_metrics = {
+        "mAP50": _wavg("mAP50"),
+        "mAP50_95": _wavg("mAP50_95"),
+        "precision": _wavg("precision"),
+        "recall": _wavg("recall"),
+        "fps": _wavg("fps"),
+        "speed": {sp: split_metrics[sp].get("speed", {}) for sp in splits},
+        "results_dict": {sp: split_metrics[sp].get("results_dict", {}) for sp in splits},
+        "split_metrics": split_metrics,
+        "split_count": split_count,
+        "split_agg": "weighted_by_image_count",
+        "split_total_images": total_count,
+    }
 
     image_paths = [r.image_path for r in records]
     pred_all = predict_for_images(
@@ -979,6 +1065,7 @@ def run_one_model(
                 fn_rows.append(
                     {
                         "model_name": model_name,
+                        "split": rec.split,
                         "image_path": str(rec.image_path),
                         "gt_idx": int(gi),
                         "scale_bin": scale_bin_name(box_short_side(rec.gt_boxes_letter[gi]) if rec.gt_boxes_letter.shape[0] > gi else 0.0),
@@ -1014,6 +1101,7 @@ def run_one_model(
                 fp_rows.append(
                     {
                         "model_name": model_name,
+                        "split": rec.split,
                         "image_path": str(rec.image_path),
                         "pred_idx": int(pi),
                         "fp_kind": fp_kind,
@@ -1027,6 +1115,7 @@ def run_one_model(
 
             raw_obj = {
                 "model_name": model_name,
+                "split": rec.split,
                 "image_path": str(rec.image_path),
                 "orig_size": [rec.orig_h, rec.orig_w],
                 "letterbox_size": [rec.letter_h, rec.letter_w],
@@ -1074,6 +1163,7 @@ def run_one_model(
         "model_path": str(model_path),
         "main_row": {
             "model_name": model_name,
+            "split_used": ",".join(splits),
             "mAP50": float(val_metrics["mAP50"]),
             "mAP50_95": float(val_metrics["mAP50_95"]),
             "precision": float(val_metrics["precision"]) if val_metrics["precision"] is not None else float(precision_target),
@@ -1179,7 +1269,8 @@ def main() -> None:
         raise ValueError("请在 USER_EDIT_CONFIG['models'] 里至少填写一个模型：[{name, path}, ...]")
 
     data_yaml = resolve_data_yaml(cfg)
-    split = str(cfg.get("split", "val")).strip() or "val"
+    split_raw = str(cfg.get("split", "val")).strip() or "val"
+    splits = parse_splits(split_raw)
 
     fallback_cfgs = [Path(p) for p in cfg.get("fallback_cfg_candidates", []) if str(p).strip()]
     infer_cfg = cfg.get("infer_params", {}) if isinstance(cfg.get("infer_params"), dict) else {}
@@ -1221,7 +1312,16 @@ def main() -> None:
     prefix = str(cfg.get("report_prefix", "report_"))
     report_dir = make_report_dir(out_root, prefix=prefix)
 
-    records, dataset_meta = build_image_records(data_yaml, split, infer_params.imgsz)
+    records: List[ImageRecord] = []
+    split_metas: Dict[str, Any] = {}
+    for sp in splits:
+        rec_sp, meta_sp = build_image_records(data_yaml, sp, infer_params.imgsz)
+        records.extend(rec_sp)
+        split_metas[sp] = meta_sp
+    dataset_meta = {
+        "splits": split_metas,
+        "image_count_total": int(len(records)),
+    }
     if len(records) == 0:
         raise RuntimeError("没有可评估图片。请检查 data.yaml 与 split。")
 
@@ -1229,7 +1329,8 @@ def main() -> None:
         "run_time": dt.datetime.now().isoformat(timespec="seconds"),
         "report_dir": str(report_dir),
         "data_yaml": str(data_yaml),
-        "split": split,
+        "split": ",".join(splits),
+        "splits": splits,
         "dataset_meta": dataset_meta,
         "infer_params": {
             "imgsz": infer_params.imgsz,
@@ -1295,7 +1396,7 @@ def main() -> None:
             model_path=model_path,
             records=records,
             data_yaml=data_yaml,
-            split=split,
+            splits=splits,
             params=infer_params,
             fp_params=fp_params,
             report_dir=report_dir,
@@ -1309,6 +1410,7 @@ def main() -> None:
             {
                 "name": name,
                 "path": str(model_path),
+                "split_used": ",".join(splits),
                 "raw_jsonl": result["raw_jsonl"],
                 "fn_type_count": result["fn_type_count"],
                 "fp_kind_count": result["fp_kind_count"],
@@ -1322,6 +1424,7 @@ def main() -> None:
         compare_main_rows,
         [
             "model_name",
+            "split_used",
             "mAP50",
             "mAP50_95",
             "precision",
@@ -1359,6 +1462,7 @@ def main() -> None:
         fn_rows,
         [
             "model_name",
+            "split",
             "image_path",
             "gt_idx",
             "scale_bin",
@@ -1376,6 +1480,7 @@ def main() -> None:
         fp_rows,
         [
             "model_name",
+            "split",
             "image_path",
             "pred_idx",
             "fp_kind",
