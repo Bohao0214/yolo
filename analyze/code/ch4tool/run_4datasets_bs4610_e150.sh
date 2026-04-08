@@ -50,11 +50,54 @@ declare -a DATASET_ALIASES=(
   "neudet_622"
 )
 
-declare -A DATASET_ROOTS
-DATASET_ROOTS["gc10det_622_halves"]="${ROOT}/experiments/gc10det_622_halves"
-DATASET_ROOTS["DeepPCB_standard"]="${ROOT}/dataset/yolo/DeepPCB_standard"
-DATASET_ROOTS["kolektorsdd_622_halves"]="${ROOT}/dataset/yolo/kolektorsdd_622_halves"
-DATASET_ROOTS["neudet_622"]="${ROOT}/dataset/yolo/neudet_622"
+dataset_root_candidates() {
+  local alias="$1"
+  case "${alias}" in
+    gc10det_622_halves)
+      cat <<EOF
+${ROOT}/experiments/gc10det_622_halves
+${ROOT}/dataset/yolo/gc10det_622_halves
+EOF
+      ;;
+    DeepPCB_standard)
+      cat <<EOF
+${ROOT}/dataset/yolo/DeepPCB_standard
+${ROOT}/experiments/DeepPCB_standard
+EOF
+      ;;
+    kolektorsdd_622_halves)
+      cat <<EOF
+${ROOT}/dataset/yolo/kolektorsdd_622_halves
+${ROOT}/experiments/kolektorsdd_622_halves
+EOF
+      ;;
+    neudet_622)
+      cat <<EOF
+${ROOT}/dataset/yolo/neudet_622
+${ROOT}/experiments/neudet_622
+EOF
+      ;;
+    *)
+      cat <<EOF
+${ROOT}/dataset/yolo/${alias}
+${ROOT}/experiments/${alias}
+EOF
+      ;;
+  esac
+}
+
+pick_dataset_root() {
+  local alias="$1"
+  local cand
+  while IFS= read -r cand; do
+    [[ -z "${cand}" ]] && continue
+    if [[ -d "${cand}" ]]; then
+      echo "${cand}"
+      return 0
+    fi
+  done < <(dataset_root_candidates "${alias}")
+  return 1
+}
 
 pick_data_yaml() {
   local ds_root="$1"
@@ -67,6 +110,88 @@ pick_data_yaml() {
     return 0
   fi
   return 1
+}
+
+auto_make_data_yaml() {
+  local alias="$1"
+  local ds_root="$2"
+  local out_yaml="$3"
+
+  python - "${alias}" "${ds_root}" "${out_yaml}" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+alias = str(sys.argv[1])
+ds_root = Path(sys.argv[2]).resolve()
+out_yaml = Path(sys.argv[3]).resolve()
+
+images = ds_root / "images"
+labels = ds_root / "labels"
+if not images.exists():
+    raise SystemExit(f"images dir not found: {images}")
+if not labels.exists():
+    raise SystemExit(f"labels dir not found: {labels}")
+
+def choose_split(primary: str, fallback: str) -> str:
+    p = images / primary
+    if p.exists():
+        return f"images/{primary}"
+    f = images / fallback
+    if f.exists():
+        return f"images/{fallback}"
+    return "images/train"
+
+train_rel = choose_split("train", "val")
+val_rel = choose_split("val", "test")
+test_rel = choose_split("test", "val")
+
+cls_ids = set()
+for split in ("train", "val", "test"):
+    d = labels / split
+    if not d.exists():
+        continue
+    for txt in d.glob("*.txt"):
+        try:
+            for line in txt.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = line.strip().split()
+                if not s:
+                    continue
+                cls_ids.add(int(float(s[0])))
+        except Exception:
+            continue
+
+if cls_ids:
+    max_id = max(cls_ids)
+    names = [f"class_{i}" for i in range(max_id + 1)]
+else:
+    names = ["defect"]
+
+data = {
+    "path": str(ds_root),
+    "train": train_rel,
+    "val": val_rel,
+    "test": test_rel,
+    "nc": len(names),
+    "names": names,
+}
+out_yaml.parent.mkdir(parents=True, exist_ok=True)
+out_yaml.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+print(out_yaml)
+PY
+}
+
+resolve_data_yaml() {
+  local alias="$1"
+  local ds_root="$2"
+  local data_yaml
+  if data_yaml="$(pick_data_yaml "${ds_root}")"; then
+    echo "${data_yaml}"
+    return 0
+  fi
+  data_yaml="${CFG_OUT_DIR}/auto_data_${alias}.yaml"
+  auto_make_data_yaml "${alias}" "${ds_root}" "${data_yaml}" >/dev/null
+  echo "${data_yaml}"
 }
 
 make_cfg() {
@@ -130,11 +255,15 @@ echo "[plan] EPOCHS=${EPOCHS} BATCH_LIST=${BATCH_LIST} DEVICE=${DEVICE} WORKERS=
 echo "[plan] SKIP_POST_EVAL=${SKIP_POST_EVAL} RESUME_POLICY=${RESUME_POLICY}"
 
 for alias in "${DATASET_ALIASES[@]}"; do
-  ds_root="${DATASET_ROOTS[${alias}]}"
-  if ! data_yaml="$(pick_data_yaml "${ds_root}")"; then
-    echo "[error] data.yaml/dataset.yaml not found for ${alias}: ${ds_root}" >&2
+  if ! ds_root="$(pick_dataset_root "${alias}")"; then
+    echo "[error] dataset root not found for ${alias}" >&2
+    echo "[hint] tried:" >&2
+    dataset_root_candidates "${alias}" | sed 's/^/  - /' >&2
     exit 3
   fi
+  data_yaml="$(resolve_data_yaml "${alias}" "${ds_root}")"
+  echo "[info] dataset=${alias} root=${ds_root}"
+  echo "[info] data_yaml=${data_yaml}"
 
   for bs in ${BATCH_LIST}; do
     cfg_path="${CFG_OUT_DIR}/defect241_${alias}_bs${bs}_e${EPOCHS}.yaml"
