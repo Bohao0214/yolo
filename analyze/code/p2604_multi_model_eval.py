@@ -1121,9 +1121,12 @@ def run_one_model(
 
             has_gt = gt_boxes.shape[0] > 0
             has_pred = pred_boxes.shape[0] > 0
-            if has_gt and len(matches) > 0:
+            # 图像级判定改为“是否有最终预测框”：
+            # - 阳性预测：has_pred=True（不要求 TP）
+            # - 图像级FN：has_gt=True 且 has_pred=False
+            if has_gt and has_pred:
                 hit_img += 1
-            elif has_gt and len(matches) == 0:
+            elif has_gt and (not has_pred):
                 miss_img += 1
             elif (not has_gt) and has_pred:
                 fp_img += 1
@@ -1305,11 +1308,11 @@ def build_readme(report_dir: Path, metadata: Dict[str, Any], missing_notes: List
     lines.append("- 目标级匹配：同类别一对一 Hungarian 匹配，IoU>=tp_iou 计为 TP。")
     lines.append("- Precision(目标级)：TP/(TP+FP)")
     lines.append("- Recall(目标级)：TP/(TP+FN)")
-    lines.append("- 图像级四格：")
-    lines.append("  - hit_img：有 GT 且至少 1 个 TP")
-    lines.append("  - miss_img：有 GT 且 0 个 TP")
-    lines.append("  - fp_img：无 GT 且有最终预测框")
-    lines.append("  - tn_img：无 GT 且无最终预测框")
+    lines.append("- 图像级四格（按“是否有最终预测框”判阳性）：")
+    lines.append("  - hit_img：有 GT 且最终预测框数量 > 0")
+    lines.append("  - miss_img：有 GT 且最终预测框数量 = 0（图像级 FN）")
+    lines.append("  - fp_img：无 GT 且最终预测框数量 > 0")
+    lines.append("  - tn_img：无 GT 且最终预测框数量 = 0")
     lines.append("- 图像级召回率：hit_img/(hit_img+miss_img)")
     lines.append("- 图像级误报率：fp_img/(fp_img+tn_img)")
     lines.append("- 分尺度 Recall：按 GT 在输入坐标系（letterbox）短边 s=min(w,h) 分桶统计。")
@@ -1465,6 +1468,13 @@ def main() -> None:
             "edge_white_frac": fp_params.edge_white_frac,
             "texture_grad_percentile": fp_params.texture_grad_percentile,
             "texture_grad_frac": fp_params.texture_grad_frac,
+        },
+        "image_level_rule": {
+            "positive_pred_definition": "final_pred_count>0",
+            "hit_img": "has_gt and final_pred_count>0",
+            "miss_img": "has_gt and final_pred_count==0",
+            "fp_img": "no_gt and final_pred_count>0",
+            "tn_img": "no_gt and final_pred_count==0",
         },
         "models": [],
     }
