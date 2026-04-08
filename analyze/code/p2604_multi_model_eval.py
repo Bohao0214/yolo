@@ -102,7 +102,7 @@ USER_EDIT_CONFIG: Dict[str, Any] = {
     ],
     "data_yaml": "/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml",  # /abs/path/to/data.yaml（推荐，需你按实际数据集填写）
     "dataset_root": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c",  # 可选：若 data_yaml 为空，尝试 dataset_root/data.yaml
-    "split": "val",
+    "split": "val+test",
     "infer_params": {
         # 下面默认值来自现有评估脚本口径：
         # p2_3_2a_fp_split.py / p23_4_eval_repro_check.py / p23_3_fn_mechanism.py
