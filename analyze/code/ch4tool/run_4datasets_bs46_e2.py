@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import traceback
@@ -33,7 +34,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import pandas as pd
 import yaml
 from ultralytics import YOLO
 
@@ -309,19 +309,27 @@ def eval_image_level(
     return {"num_images": len(imgs), "img_tp": tp, "img_fp": fp, "img_fn": fn, "img_tn": tn, **calc_img_binary(tp, fp, fn, tn)}
 
 
-def save_markdown_table(df: pd.DataFrame, path: Path) -> None:
-    if df.empty:
+def write_rows_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+
+
+def save_markdown_table(rows: List[Dict[str, Any]], cols: List[str], path: Path) -> None:
+    if not rows:
         path.write_text("| empty |\n|---|\n", encoding="utf-8")
         return
-    cols = list(df.columns)
     lines = [
         "|" + "|".join(cols) + "|",
         "|" + "|".join(["---"] * len(cols)) + "|",
     ]
-    for _, row in df.iterrows():
+    for row in rows:
         vals: List[str] = []
         for c in cols:
-            v = row[c]
+            v = row.get(c, "")
             if isinstance(v, float):
                 vals.append("NaN" if math.isnan(v) else f"{v:.6f}")
             else:
@@ -495,23 +503,99 @@ def main() -> None:
                 with open(out_root / "logs" / f"{run_name}.traceback.log", "w", encoding="utf-8") as f:
                     f.write(traceback.format_exc())
 
-    det_df = pd.DataFrame(det_rows)
-    img_df = pd.DataFrame(img_rows)
-    status_df = pd.DataFrame(status_rows)
-
     det_csv = out_root / "tables" / "det_metrics.csv"
     img_csv = out_root / "tables" / "image_metrics.csv"
     status_csv = out_root / "tables" / "run_status.csv"
-    det_df.to_csv(det_csv, index=False)
-    img_df.to_csv(img_csv, index=False)
-    status_df.to_csv(status_csv, index=False)
 
-    join_cols = ["dataset", "batch", "epochs", "split", "data_yaml", "run_dir", "best_pt"]
-    summary_df = pd.merge(det_df, img_df, on=join_cols, how="outer") if (not det_df.empty or not img_df.empty) else pd.DataFrame()
+    det_fields = [
+        "dataset",
+        "batch",
+        "epochs",
+        "split",
+        "data_yaml",
+        "run_dir",
+        "best_pt",
+        "precision",
+        "recall",
+        "map50",
+        "map50_95",
+    ]
+    img_fields = [
+        "dataset",
+        "batch",
+        "epochs",
+        "split",
+        "data_yaml",
+        "run_dir",
+        "best_pt",
+        "num_images",
+        "img_tp",
+        "img_fp",
+        "img_fn",
+        "img_tn",
+        "img_precision",
+        "img_recall",
+        "img_f1",
+        "img_acc",
+    ]
+    status_fields = [
+        "dataset",
+        "batch",
+        "epochs",
+        "status",
+        "det_metric_ok",
+        "img_metric_ok",
+        "error",
+    ]
+
+    write_rows_csv(det_csv, det_rows, det_fields)
+    write_rows_csv(img_csv, img_rows, img_fields)
+    write_rows_csv(status_csv, status_rows, status_fields)
+
+    join_cols = ("dataset", "batch", "epochs", "split", "data_yaml", "run_dir", "best_pt")
+    det_map = {tuple(r.get(k, "") for k in join_cols): r for r in det_rows}
+    img_map = {tuple(r.get(k, "") for k in join_cols): r for r in img_rows}
+    all_keys = sorted(set(det_map.keys()) | set(img_map.keys()))
+
+    summary_rows: List[Dict[str, Any]] = []
+    for k in all_keys:
+        row: Dict[str, Any] = {}
+        d = det_map.get(k, {})
+        i = img_map.get(k, {})
+        for c in join_cols:
+            row[c] = d.get(c, i.get(c, ""))
+        for c in ["precision", "recall", "map50", "map50_95"]:
+            row[c] = d.get(c, "")
+        for c in ["num_images", "img_tp", "img_fp", "img_fn", "img_tn", "img_precision", "img_recall", "img_f1", "img_acc"]:
+            row[c] = i.get(c, "")
+        summary_rows.append(row)
+
     summary_csv = out_root / "tables" / "summary_join.csv"
     summary_md = out_root / "tables" / "summary_join.md"
-    summary_df.to_csv(summary_csv, index=False)
-    save_markdown_table(summary_df, summary_md)
+    summary_fields = [
+        "dataset",
+        "batch",
+        "epochs",
+        "split",
+        "data_yaml",
+        "run_dir",
+        "best_pt",
+        "precision",
+        "recall",
+        "map50",
+        "map50_95",
+        "num_images",
+        "img_tp",
+        "img_fp",
+        "img_fn",
+        "img_tn",
+        "img_precision",
+        "img_recall",
+        "img_f1",
+        "img_acc",
+    ]
+    write_rows_csv(summary_csv, summary_rows, summary_fields)
+    save_markdown_table(summary_rows, summary_fields, summary_md)
 
     meta = {
         "project_root": str(PROJECT_ROOT),
@@ -539,4 +623,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

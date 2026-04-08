@@ -36,22 +36,40 @@ import datetime as dt
 import json
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import yaml
 from ultralytics import YOLO
 
-from src.eval import compute_image_level_results, save_image_level_report
+try:
+    from src.eval import compute_image_level_results, save_image_level_report
+except Exception:
+    compute_image_level_results = None
+    save_image_level_report = None
 
 ROOT = Path("/home/ubuntu/hpproject/yolo")
 DEFAULT_MODEL = ROOT / "models" / "pretrained" / "yolo11m.pt"
 DEFAULT_OUT_ROOT = ROOT / "experiments"
 
-DEFAULT_DATASETS: Dict[str, Path] = {
-    "DeepPCB_standard": ROOT / "dataset" / "yolo" / "DeepPCB_standard" / "data.yaml",
-    "kolektorsdd_622_halves": ROOT / "dataset" / "yolo" / "kolektorsdd_622_halves" / "data.yaml",
-    "neudet_622": ROOT / "dataset" / "yolo" / "neudet_622" / "data.yaml",
-    "gc10det_622_halves": ROOT / "dataset" / "yolo" / "gc10det_622_halves" / "data.yaml",
+DEFAULT_DATASET_CANDIDATES: Dict[str, List[Path]] = {
+    "DeepPCB_standard": [
+        ROOT / "dataset" / "yolo" / "DeepPCB_standard" / "data.yaml",
+        ROOT / "dataset" / "yolo" / "DeepPCB_standard" / "dataset.yaml",
+    ],
+    "kolektorsdd_622_halves": [
+        ROOT / "dataset" / "yolo" / "kolektorsdd_622_halves" / "data.yaml",
+        ROOT / "dataset" / "yolo" / "kolektorsdd_622_halves" / "dataset.yaml",
+    ],
+    "neudet_622": [
+        ROOT / "dataset" / "yolo" / "neudet_622" / "data.yaml",
+        ROOT / "dataset" / "yolo" / "neudet_622" / "dataset.yaml",
+    ],
+    "gc10det_622_halves": [
+        ROOT / "experiments" / "gc10det_622_halves" / "data.yaml",
+        ROOT / "experiments" / "gc10det_622_halves" / "dataset.yaml",
+        ROOT / "dataset" / "yolo" / "gc10det_622_halves" / "data.yaml",
+        ROOT / "dataset" / "yolo" / "gc10det_622_halves" / "dataset.yaml",
+    ],
 }
 
 
@@ -78,6 +96,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_det", type=int, default=300, help="Max detections after NMS")
     p.add_argument("--run_prefix", type=str, default="industrial_bs_sweep", help="Output directory prefix under experiments")
     p.add_argument("--out_root", type=str, default=str(DEFAULT_OUT_ROOT), help="Output root directory")
+    p.add_argument("--train_only", action="store_true", help="只训练并导出产物，不做 val/test 与图像级统计")
     p.add_argument("--dry_run", action="store_true", help="Only print resolved plan, do not run training")
     return p.parse_args()
 
@@ -131,6 +150,42 @@ def resolve_split_sources(data_yaml: Path, split_key: str) -> List[Path]:
         if not p.is_absolute():
             p = (data_root / p).resolve()
         out.append(p)
+    return out
+
+
+def choose_eval_split(data_yaml: Path, prefer: str = "test") -> str:
+    info = load_yaml(data_yaml)
+    if prefer in info and info.get(prefer) not in (None, "", []):
+        return prefer
+    if "val" in info and info.get("val") not in (None, "", []):
+        return "val"
+    if "train" in info and info.get("train") not in (None, "", []):
+        return "train"
+    return prefer
+
+
+def resolve_dataset_map() -> Dict[str, Path]:
+    out: Dict[str, Path] = {}
+    missing: Dict[str, List[str]] = {}
+    for name, cands in DEFAULT_DATASET_CANDIDATES.items():
+        hit: Optional[Path] = None
+        for p in cands:
+            q = p.resolve()
+            if q.exists():
+                hit = q
+                break
+        if hit is None:
+            missing[name] = [str(x.resolve()) for x in cands]
+        else:
+            out[name] = hit
+
+    if missing:
+        lines = ["data.yaml not found for datasets:"]
+        for name, cands in missing.items():
+            lines.append(f"- {name}")
+            for c in cands:
+                lines.append(f"  * {c}")
+        raise FileNotFoundError("\n".join(lines))
     return out
 
 
@@ -237,10 +292,7 @@ def main() -> None:
     if not model_path.exists():
         raise FileNotFoundError(f"model not found: {model_path}")
 
-    dataset_map = {k: v.resolve() for k, v in DEFAULT_DATASETS.items()}
-    for name, y in dataset_map.items():
-        if not y.exists():
-            raise FileNotFoundError(f"data.yaml not found for {name}: {y}")
+    dataset_map = resolve_dataset_map()
 
     out_root = Path(args.out_root).expanduser().resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -259,6 +311,7 @@ def main() -> None:
         "dataset",
         "batch",
         "epochs",
+        "mode",
         "data_yaml",
         "train_run_dir",
         "best_pt",
@@ -288,6 +341,7 @@ def main() -> None:
             "dataset": dataset_name,
             "batch": int(batch),
             "epochs": int(epochs),
+            "mode": "train_only" if args.train_only else "full_eval",
             "data_yaml": str(data_yaml),
             "train_run_dir": "",
             "best_pt": "",
@@ -331,10 +385,10 @@ def main() -> None:
                 optimizer="auto",
                 seed=int(args.seed),
                 deterministic=True,
-                val=True,
+                val=(not args.train_only),
                 save=True,
                 save_json=False,
-                plots=False,
+                plots=True,
                 verbose=True,
             )
 
@@ -346,6 +400,20 @@ def main() -> None:
             row["train_run_dir"] = str(save_dir)
             row["best_pt"] = str(best_pt)
 
+            if args.train_only:
+                print(
+                    "[done] {name} bs={bs} e={ep} weights={w}".format(
+                        name=dataset_name,
+                        bs=batch,
+                        ep=epochs,
+                        w=row["best_pt"],
+                    )
+                )
+                rows.append(row)
+                write_rows_csv(run_dir / "summary.csv", rows, summary_fields)
+                (run_dir / "summary.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+                continue
+
             m_val = extract_det_metrics(train_res)
             row["val_precision"] = fmt_metric(m_val["precision"])
             row["val_recall"] = fmt_metric(m_val["recall"])
@@ -353,9 +421,10 @@ def main() -> None:
             row["val_map50_95"] = fmt_metric(m_val["map50_95"])
 
             eval_model = YOLO(str(best_pt))
+            eval_split = choose_eval_split(data_yaml, prefer="test")
             test_res = eval_model.val(
                 data=str(data_yaml),
-                split="test",
+                split=eval_split,
                 imgsz=int(args.imgsz),
                 batch=int(batch),
                 device=str(args.device),
@@ -374,9 +443,11 @@ def main() -> None:
 
             # Image-level metrics are optional side stats. If they fail (often OOM), keep detection metrics.
             try:
+                if compute_image_level_results is None or save_image_level_report is None:
+                    raise RuntimeError("src.eval not available, image-level skipped")
                 image_eval_batch = max(1, int(args.image_eval_batch))
                 image_eval_device = str(args.image_eval_device).strip() or str(args.device)
-                test_sources = resolve_split_sources(data_yaml, "test")
+                test_sources = resolve_split_sources(data_yaml, eval_split)
                 all_items: List[Dict[str, Any]] = []
                 for source in test_sources:
                     if not source.exists():
