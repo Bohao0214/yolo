@@ -1401,3 +1401,35 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
+
+"""
+用法说明（快速开始）
+
+1) 直接在本文件里修改 USER_EDIT_CONFIG（推荐）
+   - models: [{"name":"模型名","path":"权重绝对路径"}, ...]
+   - data_yaml: 数据集 data.yaml 绝对路径
+   - split: "val" / "test" / "train"
+   - infer_params: 可留空自动从 fallback 配置读取，否则手填覆盖
+
+   运行：
+   python analyze/code/p2604_multi_model_eval.py
+
+2) 不改文件，命令行传 --config_json 覆盖
+   运行示例：
+   python analyze/code/p2604_multi_model_eval.py --config_json '{
+     "models":[
+       {"name":"baseline","path":"/abs/path/to/best.pt"},
+       {"name":"a3_c5","path":"/abs/path/to/best2.pt"}
+     ],
+     "data_yaml":"/abs/path/to/data.yaml",
+     "split":"val",
+     "infer_params":{"imgsz":640,"conf":0.3,"iou":0.6,"max_det":20,"batch":4,"tp_iou":0.2,"score_floor":0.01}
+   }'
+
+3) 仅检查配置是否可解析（不推理）
+   python analyze/code/p2604_multi_model_eval.py --dry_run
+
+4) 输出目录
+   默认写到：
+   /home/ubuntu/hpproject/yolo/analyze/result/report_YYMMDDHHMM
+"""
