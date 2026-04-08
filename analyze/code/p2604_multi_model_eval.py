@@ -73,7 +73,21 @@ FP_TYPES = ["highlight", "edge", "texture_boundary", "other"]
 # 你可以只修改这里，不改其它代码
 USER_EDIT_CONFIG: Dict[str, Any] = {
     "models": [
-        # {"name": "baseline", "path": "/abs/path/to/best.pt"},
+        # {"name": "basel   ine", "path": "/abs/path/to/best.pt"},
+            {"name": "bsd", "path": "/home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt"},
+            {"name": "baseline", "path": "/home/ubuntu/hpproject/yolo/experiments/baseline/datasetm6c/exp_2603040206/train/weights/best.pt"},
+            {"name": "our", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/weights/best.pt"},
+            {"name": "hmc", "path": "/home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt"},
+            
+            {"name": "al3", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d11/exp_2603060251/train/weights/best.pt"},
+            {"name": "al2", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b7__d11/exp_2603060315/train/weights/best.pt"},
+            {"name": "al1", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b6__c6__d6/exp_2603060222/train/weights/best.pt"},     
+
+            {"name": "op1", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603012143/train/weights/best.pt"},
+            {"name": "op2", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603012344/train/weights/best.pt"},
+            {"name": "op3", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d11/exp_2603060251/train/weights/best.pt"},              
+            
+
     ],
     "data_yaml": "/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml",  # /abs/path/to/data.yaml（推荐，需你按实际数据集填写）
     "dataset_root": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c",  # 可选：若 data_yaml 为空，尝试 dataset_root/data.yaml
