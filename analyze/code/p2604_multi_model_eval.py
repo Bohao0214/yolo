@@ -356,9 +356,38 @@ def parse_splits(split_raw: str) -> List[str]:
     return out
 
 
+def _remap_legacy_abs_path(p: Path) -> Optional[Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    p_str = str(p)
+    mapping = [
+        ("/home/ubuntu/project/deduibi/yolo/dataset", str(repo_root / "dataset" / "yolo")),
+        ("/home/ubuntu/project/deduibi/yolo", str(repo_root)),
+        ("/home/ubuntu/project/deduibi", "/home/ubuntu/hpproject"),
+    ]
+    for old_prefix, new_prefix in mapping:
+        if p_str.startswith(old_prefix):
+            suffix = p_str[len(old_prefix) :].lstrip("/")
+            cand = Path(new_prefix) / suffix
+            if cand.exists():
+                return cand.resolve()
+
+    # 兜底：旧路径常见 /dataset/<name>/... ，当前项目多为 /dataset/yolo/<name>/...
+    if "/dataset/" in p_str and "/dataset/yolo/" not in p_str:
+        left, right = p_str.split("/dataset/", 1)
+        cand = Path(left + "/dataset/yolo/" + right)
+        if cand.exists():
+            return cand.resolve()
+    return None
+
+
 def resolve_path(base_dir: Path, value: str) -> Path:
     p = Path(value)
     if p.is_absolute():
+        if p.exists():
+            return p.resolve()
+        remap = _remap_legacy_abs_path(p)
+        if remap is not None:
+            return remap
         return p
     return (base_dir / p).resolve()
 
@@ -392,9 +421,7 @@ def collect_split_images(data_cfg: Dict[str, Any], data_yaml_path: Path, split: 
                     line = line.strip()
                     if not line:
                         continue
-                    q = Path(line)
-                    if not q.is_absolute():
-                        q = resolve_path(root_dir, line)
+                    q = resolve_path(root_dir, line)
                     imgs.append(q)
                 return imgs
             if p.is_dir():
