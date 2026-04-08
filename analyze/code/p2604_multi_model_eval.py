@@ -403,6 +403,55 @@ def resolve_path(base_dir: Path, value: str) -> Path:
     return (base_dir / p).resolve()
 
 
+def _remap_data_value(v: Any) -> Any:
+    if isinstance(v, str):
+        p = Path(v)
+        if p.is_absolute():
+            remap = _remap_legacy_abs_path(p)
+            if remap is not None:
+                return str(remap)
+        return v
+    if isinstance(v, list):
+        return [_remap_data_value(x) for x in v]
+    return v
+
+
+def prepare_runtime_data_yaml(data_yaml: Path, out_dir: Path) -> Tuple[Path, Dict[str, Any]]:
+    """为 Ultralytics val 准备可用 data.yaml（修复旧机器绝对路径）。"""
+    cfg = load_yaml(data_yaml)
+    changed = False
+    details: Dict[str, Any] = {"src": str(data_yaml), "changed_fields": []}
+
+    # remap path/train/val/test
+    for key in ("path", "train", "val", "test"):
+        if key not in cfg:
+            continue
+        old = cfg.get(key)
+        new = _remap_data_value(old)
+        if new != old:
+            cfg[key] = new
+            changed = True
+            details["changed_fields"].append(key)
+
+    # 若 path 仍是绝对路径且不存在，明确报错，避免后续 val 报错难定位
+    root_val = cfg.get("path")
+    if isinstance(root_val, str) and root_val.strip():
+        rp = Path(root_val.strip())
+        if rp.is_absolute() and not rp.exists():
+            raise FileNotFoundError(
+                f"data.yaml 的 path 不存在且无法自动映射: {rp} (source={data_yaml})"
+            )
+
+    runtime_path = out_dir / "runtime_data.yaml"
+    runtime_path.write_text(
+        yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),  # type: ignore[arg-type]
+        encoding="utf-8",
+    )
+    details["runtime_data_yaml"] = str(runtime_path)
+    details["changed"] = bool(changed)
+    return runtime_path, details
+
+
 def list_images_in_dir(image_dir: Path) -> List[Path]:
     if not image_dir.exists():
         return []
@@ -798,7 +847,6 @@ def run_ultralytics_val(
         verbose=False,
         plots=False,
         save_json=False,
-        save_hybrid=False,
     )
     box = getattr(metrics, "box", None)
     results_dict = getattr(metrics, "results_dict", {}) or {}
@@ -1364,10 +1412,12 @@ def main() -> None:
     prefix = str(cfg.get("report_prefix", "report_"))
     report_dir = make_report_dir(out_root, prefix=prefix)
 
+    runtime_data_yaml, runtime_data_info = prepare_runtime_data_yaml(data_yaml, report_dir)
+
     records: List[ImageRecord] = []
     split_metas: Dict[str, Any] = {}
     for sp in splits:
-        rec_sp, meta_sp = build_image_records(data_yaml, sp, infer_params.imgsz)
+        rec_sp, meta_sp = build_image_records(runtime_data_yaml, sp, infer_params.imgsz)
         records.extend(rec_sp)
         split_metas[sp] = meta_sp
     dataset_meta = {
@@ -1381,6 +1431,8 @@ def main() -> None:
         "run_time": dt.datetime.now().isoformat(timespec="seconds"),
         "report_dir": str(report_dir),
         "data_yaml": str(data_yaml),
+        "runtime_data_yaml": str(runtime_data_yaml),
+        "runtime_data_info": runtime_data_info,
         "split": ",".join(splits),
         "splits": splits,
         "dataset_meta": dataset_meta,
@@ -1447,7 +1499,7 @@ def main() -> None:
             model_name=name,
             model_path=model_path,
             records=records,
-            data_yaml=data_yaml,
+            data_yaml=runtime_data_yaml,
             splits=splits,
             params=infer_params,
             fp_params=fp_params,
