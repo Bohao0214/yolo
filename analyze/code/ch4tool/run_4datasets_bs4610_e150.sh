@@ -22,6 +22,7 @@ set -euo pipefail
 - CFG_OUT_DIR=$ROOT/configs/enhance/multi4_train
 - EPOCHS=150
 - BATCH_LIST="4 6 10"
+- ENHANCE_KEYS=""              # 例如 "a4 b7 d6"，为空表示 baseline
 - DEVICE=0
 - WORKERS=4
 - SKIP_POST_EVAL=true
@@ -36,6 +37,7 @@ TEMPLATE_CFG="${TEMPLATE_CFG:-${ROOT}/configs/enhance/datasetm6c/defect241.yaml}
 CFG_OUT_DIR="${CFG_OUT_DIR:-${ROOT}/configs/enhance/multi4_train}"
 EPOCHS="${EPOCHS:-150}"
 BATCH_LIST="${BATCH_LIST:-4 6 10}"
+ENHANCE_KEYS="${ENHANCE_KEYS:-}"
 DEVICE="${DEVICE:-0}"
 WORKERS="${WORKERS:-4}"
 SKIP_POST_EVAL="${SKIP_POST_EVAL:-true}"
@@ -205,9 +207,12 @@ make_cfg() {
   local device="$8"
   local workers="$9"
   local skip_post="${10}"
+  local enhance_keys="${11}"
+  local network_tag="${12}"
 
-  python - "${base_cfg}" "${out_cfg}" "${data_yaml}" "${data_root}" "${exp_name}" "${epochs}" "${batch}" "${device}" "${workers}" "${skip_post}" <<'PY'
+  python - "${base_cfg}" "${out_cfg}" "${data_yaml}" "${data_root}" "${exp_name}" "${epochs}" "${batch}" "${device}" "${workers}" "${skip_post}" "${enhance_keys}" "${network_tag}" <<'PY'
 from pathlib import Path
+import re
 import sys
 import yaml
 
@@ -221,10 +226,33 @@ batch = int(sys.argv[7])
 device = str(sys.argv[8])
 workers = int(sys.argv[9])
 skip_post = str(sys.argv[10]).strip().lower() in {"1", "true", "yes", "on"}
+enhance_keys_raw = str(sys.argv[11]).strip()
+network_tag = str(sys.argv[12]).strip() or "baseline"
 
 cfg = yaml.safe_load(base_cfg.read_text(encoding="utf-8"))
 if not isinstance(cfg, dict):
     raise SystemExit(f"invalid yaml mapping: {base_cfg}")
+
+enhance_keys = [t.lower() for t in re.split(r"[\s,;+_]+", enhance_keys_raw) if t.strip()]
+enhance_keys = [t for t in enhance_keys if re.fullmatch(r"[abcd]\d+", t)]
+enhance_keys = sorted(set(enhance_keys), key=lambda x: ("abcd".index(x[0]), int(x[1:])))
+
+enh = cfg.get("enhance241")
+if not isinstance(enh, dict):
+    enh = {}
+bool_flags = [
+    "a2", "a3", "a4", "a5", "a6", "a7", "a9", "a11", "a21",
+    "b1", "b2", "b3", "b5", "b6", "b7", "b9", "b11", "b21",
+    "c1", "c4", "c5", "c6", "c7", "c9", "c11", "c21",
+    "d1", "d3", "d5", "d6", "d7", "d9", "d11", "d21",
+]
+for k in bool_flags:
+    enh[k] = False
+for k in enhance_keys:
+    enh[k] = True
+if "d1" in enhance_keys:
+    enh["d3"] = True
+cfg["enhance241"] = enh
 
 cfg["data"] = str(data_yaml)
 cfg["data_root"] = str(data_root)
@@ -236,10 +264,28 @@ cfg["device"] = device
 cfg["workers"] = workers
 cfg["mode"] = "train_test"
 cfg["skip_post_eval_metrics"] = skip_post
+cfg["network_tag"] = network_tag
 
 out_cfg.parent.mkdir(parents=True, exist_ok=True)
 out_cfg.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
 print(out_cfg)
+PY
+}
+
+canonical_network_tag() {
+  local raw="$1"
+  python - "${raw}" <<'PY'
+import re
+import sys
+
+raw = str(sys.argv[1])
+keys = [t.lower() for t in re.split(r"[\s,;+_]+", raw) if t.strip()]
+keys = [t for t in keys if re.fullmatch(r"[abcd]\d+", t)]
+if not keys:
+    print("baseline")
+    raise SystemExit(0)
+keys = sorted(set(keys), key=lambda x: ("abcd".index(x[0]), int(x[1:])))
+print("".join(keys))
 PY
 }
 
@@ -251,7 +297,8 @@ fi
 echo "[plan] ROOT=${ROOT}"
 echo "[plan] TEMPLATE_CFG=${TEMPLATE_CFG}"
 echo "[plan] CFG_OUT_DIR=${CFG_OUT_DIR}"
-echo "[plan] EPOCHS=${EPOCHS} BATCH_LIST=${BATCH_LIST} DEVICE=${DEVICE} WORKERS=${WORKERS}"
+NETWORK_TAG="$(canonical_network_tag "${ENHANCE_KEYS}")"
+echo "[plan] EPOCHS=${EPOCHS} BATCH_LIST=${BATCH_LIST} ENHANCE_KEYS=${ENHANCE_KEYS:-<baseline>} NETWORK_TAG=${NETWORK_TAG} DEVICE=${DEVICE} WORKERS=${WORKERS}"
 echo "[plan] SKIP_POST_EVAL=${SKIP_POST_EVAL} RESUME_POLICY=${RESUME_POLICY}"
 
 for alias in "${DATASET_ALIASES[@]}"; do
@@ -266,11 +313,11 @@ for alias in "${DATASET_ALIASES[@]}"; do
   echo "[info] data_yaml=${data_yaml}"
 
   for bs in ${BATCH_LIST}; do
-    cfg_path="${CFG_OUT_DIR}/defect241_${alias}_bs${bs}_e${EPOCHS}.yaml"
-    exp_name="smoke241/${alias}/bs${bs}_e${EPOCHS}"
-    make_cfg "${TEMPLATE_CFG}" "${cfg_path}" "${data_yaml}" "${ds_root}" "${exp_name}" "${EPOCHS}" "${bs}" "${DEVICE}" "${WORKERS}" "${SKIP_POST_EVAL}" >/dev/null
+    cfg_path="${CFG_OUT_DIR}/defect241_${NETWORK_TAG}_${alias}_bs${bs}_e${EPOCHS}.yaml"
+    exp_name="${NETWORK_TAG}/${alias}/bs${bs}_e${EPOCHS}"
+    make_cfg "${TEMPLATE_CFG}" "${cfg_path}" "${data_yaml}" "${ds_root}" "${exp_name}" "${EPOCHS}" "${bs}" "${DEVICE}" "${WORKERS}" "${SKIP_POST_EVAL}" "${ENHANCE_KEYS}" "${NETWORK_TAG}" >/dev/null
 
-    echo "[run] dataset=${alias} batch=${bs} epochs=${EPOCHS}"
+    echo "[run] network=${NETWORK_TAG} dataset=${alias} batch=${bs} epochs=${EPOCHS}"
     echo "[run] cfg=${cfg_path}"
     (
       cd "${ROOT}"
