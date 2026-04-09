@@ -1,0 +1,300 @@
+yolo_version: yolo11
+exp_name: smoke241/kolektorsdd_622_halves/bs4_e150
+run_name: ''
+data: /home/ubuntu/hpproject/yolo/dataset/yolo/kolektorsdd_622_halves/data.yaml
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/kolektorsdd_622_halves
+model: models/pretrained/yolo11m.pt
+epochs: 150
+imgsz: 640
+batch: 4
+device: '0'
+workers: 4
+conf: 0.25
+nms_iou: 0.7
+max_det: 100
+match_iou: 0.3
+mode: train_test
+weights: ''
+patience: 0
+lr0: 0.012
+lrf: 0.12
+warmup_epochs: 0
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+save_weights: true
+skip_eval_visuals: false
+skip_post_eval_metrics: true
+best_select_metric: fitness
+record_epoch_image_metrics: false
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ''
+threshold_sweep:
+  fix: iou
+  fix_list:
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  curve:
+  - 0.01
+  - 0.01
+  - 1.0
+  table:
+  - 0.0
+  - 0.05
+  - 1.0
+enhance241:
+  a2: false
+  a3: false
+  a3_refine: dw
+  a3_pre_div: 4
+  a3_alpha_init: 0.05
+  a3_alpha_cap: 0.5
+  a4: false
+  a4_refine: dw
+  a4_pre_div: 4
+  a4_order: 3
+  a4_alpha1_init: 0.05
+  a4_alpha1_cap: 0.5
+  a4_alpha2_init: 0.0
+  a4_alpha2_cap: 0.5
+  a6: false
+  a6_pre_div: 4
+  a6_refine: dw
+  a6_lsk_kernel: 7
+  a6_lsk_dilation: 3
+  a6_pki_dilation: 3
+  a6_attn_reduction: 16
+  a6_alpha_init: 0.02
+  a6_alpha_cap: 0.5
+  a5: false
+  a5_refine: dw
+  a5_depth: 1
+  a7: false
+  a7_order: 3
+  a7_refine: dw
+  a7_alpha_init: 0.05
+  a7_alpha_cap: 0.5
+  a9: false
+  a9_reduction: 16
+  a9_spatial_kernel: 7
+  a9_act: hswish
+  a9_alpha_init: 0.0
+  a9_alpha_cap: 0.5
+  a11: false
+  a11_where:
+  - stage_P3_out
+  a11_mc_reduction: 16
+  a11_ms_kernel: 7
+  a11_mode: safe_residual
+  a11_alpha_init: 0.0
+  a11_alpha_cap: 0.5
+  a21: false
+  a21_refine: dw
+  a21_pre_div: 4
+  a21_order: 3
+  a21_alpha1_init: 0.05
+  a21_alpha1_cap: 0.5
+  a21_alpha2_init: 0.0
+  a21_alpha2_cap: 0.5
+  b1: false
+  b2: false
+  b1_version: v3
+  b1_alpha_init: 0.02
+  b1_alpha_cap: 0.3
+  b1_weight_hidden: 64
+  b1_refine: dw
+  b1_upsample: nearest
+  b2_align: flow
+  b2_mode: safe
+  b2_gate_init: 0.0
+  b2_flow_max: 2.0
+  b2_refine: dw
+  b2_upsample: nearest
+  b3: false
+  b3_weight_init: 1.0
+  b3_weight_temp: 1.0
+  b3_refine: dw
+  b3_upsample: nearest
+  b3_eps: 0.0001
+  b3_alpha_init: 0.02
+  b3_alpha_cap: 0.3
+  b5: false
+  b5_depth: 2
+  b5_expansion: 0.5
+  b5_refine: dw
+  b5_upsample: nearest
+  b6: false
+  b6_offset_max: 1.5
+  b6_canvas_mode: bilinear
+  b6_kernel_size: 5
+  b6_compress: 64
+  b6_chunk_channels: 64
+  b6_hf_kernel: 3
+  b6_hf_gain_init: 0.1
+  b6_alpha_init: 0.02
+  b6_alpha_cap: 0.3
+  b7: false
+  b7_kernel_size: 5
+  b7_compress: 64
+  b7_chunk_channels: 64
+  b7_use_hf: true
+  b7_hf_kernel: 3
+  b7_hf_gain_init: 0.1
+  b7_alpha_init: 0.02
+  b7_alpha_cap: 0.3
+  b9: false
+  b9_depth: 2
+  b9_shortcut: true
+  b9_upsample: nearest
+  b9_alpha_init: 0.0
+  b9_alpha_cap: 0.5
+  b11: false
+  b11_stride: 4
+  b11_channels: 128
+  b11_fuse_from: backbone_l3
+  b11_fuse_mode: concat+conv
+  b11_refine: dw
+  b11_upsample: nearest
+  b11_alpha_init: 0.0
+  b11_alpha_cap: 0.5
+  b21: false
+  b21_kernel_size: 5
+  b21_compress: 64
+  b21_chunk_channels: 64
+  b21_alpha_init: 0.02
+  b21_alpha_cap: 0.3
+  debug_stats: false
+  c1: false
+  c4: false
+  c4_topk: 4
+  c4_window_size: 8
+  c4_num_heads: 4
+  c4_kv_downsample_mode: avg
+  c4_soft_routing: true
+  c4_gate_mode: se
+  c4_gate_reduction: 16
+  c4_alpha5_init: 0.05
+  c4_alpha5_cap: 0.5
+  c4_alpha11_init: 0.01
+  c4_alpha11_cap: 0.5
+  c5: false
+  c5_topk: 4
+  c5_window_size: 8
+  c5_num_heads: 4
+  c5_kv_downsample_mode: avg
+  c5_soft_routing: true
+  c5_alpha_by_conf: true
+  c5_conf_floor: 0.2
+  c5_conf_detach: false
+  c5_alpha_init: 0.05
+  c5_alpha_cap: 0.5
+  c6: false
+  c6_topk: 4
+  c6_window_size: 8
+  c6_num_heads: 4
+  c6_kv_downsample_mode: avg
+  c6_soft_routing: true
+  c6_groups: 4
+  c6_reduction: 16
+  c6_gate_scale: 6.0
+  c6_gate_bias: -0.5
+  c6_alpha_init: 0.05
+  c6_alpha_cap: 0.5
+  c7: false
+  c7_n: 3
+  c7_mode: full
+  c7_reduction: 16
+  c7_alpha_init: 0.02
+  c7_alpha_cap: 0.3
+  c9: false
+  c9_mode: full
+  c9_reduction: 16
+  c9_kernel_size: 7
+  c9_alpha_init: 0.0
+  c9_alpha_cap: 0.3
+  c11: false
+  c11_mode: se
+  c11_apply_to:
+  - P3
+  - P2_new
+  c11_alpha_init: 0.0
+  c11_alpha_cap: 0.5
+  c21: false
+  c21_topk: 4
+  c21_window_size: 8
+  c21_num_heads: 4
+  c21_kv_downsample_mode: avg
+  c21_soft_routing: true
+  c21_gate_mode: se
+  c21_gate_reduction: 16
+  c21_alpha5_init: 0.05
+  c21_alpha5_cap: 0.5
+  c21_alpha11_init: 0.01
+  c21_alpha11_cap: 0.5
+  d3: false
+  d3_temp_init: 1.0
+  d3_temp_min: 0.7
+  d3_temp_max: 2.0
+  d6: false
+  d6_apply_to:
+  - P3
+  - P2_new
+  d6_temp_init: 1.0
+  d6_temp_min: 0.5
+  d6_temp_max: 4.0
+  d6_p3_bias: 0.2
+  d6_scale_beta: 0.2
+  d6_scale_lambda: 64.0
+  d6_scale_threshold: 64.0
+  d6_stride_gamma_mul: 4.0
+  d6_score_domain: true
+  d6_alpha_init: 0.05
+  d6_alpha_cap: 0.5
+  d5: false
+  d5_downsample: dw
+  d5_upsample: nearest
+  d5_alpha_init: 0.02
+  d5_alpha_cap: 0.3
+  d7: false
+  d7_mode: bias_only
+  d7_cls_bias_shift: -0.15
+  d9: false
+  d9_mode: dw
+  d9_alpha_init: 0.0
+  d9_alpha_cap: 0.3
+  d11: false
+  d11_apply_to:
+  - P3
+  - P2_new
+  d11_temp_init: 1.0
+  d11_temp_min: 0.5
+  d11_temp_max: 4.0
+  d11_bias_shift_init: 0.0
+  d11_scale_beta: 0.0
+  d11_scale_lambda: 32.0
+  d11_scale_threshold: 64.0
+  d11_stride_gamma_mul: 4.0
+  d11_score_domain: true
+  d11_alpha_init: 0.0
+  d11_alpha_cap: 0.5
+  d21: false
+  d21_apply_to:
+  - P3
+  - P2_new
+  d21_temp_init: 1.0
+  d21_temp_min: 0.7
+  d21_temp_max: 2.0
+  d21_bias_shift_init: 0.0
+  d21_alpha_init: 0.0
+  d21_alpha_cap: 0.5
+  d1: false
