@@ -107,13 +107,13 @@ USER_EDIT_CONFIG: Dict[str, Any] = {
         # 下面默认值来自现有评估脚本口径：
         # p2_3_2a_fp_split.py / p23_4_eval_repro_check.py / p23_3_fn_mechanism.py
         "imgsz": 640,
-        "conf": 0.3,
-        "iou": 0.6,  # 对应 NMS IoU
-        "max_det": 20,
+        "conf": 0.25,
+        "iou": 0.7,  # 对应 NMS IoU
+        "max_det": 100,
         "device": "0",
         "batch": 4,
-        "tp_iou": 0.2,
-        "match_metric": "ios",  # iou | ios (ios=intersection over smaller box)
+        "tp_iou": 0.3,
+        "match_metric": "iou",  # iou | ios (ios=intersection over smaller box)
         "score_floor": 0.01,
         "raw_max_det": 3000,
     },
