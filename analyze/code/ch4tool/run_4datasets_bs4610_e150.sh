@@ -27,6 +27,8 @@ set -euo pipefail
 - WORKERS=4
 - SKIP_POST_EVAL=true
 - RESUME_POLICY=auto
+- LOG_DIR=$ROOT/experiments/_runlogs
+- ENABLE_SCRIPT_LOG=true       # true 时自动 tee 全量日志到 LOG_DIR
 
 运行：
 bash /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/run_4datasets_bs4610_e150.sh
@@ -42,6 +44,8 @@ DEVICE="${DEVICE:-0}"
 WORKERS="${WORKERS:-4}"
 SKIP_POST_EVAL="${SKIP_POST_EVAL:-true}"
 RESUME_POLICY="${RESUME_POLICY:-auto}"
+LOG_DIR="${LOG_DIR:-${ROOT}/experiments/_runlogs}"
+ENABLE_SCRIPT_LOG="${ENABLE_SCRIPT_LOG:-true}"
 
 mkdir -p "${CFG_OUT_DIR}"
 
@@ -289,6 +293,20 @@ print("".join(keys))
 PY
 }
 
+normalize_batch_tag() {
+  local raw="$1"
+  python - "${raw}" <<'PY'
+import re
+import sys
+s = str(sys.argv[1]).strip()
+vals = [x for x in re.split(r"[\s,;]+", s) if x]
+if not vals:
+    print("none")
+else:
+    print("-".join(vals))
+PY
+}
+
 if [[ ! -f "${TEMPLATE_CFG}" ]]; then
   echo "[error] template config not found: ${TEMPLATE_CFG}" >&2
   exit 2
@@ -298,6 +316,15 @@ echo "[plan] ROOT=${ROOT}"
 echo "[plan] TEMPLATE_CFG=${TEMPLATE_CFG}"
 echo "[plan] CFG_OUT_DIR=${CFG_OUT_DIR}"
 NETWORK_TAG="$(canonical_network_tag "${ENHANCE_KEYS}")"
+BATCH_TAG="$(normalize_batch_tag "${BATCH_LIST}")"
+
+if [[ "$(echo "${ENABLE_SCRIPT_LOG}" | tr '[:upper:]' '[:lower:]')" == "true" ]]; then
+  mkdir -p "${LOG_DIR}"
+  RUN_LOG="${LOG_DIR}/run_${NETWORK_TAG}_bs${BATCH_TAG}_e${EPOCHS}_$(date +%y%m%d_%H%M%S).log"
+  exec > >(tee -a "${RUN_LOG}") 2>&1
+  echo "[log] RUN_LOG=${RUN_LOG}"
+fi
+
 echo "[plan] EPOCHS=${EPOCHS} BATCH_LIST=${BATCH_LIST} ENHANCE_KEYS=${ENHANCE_KEYS:-<baseline>} NETWORK_TAG=${NETWORK_TAG} DEVICE=${DEVICE} WORKERS=${WORKERS}"
 echo "[plan] SKIP_POST_EVAL=${SKIP_POST_EVAL} RESUME_POLICY=${RESUME_POLICY}"
 
