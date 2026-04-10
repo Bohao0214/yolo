@@ -11,7 +11,7 @@ set -euo pipefail
 4) 默认跳过 post_eval 指标统计（只保留训练产物与权重），后续再统一评估
 
 默认 4 个数据集根目录：
-- /home/ubuntu/hpproject/yolo/experiments/gc10det_622_halves
+- /home/ubuntu/hpproject/yolo/dataset/yolo/gc10det_622_halves
 - /home/ubuntu/hpproject/yolo/dataset/yolo/DeepPCB_standard
 - /home/ubuntu/hpproject/yolo/dataset/yolo/kolektorsdd_622_halves
 - /home/ubuntu/hpproject/yolo/dataset/yolo/neudet_622
@@ -61,32 +61,27 @@ dataset_root_candidates() {
   case "${alias}" in
     gc10det_622_halves)
       cat <<EOF
-${ROOT}/experiments/gc10det_622_halves
 ${ROOT}/dataset/yolo/gc10det_622_halves
 EOF
       ;;
     DeepPCB_standard)
       cat <<EOF
 ${ROOT}/dataset/yolo/DeepPCB_standard
-${ROOT}/experiments/DeepPCB_standard
 EOF
       ;;
     kolektorsdd_622_halves)
       cat <<EOF
 ${ROOT}/dataset/yolo/kolektorsdd_622_halves
-${ROOT}/experiments/kolektorsdd_622_halves
 EOF
       ;;
     neudet_622)
       cat <<EOF
 ${ROOT}/dataset/yolo/neudet_622
-${ROOT}/experiments/neudet_622
 EOF
       ;;
     *)
       cat <<EOF
 ${ROOT}/dataset/yolo/${alias}
-${ROOT}/experiments/${alias}
 EOF
       ;;
   esac
