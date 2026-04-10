@@ -24,9 +24,11 @@ import argparse
 import csv
 import datetime as dt
 import gc
+import hashlib
 import json
 import math
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -819,6 +821,36 @@ def _sanitize_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in name).strip("._") or "model"
 
 
+def export_fn_images(
+    image_paths: Iterable[Path],
+    out_dir: Path,
+    model_name: str,
+    split_by_path: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows: List[Dict[str, Any]] = []
+    unique_paths = sorted({str(p) for p in image_paths})
+    for src_str in unique_paths:
+        src = Path(src_str)
+        if not src.exists():
+            continue
+        suffix = src.suffix.lower() if src.suffix else ".jpg"
+        file_hash = hashlib.md5(src_str.encode("utf-8")).hexdigest()[:10]
+        save_name = f"{_sanitize_name(src.stem)}_{file_hash}{suffix}"
+        dst = out_dir / save_name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+        rows.append(
+            {
+                "model_name": model_name,
+                "split": split_by_path.get(src_str, ""),
+                "source_image_path": src_str,
+                "saved_image_path": str(dst),
+            }
+        )
+    return rows
+
+
 def predict_for_images(
     model: Any,
     image_paths: Sequence[Path],
@@ -1151,6 +1183,9 @@ def run_one_model(
     fn_rows: List[Dict[str, Any]] = []
     fp_rows: List[Dict[str, Any]] = []
     raw_lines_path = report_dir / f"raw_{_sanitize_name(model_name)}.jsonl"
+    split_by_path = {str(r.image_path): r.split for r in records}
+    image_level_fn_paths: set[Path] = set()
+    target_level_fn_paths: set[Path] = set()
 
     with raw_lines_path.open("w", encoding="utf-8") as raw_f:
         for rec in records:
@@ -1190,6 +1225,7 @@ def run_one_model(
                 hit_img += 1
             elif has_gt and (not has_pred):
                 miss_img += 1
+                image_level_fn_paths.add(rec.image_path)
             elif (not has_gt) and has_pred:
                 fp_img += 1
             elif (not has_gt) and (not has_pred):
@@ -1205,6 +1241,7 @@ def run_one_model(
 
             # FN 机制
             for gi in unmatched_gt:
+                target_level_fn_paths.add(rec.image_path)
                 gt_box = gt_boxes[gi]
                 gt_c = int(gt_cls[gi]) if gi < gt_cls.shape[0] else 0
                 best_score_all, best_iou_all = _best_score_match_for_gt(
@@ -1313,6 +1350,20 @@ def run_one_model(
             }
             raw_f.write(json.dumps(raw_obj, ensure_ascii=False) + "\n")
 
+    fn_image_root = report_dir / "fn_images" / _sanitize_name(model_name)
+    image_level_fn_rows = export_fn_images(
+        image_paths=image_level_fn_paths,
+        out_dir=fn_image_root / "image_level_fn",
+        model_name=model_name,
+        split_by_path=split_by_path,
+    )
+    target_level_fn_rows = export_fn_images(
+        image_paths=target_level_fn_paths,
+        out_dir=fn_image_root / "target_level_fn",
+        model_name=model_name,
+        split_by_path=split_by_path,
+    )
+
     precision_target = safe_ratio(tp_total, tp_total + fp_total)
     recall_target = safe_ratio(tp_total, tp_total + fn_total)
     image_recall = safe_ratio(hit_img, hit_img + miss_img)
@@ -1365,6 +1416,10 @@ def run_one_model(
         "fn_type_count": fn_type_count,
         "fp_kind_count": fp_kind_count,
         "fp_type_count": fp_type_count,
+        "image_level_fn_image_rows": image_level_fn_rows,
+        "target_level_fn_image_rows": target_level_fn_rows,
+        "image_level_fn_dir": str(fn_image_root / "image_level_fn"),
+        "target_level_fn_dir": str(fn_image_root / "target_level_fn"),
         "val_metrics": val_metrics,
         "raw_jsonl": str(raw_lines_path),
     }
@@ -1406,6 +1461,10 @@ def build_readme(report_dir: Path, metadata: Dict[str, Any], missing_notes: List
     lines.append("- image_level_stats.csv：图像级四格 + 图像级 recall/fpr")
     lines.append("- scale_recall.csv：分尺度 GT/TP/FN/Recall")
     lines.append("- fn_mechanism.csv：每个 FN 的机制判定与关键中间量")
+    lines.append("- image_level_fn_images.csv：图像级 FN（miss_img）对应原图路径与导出路径")
+    lines.append("- target_level_fn_images.csv：目标级 FN（任一 unmatched_gt）对应原图路径与导出路径")
+    lines.append("- fn_images/<model>/image_level_fn：图像级 FN 图像导出目录")
+    lines.append("- fn_images/<model>/target_level_fn：目标级 FN 图像导出目录")
     lines.append("- fp_structure.csv：每个 FP 的结构类型与启发式类型")
     lines.append("- metadata.json：实际参数、来源、数据与模型映射")
     lines.append("- raw_<model>.jsonl：每图原始 GT 与最终预测集合")
@@ -1572,6 +1631,8 @@ def main() -> None:
     scale_rows: List[Dict[str, Any]] = []
     fn_rows: List[Dict[str, Any]] = []
     fp_rows: List[Dict[str, Any]] = []
+    image_level_fn_image_rows: List[Dict[str, Any]] = []
+    target_level_fn_image_rows: List[Dict[str, Any]] = []
     missing_notes: List[str] = []
 
     for item in models:
@@ -1601,6 +1662,8 @@ def main() -> None:
         scale_rows.extend(result["scale_rows"])
         fn_rows.extend(result["fn_rows"])
         fp_rows.extend(result["fp_rows"])
+        image_level_fn_image_rows.extend(result["image_level_fn_image_rows"])
+        target_level_fn_image_rows.extend(result["target_level_fn_image_rows"])
         metadata["models"].append(
             {
                 "name": name,
@@ -1608,6 +1671,10 @@ def main() -> None:
                 "split_used": ",".join(splits),
                 "raw_jsonl": result["raw_jsonl"],
                 "fn_type_count": result["fn_type_count"],
+                "image_level_fn_image_count": len(result["image_level_fn_image_rows"]),
+                "target_level_fn_image_count": len(result["target_level_fn_image_rows"]),
+                "image_level_fn_dir": result["image_level_fn_dir"],
+                "target_level_fn_dir": result["target_level_fn_dir"],
                 "fp_kind_count": result["fp_kind_count"],
                 "fp_type_count": result["fp_type_count"],
                 "val_metrics": result["val_metrics"],
@@ -1690,6 +1757,26 @@ def main() -> None:
             "rule_info",
         ],
     )
+    write_csv(
+        report_dir / "image_level_fn_images.csv",
+        image_level_fn_image_rows,
+        [
+            "model_name",
+            "split",
+            "source_image_path",
+            "saved_image_path",
+        ],
+    )
+    write_csv(
+        report_dir / "target_level_fn_images.csv",
+        target_level_fn_image_rows,
+        [
+            "model_name",
+            "split",
+            "source_image_path",
+            "saved_image_path",
+        ],
+    )
     write_json(report_dir / "metadata.json", metadata)
     build_readme(report_dir, metadata, missing_notes)
 
@@ -1699,6 +1786,9 @@ def main() -> None:
     print(f"[done] scale_recall.csv: {report_dir / 'scale_recall.csv'}")
     print(f"[done] fn_mechanism.csv: {report_dir / 'fn_mechanism.csv'}")
     print(f"[done] fp_structure.csv: {report_dir / 'fp_structure.csv'}")
+    print(f"[done] image_level_fn_images.csv: {report_dir / 'image_level_fn_images.csv'}")
+    print(f"[done] target_level_fn_images.csv: {report_dir / 'target_level_fn_images.csv'}")
+    print(f"[done] fn_images: {report_dir / 'fn_images'}")
     print(f"[done] metadata.json: {report_dir / 'metadata.json'}")
 
 
