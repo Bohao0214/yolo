@@ -24,11 +24,9 @@ import argparse
 import csv
 import datetime as dt
 import gc
-import hashlib
 import json
 import math
 import os
-import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -821,11 +819,72 @@ def _sanitize_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in name).strip("._") or "model"
 
 
+def _clip_xyxy_to_img(box: np.ndarray, w: int, h: int) -> Tuple[int, int, int, int]:
+    x1 = int(max(0, min(w - 1, math.floor(float(box[0])))))
+    y1 = int(max(0, min(h - 1, math.floor(float(box[1])))))
+    x2 = int(max(0, min(w - 1, math.ceil(float(box[2])))))
+    y2 = int(max(0, min(h - 1, math.ceil(float(box[3])))))
+    return x1, y1, x2, y2
+
+
+def _draw_gt_pred_overlay(
+    img_bgr: np.ndarray,
+    gt_boxes: np.ndarray,
+    gt_cls: np.ndarray,
+    pred_boxes: np.ndarray,
+    pred_cls: np.ndarray,
+    pred_scores: np.ndarray,
+) -> np.ndarray:
+    out = img_bgr.copy()
+    h, w = out.shape[:2]
+    gt_color = (0, 220, 0)
+    pred_color = (0, 70, 255)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    for i in range(gt_boxes.shape[0]):
+        x1, y1, x2, y2 = _clip_xyxy_to_img(gt_boxes[i], w, h)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        cv2.rectangle(out, (x1, y1), (x2, y2), gt_color, 2)
+        c = int(gt_cls[i]) if i < gt_cls.shape[0] else -1
+        txt = f"GT:c{c}"
+        ty = y1 - 5 if y1 - 5 >= 10 else y1 + 14
+        cv2.putText(out, txt, (x1, ty), font, 0.45, gt_color, 1, cv2.LINE_AA)
+
+    for i in range(pred_boxes.shape[0]):
+        x1, y1, x2, y2 = _clip_xyxy_to_img(pred_boxes[i], w, h)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        cv2.rectangle(out, (x1, y1), (x2, y2), pred_color, 2)
+        c = int(pred_cls[i]) if i < pred_cls.shape[0] else -1
+        s = float(pred_scores[i]) if i < pred_scores.shape[0] else 0.0
+        txt = f"Pred:c{c} {s:.2f}"
+        ty = y2 + 14 if y2 + 14 < h - 2 else max(12, y2 - 5)
+        cv2.putText(out, txt, (x1, ty), font, 0.45, pred_color, 1, cv2.LINE_AA)
+
+    return out
+
+
+def _resolve_nonconflict_name(out_dir: Path, base_name: str) -> Path:
+    cand = out_dir / base_name
+    if not cand.exists():
+        return cand
+    stem = Path(base_name).stem
+    suf = Path(base_name).suffix
+    idx = 2
+    while True:
+        cand = out_dir / f"{stem}__dup{idx}{suf}"
+        if not cand.exists():
+            return cand
+        idx += 1
+
+
 def export_fn_images(
     image_paths: Iterable[Path],
     out_dir: Path,
     model_name: str,
     split_by_path: Dict[str, str],
+    vis_info_by_path: Dict[str, Dict[str, np.ndarray]],
 ) -> List[Dict[str, Any]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, Any]] = []
@@ -834,12 +893,18 @@ def export_fn_images(
         src = Path(src_str)
         if not src.exists():
             continue
-        suffix = src.suffix.lower() if src.suffix else ".jpg"
-        file_hash = hashlib.md5(src_str.encode("utf-8")).hexdigest()[:10]
-        save_name = f"{_sanitize_name(src.stem)}_{file_hash}{suffix}"
-        dst = out_dir / save_name
-        if not dst.exists():
-            shutil.copy2(src, dst)
+        img_bgr = cv2.imread(str(src))
+        if img_bgr is None:
+            continue
+        vis = vis_info_by_path.get(src_str, {})
+        gt_boxes = vis.get("gt_boxes", np.zeros((0, 4), dtype=np.float32))
+        gt_cls = vis.get("gt_cls", np.zeros((0,), dtype=np.int32))
+        pred_boxes = vis.get("pred_boxes", np.zeros((0, 4), dtype=np.float32))
+        pred_cls = vis.get("pred_cls", np.zeros((0,), dtype=np.int32))
+        pred_scores = vis.get("pred_scores", np.zeros((0,), dtype=np.float32))
+        vis_img = _draw_gt_pred_overlay(img_bgr, gt_boxes, gt_cls, pred_boxes, pred_cls, pred_scores)
+        dst = _resolve_nonconflict_name(out_dir, src.name)
+        cv2.imwrite(str(dst), vis_img)
         rows.append(
             {
                 "model_name": model_name,
@@ -1186,6 +1251,7 @@ def run_one_model(
     split_by_path = {str(r.image_path): r.split for r in records}
     image_level_fn_paths: set[Path] = set()
     target_level_fn_paths: set[Path] = set()
+    vis_info_by_path: Dict[str, Dict[str, np.ndarray]] = {}
 
     with raw_lines_path.open("w", encoding="utf-8") as raw_f:
         for rec in records:
@@ -1199,6 +1265,13 @@ def run_one_model(
             pred_boxes = pf["boxes"]
             pred_scores = pf["scores"]
             pred_cls = pf["cls"]
+            vis_info_by_path[img_key] = {
+                "gt_boxes": gt_boxes.copy(),
+                "gt_cls": gt_cls.copy(),
+                "pred_boxes": pred_boxes.copy(),
+                "pred_cls": pred_cls.copy(),
+                "pred_scores": pred_scores.copy(),
+            }
 
             matches, unmatched_gt, unmatched_pred = match_one_to_one(
                 gt_boxes=gt_boxes,
@@ -1356,12 +1429,14 @@ def run_one_model(
         out_dir=fn_image_root / "image_level_fn",
         model_name=model_name,
         split_by_path=split_by_path,
+        vis_info_by_path=vis_info_by_path,
     )
     target_level_fn_rows = export_fn_images(
         image_paths=target_level_fn_paths,
         out_dir=fn_image_root / "target_level_fn",
         model_name=model_name,
         split_by_path=split_by_path,
+        vis_info_by_path=vis_info_by_path,
     )
 
     precision_target = safe_ratio(tp_total, tp_total + fp_total)
@@ -1463,8 +1538,8 @@ def build_readme(report_dir: Path, metadata: Dict[str, Any], missing_notes: List
     lines.append("- fn_mechanism.csv：每个 FN 的机制判定与关键中间量")
     lines.append("- image_level_fn_images.csv：图像级 FN（miss_img）对应原图路径与导出路径")
     lines.append("- target_level_fn_images.csv：目标级 FN（任一 unmatched_gt）对应原图路径与导出路径")
-    lines.append("- fn_images/<model>/image_level_fn：图像级 FN 图像导出目录")
-    lines.append("- fn_images/<model>/target_level_fn：目标级 FN 图像导出目录")
+    lines.append("- fn_images/<model>/image_level_fn：图像级 FN 可视化图（原图名，叠加 GT/Pred）")
+    lines.append("- fn_images/<model>/target_level_fn：目标级 FN 可视化图（原图名，叠加 GT/Pred）")
     lines.append("- fp_structure.csv：每个 FP 的结构类型与启发式类型")
     lines.append("- metadata.json：实际参数、来源、数据与模型映射")
     lines.append("- raw_<model>.jsonl：每图原始 GT 与最终预测集合")
