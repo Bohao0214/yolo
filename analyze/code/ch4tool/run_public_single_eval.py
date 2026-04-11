@@ -20,16 +20,29 @@ import copy
 import csv
 import datetime as dt
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import yaml
-from ultralytics import YOLO
 
 REPO_ROOT = Path("/home/ubuntu/hpproject/yolo")
 DEFAULT_DATASET_ROOT = REPO_ROOT / "dataset" / "yolo"
 PUBLIC_DATASETS = ["DeepPCB", "GC10-DET", "KolektorSDD", "NEU-DET"]
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+
+# 1) 禁止 ultralytics 在缺模块时自动 pip install（本项目本地模块不需要走 pip）
+os.environ["YOLO_AUTOINSTALL"] = "False"
+# 2) 注册仓库根目录，确保 checkpoint 反序列化可找到 third_party.*
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+try:  # 触发 namespace 包注册，避免 torch.load 找不到 third_party
+    import third_party  # type: ignore # noqa: F401
+except Exception:
+    pass
+
+from ultralytics import YOLO
 
 # 你可以只修改这里，不改其它代码
 USER_EDIT_CONFIG: Dict = {
@@ -123,6 +136,13 @@ def make_result_dir(root: Path, prefix: str) -> Path:
 def read_yaml(path: Path) -> Dict:
     obj = yaml.safe_load(path.read_text(encoding="utf-8"))
     return obj if isinstance(obj, dict) else {}
+
+
+def resolve_path_maybe_repo(path_like: str, base: Path = REPO_ROOT) -> Path:
+    p = Path(path_like).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    return (base / p).resolve()
 
 
 def float_or(v, d: float) -> float:
@@ -713,7 +733,7 @@ def build_runtime_config(args: argparse.Namespace) -> Dict:
         cfg["models"] = [
             {
                 "name": args.name.strip() if args.name.strip() else Path(args.weight).stem,
-                "path": str(args.weight),
+                "path": str(resolve_path_maybe_repo(str(args.weight))),
             }
         ]
     return cfg
@@ -731,9 +751,9 @@ def resolve_dataset_root(
     if cli_dataset_root:
         return cli_dataset_root.resolve()
     if model_cfg.get("dataset_root"):
-        return Path(model_cfg["dataset_root"]).expanduser().resolve()
+        return resolve_path_maybe_repo(str(model_cfg["dataset_root"]))
     if global_cfg.get("dataset_root"):
-        return Path(global_cfg["dataset_root"]).expanduser().resolve()
+        return resolve_path_maybe_repo(str(global_cfg["dataset_root"]))
 
     # 2) 从 args.yaml 的 data 字段优先解析
     _, ds_from_args = infer_from_args_data(args_yaml_obj, args_yaml_path)
@@ -760,9 +780,9 @@ def resolve_data_yaml_for_model(
     if cli_data_yaml:
         return cli_data_yaml.resolve()
     if model_cfg.get("data_yaml"):
-        return Path(model_cfg["data_yaml"]).expanduser().resolve()
+        return resolve_path_maybe_repo(str(model_cfg["data_yaml"]))
     if global_cfg.get("data_yaml"):
-        return Path(global_cfg["data_yaml"]).expanduser().resolve()
+        return resolve_path_maybe_repo(str(global_cfg["data_yaml"]))
 
     data_yaml_from_args, _ = infer_from_args_data(args_yaml_obj, args_yaml_path)
     if data_yaml_from_args is not None and data_yaml_from_args.exists():
@@ -808,7 +828,7 @@ def main() -> None:
         if not weight_path_raw:
             failures.append({"name": name, "error": "missing model path"})
             continue
-        weight = Path(weight_path_raw).expanduser().resolve()
+        weight = resolve_path_maybe_repo(weight_path_raw)
         if not weight.exists():
             failures.append({"name": name, "weight": str(weight), "error": "weight not found"})
             continue
