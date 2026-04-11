@@ -34,12 +34,35 @@ IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 # 你可以只修改这里，不改其它代码
 USER_EDIT_CONFIG: Dict = {
     "models": [
+        {"name": "dpcbbl1", "path": "experiments/smoke241/DeepPCB_standard/bs4_e150/exp_2604090441/train/weights/best.pt"},
+        {"name": "dpcbbl2", "path": "experiments/smoke241/DeepPCB_standard/bs10_e150/exp_2604090626/train/weights/best.pt"},
+        {"name": "dpcbbl3", "path": "experiments/a4b7d6/DeepPCB_standard/bs2_e150/exp_2604101709/train/weights/best.pt"},
+  
+        {"name": "dpcbbl4", "path": "experiments/smoke241/DeepPCB_standard/bs6_e150/exp_2604090541/train/weights/best.pt"},
+        {"name": "gc10bl1", "path": "experiments/smoke241/gc10det_622_halves/bs4_e150/exp_2604082313/train/weights/best.pt"},
+        {"name": "gc10bl2", "path": "experiments/smoke241/gc10det_622_halves/bs6_e150/exp_2604090132/train/weights/best.pt"},
+        {"name": "gc10bl3", "path": "/home/ubuntu/hpproject/yolo/experiments/smoke241/gc10det_622_halves/bs10_e150/exp_2604090318/train/weights/best.pt"},  
+        {"name": "gc10bl4", "path": "experiments/a4b7d6/gc10det_622_halves/bs2_e150/exp_2604101213/train/weights/best.pt"},  
+        {"name": "gc10bl5", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/gc10det_622_halves/bs4_e150/exp_2604091054/train/weights/best.pt"},  
+        {"name": "gc10bl6", "path": "experiments/a4b7d6/gc10det_622_halves/bs6_e150/exp_2604091357/train/weights/best.pt"},  
+
+        {"name": "kolbl1", "path": "experiments/smoke241/kolektorsdd_622_halves/bs4_e150/exp_2604090702/train/weights/best.pt"},  
+        {"name": "gc10bl2", "path": "experiments/smoke241/kolektorsdd_622_halves/bs6_e150/exp_2604090727/train/weights/best.pt"},  
+        {"name": "gc10bl3", "path": "experiments/smoke241/kolektorsdd_622_halves/bs10_e150/exp_2604090748/train/weights/best.pt"},  
+        {"name": "gc10bl4", "path": "experiments/a4b7d6/kolektorsdd_622_halves/bs2_e150/exp_2604101918/train/weights/best.pt"},  
+
+
+        {"name": "gc10bl4", "path": "experiments/smoke241/neudet_622/bs4_e150/exp_2604090804/train/weights/best.pt"},  
+        {"name": "gc10bl4", "path": "experiments/smoke241/neudet_622/bs6_e150/exp_2604090900/train/weights/best.pt"},  
+        {"name": "gc10bl4", "path": "experiments/smoke241/neudet_622/bs10_e150/exp_2604090943/train/weights/best.pt"},  
+        {"name": "gc10bl4", "path": "experiments/a4b7d6/neudet_622/bs2_e150/exp_2604102007/train/weights/best.pt"},  
+
         # {"name": "deeppcb_a4b7d6", "path": "/abs/path/to/best.pt"},
         # {"name": "gc10_baseline", "path": "/abs/path/to/best.pt"},
     ],
     "data_yaml": "",  # 全局默认 data.yaml；留空=自动解析（优先 args.yaml 的 data 字段）
     "dataset_root": "",  # 全局默认 dataset_root；留空=自动解析
-    "split": "auto",  # auto/test/val/train
+    "split": "test",  # auto/test/val/train
     "infer_params": {
         # 统一口径对齐 p2604_multi_model_eval.py
         "imgsz": 640,
