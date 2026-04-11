@@ -428,9 +428,6 @@ def compute_metrics(
         map_by_iou.append(float(np.mean(aps)) if aps else 0.0)
 
     return {
-        "tp": int(tp),
-        "fp": int(fp),
-        "fn": int(fn),
         "object_precision": precision,
         "object_recall": recall,
         "map50": map_by_iou[0] if map_by_iou else 0.0,
@@ -438,21 +435,63 @@ def compute_metrics(
     }
 
 
+def compute_image_level_metrics(
+    gt_map: Dict[str, List[Det]],
+    pred_map: Dict[str, List[Det]],
+    score_thr: float,
+) -> Dict[str, float]:
+    hit_img = 0
+    miss_img = 0
+    fp_img = 0
+    tn_img = 0
+
+    all_images = sorted(set(gt_map.keys()) | set(pred_map.keys()))
+    for image_key in all_images:
+        gt_dets = gt_map.get(image_key, [])
+        pred_dets = [p for p in pred_map.get(image_key, []) if p.score >= float(score_thr)]
+        has_gt = len(gt_dets) > 0
+        has_pred = len(pred_dets) > 0
+
+        if has_gt and has_pred:
+            hit_img += 1
+        elif has_gt and (not has_pred):
+            miss_img += 1
+        elif (not has_gt) and has_pred:
+            fp_img += 1
+        else:
+            tn_img += 1
+
+    image_precision = float(hit_img) / float(hit_img + fp_img) if (hit_img + fp_img) > 0 else 0.0
+    image_recall = float(hit_img) / float(hit_img + miss_img) if (hit_img + miss_img) > 0 else 0.0
+
+    return {
+        "image_precision": float(image_precision),
+        "image_recall": float(image_recall),
+    }
+
+
 def print_table(rows: List[dict]) -> None:
-    header = ["model", "obj_precision", "obj_recall", "mAP@0.5", "mAP@0.5:0.95", "TP", "FP", "FN"]
+    header = [
+        "model",
+        "mAP@0.5",
+        "mAP@0.5:0.95",
+        "obj_precision",
+        "obj_recall",
+        "img_precision",
+        "img_recall",
+    ]
     print(",".join(header))
     for r in rows:
         print(
             ",".join(
                 [
                     str(r["model"]),
-                    f"{r['object_precision']:.6f}",
-                    f"{r['object_recall']:.6f}",
                     f"{r['map50']:.6f}",
                     f"{r['map50_95']:.6f}",
-                    str(r["tp"]),
-                    str(r["fp"]),
-                    str(r["fn"]),
+                    f"{r['object_precision']:.6f}",
+                    f"{r['object_recall']:.6f}",
+                    f"{r['image_precision']:.6f}",
+                    f"{r['image_recall']:.6f}",
                 ]
             )
         )
@@ -470,6 +509,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mask-label", type=int, default=0, help="Class id assigned to mask-derived boxes.")
     p.add_argument("--obj-iou", type=float, default=0.5, help="IoU threshold for object precision/recall.")
     p.add_argument("--score-thr", type=float, default=0.25, help="Score threshold for object precision/recall.")
+    p.add_argument(
+        "--score-thr-list",
+        type=float,
+        nargs="+",
+        default=[],
+        help="Run a sweep on multiple score thresholds, e.g. --score-thr-list 0.2 0.3 0.4 0.5",
+    )
+    p.add_argument("--print-only", action="store_true", help="Only print results; do not save CSV/JSON.")
     p.add_argument("--out-csv", type=Path, default=None)
     p.add_argument("--out-json", type=Path, default=None)
     return p.parse_args()
@@ -501,54 +548,81 @@ def main() -> None:
     if not models:
         raise RuntimeError("No predictors provided. Use --pred-json and/or --mask-dir.")
 
-    rows = []
-    for model_name, pred_map in models:
-        classes = gt_classes if gt_classes else collect_classes([pred_map])
-        metrics = compute_metrics(
-            gt_map=gt_map,
-            pred_map=pred_map,
-            classes=classes,
-            score_thr=float(args.score_thr),
-            obj_iou=float(args.obj_iou),
-        )
-        row = {"model": model_name, **metrics}
-        rows.append(row)
+    thr_list = [float(x) for x in args.score_thr_list] if args.score_thr_list else [float(args.score_thr)]
 
-    print_table(rows)
-    print("note: 掩膜转最小外接框后得到的是检测能力对比，不是分割精度对比。")
-
-    if args.out_csv is not None:
-        out_csv = args.out_csv.resolve()
-        out_csv.parent.mkdir(parents=True, exist_ok=True)
-        with out_csv.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["model", "object_precision", "object_recall", "map50", "map50_95", "tp", "fp", "fn"],
+    for idx, thr in enumerate(thr_list):
+        rows = []
+        for model_name, pred_map in models:
+            classes = gt_classes if gt_classes else collect_classes([pred_map])
+            metrics = compute_metrics(
+                gt_map=gt_map,
+                pred_map=pred_map,
+                classes=classes,
+                score_thr=float(thr),
+                obj_iou=float(args.obj_iou),
             )
-            writer.writeheader()
-            for r in rows:
-                writer.writerow(r)
-        print(f"[done] csv -> {out_csv}")
+            img_metrics = compute_image_level_metrics(
+                gt_map=gt_map,
+                pred_map=pred_map,
+                score_thr=float(thr),
+            )
+            row = {"model": model_name, **metrics, **img_metrics}
+            rows.append(row)
 
-    if args.out_json is not None:
-        out_json = args.out_json.resolve()
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        out_json.write_text(
-            json.dumps(
-                {
-                    "dataset_root": str(dataset_root),
-                    "split": args.split,
-                    "obj_iou": float(args.obj_iou),
-                    "score_thr": float(args.score_thr),
-                    "rows": rows,
-                    "note": "mask->bbox comparison measures detection ability, not segmentation quality",
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        print(f"[done] json -> {out_json}")
+        if len(thr_list) > 1:
+            print(f"[score-thr={thr}]")
+        print_table(rows)
+        print("note: 掩膜转最小外接框后得到的是检测能力对比，不是分割精度对比。")
+        if idx != len(thr_list) - 1:
+            print()
+
+        if args.print_only:
+            continue
+
+        if args.out_csv is not None:
+            out_csv = args.out_csv.resolve()
+            if len(thr_list) > 1:
+                out_csv = out_csv.with_name(f"{out_csv.stem}_thr{thr:g}{out_csv.suffix}")
+            out_csv.parent.mkdir(parents=True, exist_ok=True)
+            with out_csv.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "model",
+                        "map50",
+                        "map50_95",
+                        "object_precision",
+                        "object_recall",
+                        "image_precision",
+                        "image_recall",
+                    ],
+                )
+                writer.writeheader()
+                for r in rows:
+                    writer.writerow(r)
+            print(f"[done] csv -> {out_csv}")
+
+        if args.out_json is not None:
+            out_json = args.out_json.resolve()
+            if len(thr_list) > 1:
+                out_json = out_json.with_name(f"{out_json.stem}_thr{thr:g}{out_json.suffix}")
+            out_json.parent.mkdir(parents=True, exist_ok=True)
+            out_json.write_text(
+                json.dumps(
+                    {
+                        "dataset_root": str(dataset_root),
+                        "split": args.split,
+                        "obj_iou": float(args.obj_iou),
+                        "score_thr": float(thr),
+                        "rows": rows,
+                        "note": "mask->bbox comparison measures detection ability, not segmentation quality",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            print(f"[done] json -> {out_json}")
 
 
 if __name__ == "__main__":
