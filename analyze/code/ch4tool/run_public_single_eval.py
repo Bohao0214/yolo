@@ -39,6 +39,7 @@ USER_EDIT_CONFIG: Dict = {
         {"name": "dpcbbl3", "path": "experiments/a4b7d6/DeepPCB_standard/bs2_e150/exp_2604101709/train/weights/best.pt"},
   
         {"name": "dpcbbl4", "path": "experiments/smoke241/DeepPCB_standard/bs6_e150/exp_2604090541/train/weights/best.pt"},
+
         {"name": "gc10bl1", "path": "experiments/smoke241/gc10det_622_halves/bs4_e150/exp_2604082313/train/weights/best.pt"},
         {"name": "gc10bl2", "path": "experiments/smoke241/gc10det_622_halves/bs6_e150/exp_2604090132/train/weights/best.pt"},
         {"name": "gc10bl3", "path": "/home/ubuntu/hpproject/yolo/experiments/smoke241/gc10det_622_halves/bs10_e150/exp_2604090318/train/weights/best.pt"},  
@@ -52,9 +53,9 @@ USER_EDIT_CONFIG: Dict = {
         {"name": "gc10bl4", "path": "experiments/a4b7d6/kolektorsdd_622_halves/bs2_e150/exp_2604101918/train/weights/best.pt"},  
 
 
-        {"name": "gc10bl4", "path": "experiments/smoke241/neudet_622/bs4_e150/exp_2604090804/train/weights/best.pt"},  
-        {"name": "gc10bl4", "path": "experiments/smoke241/neudet_622/bs6_e150/exp_2604090900/train/weights/best.pt"},  
-        {"name": "gc10bl4", "path": "experiments/smoke241/neudet_622/bs10_e150/exp_2604090943/train/weights/best.pt"},  
+        {"name": "gc10bl1", "path": "experiments/smoke241/neudet_622/bs4_e150/exp_2604090804/train/weights/best.pt"},  
+        {"name": "gc10bl2", "path": "experiments/smoke241/neudet_622/bs6_e150/exp_2604090900/train/weights/best.pt"},  
+        {"name": "gc10bl3", "path": "experiments/smoke241/neudet_622/bs10_e150/exp_2604090943/train/weights/best.pt"},  
         {"name": "gc10bl4", "path": "experiments/a4b7d6/neudet_622/bs2_e150/exp_2604102007/train/weights/best.pt"},  
 
         # {"name": "deeppcb_a4b7d6", "path": "/abs/path/to/best.pt"},
