@@ -346,6 +346,16 @@ def resolve_split_dir(dataset_root: Path, split_name: str) -> Tuple[str, Optiona
     return split_name, None
 
 
+def to_jsonable(obj):
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [to_jsonable(x) for x in obj]
+    return obj
+
+
 def run_one_model(
     runner,
     spec: ModelSpec,
@@ -364,11 +374,16 @@ def run_one_model(
     max_samples: int,
 ) -> Dict[str, int]:
     stats: Dict[str, int] = {}
+    processed_actual_splits = set()
     for split_req in requested_splits:
         split_name, split_dir = resolve_split_dir(dataset_root, split_req)
         if split_dir is None:
             print(f"[warn] skip split '{split_req}': {dataset_root / 'images' / split_req} not found.")
             continue
+        if split_name in processed_actual_splits:
+            print(f"[info] split '{split_req}' resolves to '{split_name}', already processed. skip duplicate.")
+            continue
+        processed_actual_splits.add(split_name)
         image_paths = list_images(split_dir)
         if max_samples > 0:
             image_paths = image_paths[:max_samples]
@@ -456,7 +471,7 @@ def main() -> None:
         "splits": requested_splits,
         "device": device,
         "models": [],
-        "args": vars(args),
+        "args": to_jsonable(vars(args)),
     }
     for spec in model_specs:
         print(f"[init] model={spec.name} type={spec.model_type} weights={spec.weights}")
