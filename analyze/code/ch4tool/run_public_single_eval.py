@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-公开数据集评估脚本（支持 USER_EDIT_CONFIG，只改配置即可运行）。
+公开数据集评估脚本（只改 USER_EDIT_CONFIG 即可）。
 
-1) 推荐方式：只改 USER_EDIT_CONFIG，然后直接运行
-   python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/run_public_single_eval.py
+目标：
+1) 输入权重后优先从同实验目录的 args.yaml 自动解析 data.yaml 与 dataset_root。
+2) 不再区分 method，统一用 name 作为模型标识。
+3) 输出两类指标：
+   - 多类别检测：mAP@0.5, mAP@0.5:0.95, avg_cls_precision, avg_cls_recall
+   - 图像级二分类（有缺陷/无缺陷）：bin_img_AP, bin_img_precision, bin_img_recall
 
-2) 命令行单模型覆盖（可选）
-   python .../run_public_single_eval.py --weight /abs/path/best.pt --dataset-root /abs/dataset
+运行：
+python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/run_public_single_eval.py
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import csv
 import datetime as dt
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import yaml
 from ultralytics import YOLO
@@ -25,16 +29,16 @@ from ultralytics import YOLO
 REPO_ROOT = Path("/home/ubuntu/hpproject/yolo")
 DEFAULT_DATASET_ROOT = REPO_ROOT / "dataset" / "yolo"
 PUBLIC_DATASETS = ["DeepPCB", "GC10-DET", "KolektorSDD", "NEU-DET"]
-PUBLIC_METHODS = ["YOLO11m", "本文方法"]
+IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 # 你可以只修改这里，不改其它代码
 USER_EDIT_CONFIG: Dict = {
     "models": [
-        # {"name": "deeppcb_yolo11m", "path": "/abs/path/to/best.pt", "method": "YOLO11m"},
-        # {"name": "deeppcb_our", "path": "/abs/path/to/best.pt", "method": "本文方法"},
+        # {"name": "deeppcb_a4b7d6", "path": "/abs/path/to/best.pt"},
+        # {"name": "gc10_baseline", "path": "/abs/path/to/best.pt"},
     ],
-    "data_yaml": "",  # 全局默认 data.yaml；留空则自动推断
-    "dataset_root": "",  # 全局默认 dataset_root；留空则自动推断
+    "data_yaml": "",  # 全局默认 data.yaml；留空=自动解析（优先 args.yaml 的 data 字段）
+    "dataset_root": "",  # 全局默认 dataset_root；留空=自动解析
     "split": "auto",  # auto/test/val/train
     "infer_params": {
         "imgsz": None,  # None=自动读 args.yaml
@@ -50,12 +54,12 @@ USER_EDIT_CONFIG: Dict = {
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Public dataset evaluation runner.")
+    p = argparse.ArgumentParser(description="Public dataset multi-model evaluation by name.")
     p.add_argument("--weight", type=Path, default=None, help="Optional single model override")
+    p.add_argument("--name", type=str, default="", help="Name for --weight")
     p.add_argument("--dataset-root", type=Path, default=None)
     p.add_argument("--data-yaml", type=Path, default=None)
     p.add_argument("--split", type=str, default="")
-    p.add_argument("--method-label", type=str, default="")
     p.add_argument("--device", type=str, default="")
     p.add_argument("--config-json", type=str, default="", help="JSON override for USER_EDIT_CONFIG")
     p.add_argument("--dry-run", action="store_true")
@@ -92,17 +96,18 @@ def read_yaml(path: Path) -> Dict:
     return obj if isinstance(obj, dict) else {}
 
 
-def find_args_yaml(weight: Path) -> Optional[Path]:
-    p = weight.resolve()
-    cands = []
-    if p.parent.name == "weights":
-        cands.append(p.parent.parent / "args.yaml")
-    for level in range(1, 7):
-        cands.append(p.parents[level - 1] / "args.yaml")
-    for c in cands:
-        if c.exists():
-            return c
-    return None
+def float_or(v, d: float) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return float(d)
+
+
+def int_or(v, d: int) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return int(d)
 
 
 def normalize_name(text: str) -> str:
@@ -141,6 +146,19 @@ def infer_dataset_root_from_label(label: str) -> Optional[Path]:
     return None
 
 
+def find_args_yaml(weight: Path) -> Optional[Path]:
+    p = weight.resolve()
+    cands = []
+    if p.parent.name == "weights":
+        cands.append(p.parent.parent / "args.yaml")
+    for level in range(1, 8):
+        cands.append(p.parents[level - 1] / "args.yaml")
+    for c in cands:
+        if c.exists():
+            return c
+    return None
+
+
 def resolve_data_yaml(dataset_root: Path) -> Optional[Path]:
     for n in ["data.yaml", "dataset.yaml", "data.yml", "dataset.yml"]:
         p = dataset_root / n
@@ -149,46 +167,66 @@ def resolve_data_yaml(dataset_root: Path) -> Optional[Path]:
     return None
 
 
+def _resolve_ref_path(raw: str, base: Path) -> Path:
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    return (base / p).resolve()
+
+
+def infer_from_args_data(args_yaml_obj: Dict, args_yaml_path: Optional[Path]) -> Tuple[Optional[Path], Optional[Path]]:
+    """
+    从 args.yaml 的 data 字段推断 (data_yaml, dataset_root)。
+    支持：
+    - data 指向 data.yaml
+    - data 指向 dataset_root
+    """
+    if not isinstance(args_yaml_obj, dict):
+        return None, None
+
+    base = args_yaml_path.parent if args_yaml_path else REPO_ROOT
+    raw_data = args_yaml_obj.get("data")
+    if not isinstance(raw_data, str) or not raw_data.strip():
+        return None, None
+
+    data_ref = _resolve_ref_path(raw_data, base)
+    data_yaml: Optional[Path] = None
+    dataset_root: Optional[Path] = None
+
+    if data_ref.exists():
+        if data_ref.is_file():
+            data_yaml = data_ref
+            data_obj = read_yaml(data_yaml)
+            path_key = data_obj.get("path")
+            if isinstance(path_key, str) and path_key.strip():
+                p = _resolve_ref_path(path_key, data_yaml.parent)
+                if p.exists():
+                    dataset_root = p
+            if dataset_root is None:
+                dataset_root = data_yaml.parent
+        else:
+            dataset_root = data_ref
+            candidate = resolve_data_yaml(dataset_root)
+            if candidate:
+                data_yaml = candidate
+
+    return data_yaml, dataset_root
+
+
 def choose_split(data_yaml: Path, split_arg: str) -> str:
     if split_arg and split_arg != "auto":
         return split_arg
-    data = read_yaml(data_yaml)
-    if data.get("test") not in (None, "", False):
+    d = read_yaml(data_yaml)
+    if d.get("test") not in (None, "", False):
         return "test"
-    if data.get("val") not in (None, "", False):
+    if d.get("val") not in (None, "", False):
         return "val"
+    if d.get("train") not in (None, "", False):
+        return "train"
     return "val"
 
 
-def pick_method_label(weight: Path, explicit: str) -> str:
-    if explicit.strip():
-        return explicit.strip()
-    s = normalize_name(str(weight))
-    if "baseline" in s or "yolo11m" in s:
-        return "YOLO11m"
-    return "本文方法"
-
-
-def float_or(v, d: float) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return float(d)
-
-
-def int_or(v, d: int) -> int:
-    try:
-        return int(v)
-    except Exception:
-        return int(d)
-
-
-def choose_eval_params(
-    args_yaml_obj: Dict,
-    global_infer: Dict,
-    model_infer: Dict,
-    cli_device: str,
-) -> Dict:
+def choose_eval_params(args_yaml_obj: Dict, global_infer: Dict, model_infer: Dict, cli_device: str) -> Dict:
     conf_auto = float_or(args_yaml_obj.get("metric_conf", args_yaml_obj.get("conf", 0.001)), 0.001)
     iou_auto = float_or(args_yaml_obj.get("nms_iou", args_yaml_obj.get("iou", 0.7)), 0.7)
     imgsz_auto = int_or(args_yaml_obj.get("imgsz", 640), 640)
@@ -201,7 +239,6 @@ def choose_eval_params(
     imgsz = model_infer.get("imgsz", global_infer.get("imgsz", None))
     max_det = model_infer.get("max_det", global_infer.get("max_det", None))
     batch = model_infer.get("batch", global_infer.get("batch", None))
-
     if conf is None:
         conf = conf_auto
     if iou is None:
@@ -217,8 +254,8 @@ def choose_eval_params(
         device = cli_device
         device_src = "cli"
     else:
-        gd = str(global_infer.get("device", "") or "")
         md = str(model_infer.get("device", "") or "")
+        gd = str(global_infer.get("device", "") or "")
         if md:
             device = md
             device_src = "model_infer"
@@ -240,26 +277,259 @@ def choose_eval_params(
     }
 
 
-def extract_metrics(val_res) -> Dict[str, float]:
+def extract_multiclass_metrics(val_res) -> Dict[str, float]:
     rd = getattr(val_res, "results_dict", {}) or {}
     box = getattr(val_res, "box", None)
-    p = rd.get("metrics/precision(B)")
-    r = rd.get("metrics/recall(B)")
     map50 = rd.get("metrics/mAP50(B)")
     map5095 = rd.get("metrics/mAP50-95(B)")
-    if p is None and box is not None:
-        p = getattr(box, "mp", 0.0)
-    if r is None and box is not None:
-        r = getattr(box, "mr", 0.0)
     if map50 is None and box is not None:
         map50 = getattr(box, "map50", 0.0)
     if map5095 is None and box is not None:
         map5095 = getattr(box, "map", 0.0)
+
+    cls_ps: List[float] = []
+    cls_rs: List[float] = []
+    try:
+        per_class = val_res.summary(normalize=True, decimals=8)
+        if isinstance(per_class, list):
+            for c in per_class:
+                if isinstance(c, dict):
+                    cls_ps.append(float_or(c.get("Box-P", 0.0), 0.0))
+                    cls_rs.append(float_or(c.get("Box-R", 0.0), 0.0))
+    except Exception:
+        pass
+
+    if not cls_ps:
+        cls_ps.append(float_or(rd.get("metrics/precision(B)", 0.0), 0.0))
+    if not cls_rs:
+        cls_rs.append(float_or(rd.get("metrics/recall(B)", 0.0), 0.0))
+
+    avg_cls_p = sum(cls_ps) / max(len(cls_ps), 1)
+    avg_cls_r = sum(cls_rs) / max(len(cls_rs), 1)
     return {
-        "map50": float_or(map50, 0.0),
-        "map50_95": float_or(map5095, 0.0),
-        "obj_precision": float_or(p, 0.0),
-        "obj_recall": float_or(r, 0.0),
+        "mAP@0.5": float_or(map50, 0.0),
+        "mAP@0.5:0.95": float_or(map5095, 0.0),
+        "avg_cls_precision": float(avg_cls_p),
+        "avg_cls_recall": float(avg_cls_r),
+    }
+
+
+def resolve_split_paths(data_yaml: Path, dataset_root: Path, split: str) -> List[Path]:
+    d = read_yaml(data_yaml)
+    entry = d.get(split)
+    if entry in (None, "", False):
+        if split == "test":
+            entry = d.get("val")
+        elif split == "val":
+            entry = d.get("test")
+    if entry in (None, "", False):
+        raise RuntimeError(f"split '{split}' 未在 data yaml 中找到: {data_yaml}")
+
+    base_raw = d.get("path")
+    if isinstance(base_raw, str) and base_raw.strip():
+        base = _resolve_ref_path(base_raw, data_yaml.parent)
+    else:
+        base = dataset_root
+
+    entries: List[str] = entry if isinstance(entry, list) else [entry]
+    paths: List[Path] = []
+    for e in entries:
+        if not isinstance(e, str):
+            continue
+        p = Path(e).expanduser()
+        if p.is_absolute():
+            paths.append(p.resolve())
+            continue
+        cands = [
+            (base / e).resolve(),
+            (dataset_root / e).resolve(),
+            (data_yaml.parent / e).resolve(),
+        ]
+        picked = None
+        for c in cands:
+            if c.exists():
+                picked = c
+                break
+        paths.append(picked if picked is not None else cands[0])
+    return paths
+
+
+def _read_image_list_file(txt_path: Path) -> List[Path]:
+    out = []
+    for line in txt_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        p = Path(s).expanduser()
+        if not p.is_absolute():
+            p = (txt_path.parent / p).resolve()
+        else:
+            p = p.resolve()
+        if p.exists() and p.suffix.lower() in IMG_EXTS:
+            out.append(p)
+    return out
+
+
+def list_split_images(split_paths: Sequence[Path]) -> List[Path]:
+    images: List[Path] = []
+    for p in split_paths:
+        if not p.exists():
+            continue
+        if p.is_dir():
+            images.extend(sorted([x for x in p.rglob("*") if x.is_file() and x.suffix.lower() in IMG_EXTS]))
+        elif p.is_file():
+            if p.suffix.lower() in IMG_EXTS:
+                images.append(p.resolve())
+            elif p.suffix.lower() == ".txt":
+                images.extend(_read_image_list_file(p.resolve()))
+    dedup = sorted({x.resolve() for x in images})
+    return dedup
+
+
+def infer_label_path(image_path: Path, dataset_root: Path) -> Path:
+    s = str(image_path.resolve())
+    marker = "/images/"
+    if marker in s:
+        return Path(s.replace(marker, "/labels/", 1)).with_suffix(".txt")
+    images_root = dataset_root / "images"
+    labels_root = dataset_root / "labels"
+    try:
+        rel = image_path.resolve().relative_to(images_root.resolve())
+        return (labels_root / rel).with_suffix(".txt")
+    except Exception:
+        return image_path.with_suffix(".txt")
+
+
+def has_defect_label(label_path: Path) -> bool:
+    if not label_path.exists():
+        return False
+    try:
+        for line in label_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def iter_chunks(items: Sequence[Path], n: int) -> Iterable[Sequence[Path]]:
+    n = max(1, int(n))
+    for i in range(0, len(items), n):
+        yield items[i : i + n]
+
+
+def average_precision_binary(y_true: List[int], y_score: List[float]) -> float:
+    if not y_true:
+        return 0.0
+    p = sum(1 for v in y_true if v == 1)
+    if p <= 0:
+        return 0.0
+    order = sorted(range(len(y_score)), key=lambda i: float(y_score[i]), reverse=True)
+    tp = 0
+    fp = 0
+    rec = [0.0]
+    prec = [1.0]
+    for i in order:
+        if int(y_true[i]) == 1:
+            tp += 1
+        else:
+            fp += 1
+        rec.append(tp / float(p))
+        prec.append(tp / float(tp + fp))
+    rec.append(1.0)
+    prec.append(0.0)
+    # precision envelope
+    for i in range(len(prec) - 2, -1, -1):
+        if prec[i] < prec[i + 1]:
+            prec[i] = prec[i + 1]
+    ap = 0.0
+    for i in range(len(rec) - 1):
+        ap += (rec[i + 1] - rec[i]) * prec[i + 1]
+    return float(ap)
+
+
+def compute_binary_image_metrics(
+    model: YOLO,
+    images: List[Path],
+    dataset_root: Path,
+    eval_params: Dict,
+) -> Dict[str, float]:
+    if not images:
+        return {
+            "bin_img_AP": 0.0,
+            "bin_img_precision": 0.0,
+            "bin_img_recall": 0.0,
+            "pos_images": 0,
+            "neg_images": 0,
+            "tp_img": 0,
+            "fp_img": 0,
+            "fn_img": 0,
+            "tn_img": 0,
+        }
+
+    decision_thr = float_or(eval_params["conf"], 0.001)
+    predict_floor = min(0.001, decision_thr)
+    iou = float_or(eval_params["iou"], 0.7)
+    imgsz = int_or(eval_params["imgsz"], 640)
+    max_det = int_or(eval_params["max_det"], 300)
+    batch = int_or(eval_params["batch"], 4)
+    device = str(eval_params["device"])
+
+    max_score_by_img: Dict[Path, float] = {p.resolve(): 0.0 for p in images}
+    for chunk in iter_chunks(images, batch):
+        stream = model.predict(
+            source=[str(x) for x in chunk],
+            conf=predict_floor,
+            iou=iou,
+            imgsz=imgsz,
+            max_det=max_det,
+            batch=max(1, batch),
+            device=device,
+            save=False,
+            verbose=False,
+            stream=True,
+        )
+        for res in stream:
+            p = Path(str(res.path)).resolve()
+            score = 0.0
+            if res.boxes is not None and res.boxes.conf is not None and len(res.boxes.conf) > 0:
+                score = float(res.boxes.conf.max().item())
+            max_score_by_img[p] = max(max_score_by_img.get(p, 0.0), score)
+
+    y_true: List[int] = []
+    y_score: List[float] = []
+    tp = fp = fn = tn = 0
+    for img in images:
+        gt_pos = has_defect_label(infer_label_path(img, dataset_root))
+        score = float_or(max_score_by_img.get(img.resolve(), 0.0), 0.0)
+        pred_pos = score >= decision_thr
+        y_true.append(1 if gt_pos else 0)
+        y_score.append(score)
+        if gt_pos and pred_pos:
+            tp += 1
+        elif (not gt_pos) and pred_pos:
+            fp += 1
+        elif gt_pos and (not pred_pos):
+            fn += 1
+        else:
+            tn += 1
+
+    pos = tp + fn
+    neg = fp + tn
+    precision = tp / float(tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / float(tp + fn) if (tp + fn) > 0 else 0.0
+    ap = average_precision_binary(y_true, y_score)
+
+    return {
+        "bin_img_AP": float(ap),
+        "bin_img_precision": float(precision),
+        "bin_img_recall": float(recall),
+        "pos_images": int(pos),
+        "neg_images": int(neg),
+        "tp_img": int(tp),
+        "fp_img": int(fp),
+        "fn_img": int(fn),
+        "tn_img": int(tn),
     }
 
 
@@ -276,69 +546,73 @@ def pct(v: float) -> str:
     return f"{v * 100.0:.2f}"
 
 
-def build_public_rows_filled(metrics_rows: List[Dict]) -> List[Dict]:
-    table = {
-        (d, mtd): {"dataset": d, "method": mtd, "mAP@0.5": "--", "mAP@0.5:0.95": "--", "P_obj/%": "--", "R_obj/%": "--"}
-        for d in PUBLIC_DATASETS
-        for mtd in PUBLIC_METHODS
-    }
-    best_key_score = {}
+def build_compare_rows_by_name(metrics_rows: List[Dict]) -> List[Dict]:
+    rows = []
     for r in metrics_rows:
-        key = (r["dataset"], r["method"])
-        if key not in table:
-            continue
-        score = float_or(r.get("mAP@0.5:0.95", 0.0), 0.0)
-        prev = best_key_score.get(key, -1.0)
-        if score >= prev:
-            best_key_score[key] = score
-            table[key] = {
+        rows.append(
+            {
                 "dataset": r["dataset"],
-                "method": r["method"],
+                "name": r["name"],
                 "mAP@0.5": pct(float_or(r["mAP@0.5"], 0.0)),
                 "mAP@0.5:0.95": pct(float_or(r["mAP@0.5:0.95"], 0.0)),
-                "P_obj/%": pct(float_or(r["P_obj"], 0.0)),
-                "R_obj/%": pct(float_or(r["R_obj"], 0.0)),
+                "avg_cls_P/%": pct(float_or(r["avg_cls_precision"], 0.0)),
+                "avg_cls_R/%": pct(float_or(r["avg_cls_recall"], 0.0)),
+                "bin_img_AP/%": pct(float_or(r["bin_img_AP"], 0.0)),
+                "bin_img_P/%": pct(float_or(r["bin_img_precision"], 0.0)),
+                "bin_img_R/%": pct(float_or(r["bin_img_recall"], 0.0)),
             }
-    return [table[(d, mtd)] for d in PUBLIC_DATASETS for mtd in PUBLIC_METHODS]
+        )
+    order = {k: i for i, k in enumerate(PUBLIC_DATASETS)}
+    rows.sort(key=lambda x: (order.get(x["dataset"], 999), x["name"]))
+    return rows
 
 
 def write_markdown_table(path: Path, rows: List[Dict]) -> None:
     lines = [
-        "# 公开数据集对比实验结果模板（已填当前可得项）",
+        "# 公开数据集对比结果（按 name）",
         "",
-        "| 数据集 | 方法 | mAP@0.5 | mAP@0.5:0.95 | P_obj/% | R_obj/% |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| 数据集 | name | mAP@0.5 | mAP@0.5:0.95 | avg_cls_P/% | avg_cls_R/% | bin_img_AP/% | bin_img_P/% | bin_img_R/% |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         lines.append(
-            f"| {r['dataset']} | {r['method']} | {r['mAP@0.5']} | {r['mAP@0.5:0.95']} | {r['P_obj/%']} | {r['R_obj/%']} |"
+            f"| {r['dataset']} | {r['name']} | {r['mAP@0.5']} | {r['mAP@0.5:0.95']} | "
+            f"{r['avg_cls_P/%']} | {r['avg_cls_R/%']} | {r['bin_img_AP/%']} | {r['bin_img_P/%']} | {r['bin_img_R/%']} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def write_latex_table(path: Path, rows: List[Dict]) -> None:
-    grouped: Dict[str, List[Dict]] = {}
-    for r in rows:
-        grouped.setdefault(r["dataset"], []).append(r)
     lines = [
         "\\begin{table}[htbp]",
         "    \\centering",
-        "    \\caption{公开数据集对比实验结果模板（当前已填部分）}",
-        "    \\label{tab:ch4_public_compare}",
-        "    \\begin{tabular}{llcccc}",
+        "    \\caption{公开数据集对比结果（按 name）}",
+        "    \\begin{tabular}{llccccccc}",
         "        \\toprule",
-        "        数据集 & 方法 & $mAP@0.5$ & $mAP@0.5:0.95$ & $P_{\\mathrm{obj}}$/\\% & $R_{\\mathrm{obj}}$/\\%  \\\\",
+        "        数据集 & name & $mAP@0.5$ & $mAP@0.5:0.95$ & $P_{cls}$/\\% & $R_{cls}$/\\% & $AP_{img}$/\\% & $P_{img}$/\\% & $R_{img}$/\\% \\\\",
         "        \\midrule",
     ]
-    for i, d in enumerate(PUBLIC_DATASETS):
-        for rr in grouped.get(d, []):
-            lines.append(
-                f"        {rr['dataset']} & {rr['method']} & {rr['mAP@0.5']} & {rr['mAP@0.5:0.95']} & {rr['P_obj/%']} & {rr['R_obj/%']} \\\\"
-            )
-        if i != len(PUBLIC_DATASETS) - 1:
-            lines.append("        \\midrule")
-    lines.extend(["        \\bottomrule", "    \\end{tabular}", "\\end{table}", ""])
+    for r in rows:
+        lines.append(
+            f"        {r['dataset']} & {r['name']} & {r['mAP@0.5']} & {r['mAP@0.5:0.95']} & "
+            f"{r['avg_cls_P/%']} & {r['avg_cls_R/%']} & {r['bin_img_AP/%']} & {r['bin_img_P/%']} & {r['bin_img_R/%']} \\\\"
+        )
+    lines += ["        \\bottomrule", "    \\end{tabular}", "\\end{table}", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def build_runtime_config(args: argparse.Namespace) -> Dict:
+    cfg = copy.deepcopy(USER_EDIT_CONFIG)
+    if args.config_json:
+        cfg = deep_merge(cfg, json.loads(args.config_json))
+    if args.weight:
+        cfg["models"] = [
+            {
+                "name": args.name.strip() if args.name.strip() else Path(args.weight).stem,
+                "path": str(args.weight),
+            }
+        ]
+    return cfg
 
 
 def resolve_dataset_root(
@@ -346,8 +620,10 @@ def resolve_dataset_root(
     global_cfg: Dict,
     cli_dataset_root: Optional[Path],
     args_yaml_obj: Dict,
+    args_yaml_path: Optional[Path],
     weight: Path,
 ) -> Path:
+    # 1) CLI / config 显式给定优先
     if cli_dataset_root:
         return cli_dataset_root.resolve()
     if model_cfg.get("dataset_root"):
@@ -355,23 +631,18 @@ def resolve_dataset_root(
     if global_cfg.get("dataset_root"):
         return Path(global_cfg["dataset_root"]).expanduser().resolve()
 
+    # 2) 从 args.yaml 的 data 字段优先解析
+    _, ds_from_args = infer_from_args_data(args_yaml_obj, args_yaml_path)
+    if ds_from_args is not None and ds_from_args.exists():
+        return ds_from_args.resolve()
+
+    # 3) 从权重路径推断公开数据集别名
     label = infer_dataset_label_from_text(str(weight))
     inferred = infer_dataset_root_from_label(label)
     if inferred and inferred.exists():
         return inferred.resolve()
 
-    data_ref = args_yaml_obj.get("data")
-    if isinstance(data_ref, str) and data_ref.strip():
-        p = Path(data_ref).expanduser()
-        if p.exists():
-            if p.is_file():
-                data_obj = read_yaml(p)
-                base = Path(data_obj.get("path")).expanduser() if data_obj.get("path") else None
-                if base and base.exists():
-                    return base.resolve()
-                return p.parent.resolve()
-            return p.resolve()
-    raise RuntimeError("无法自动定位 dataset_root，请在 USER_EDIT_CONFIG 或命令行中显式设置")
+    raise RuntimeError("无法自动定位 dataset_root，请在 USER_EDIT_CONFIG 或命令行显式设置")
 
 
 def resolve_data_yaml_for_model(
@@ -379,6 +650,8 @@ def resolve_data_yaml_for_model(
     global_cfg: Dict,
     cli_data_yaml: Optional[Path],
     dataset_root: Path,
+    args_yaml_obj: Dict,
+    args_yaml_path: Optional[Path],
 ) -> Path:
     if cli_data_yaml:
         return cli_data_yaml.resolve()
@@ -386,8 +659,13 @@ def resolve_data_yaml_for_model(
         return Path(model_cfg["data_yaml"]).expanduser().resolve()
     if global_cfg.get("data_yaml"):
         return Path(global_cfg["data_yaml"]).expanduser().resolve()
+
+    data_yaml_from_args, _ = infer_from_args_data(args_yaml_obj, args_yaml_path)
+    if data_yaml_from_args is not None and data_yaml_from_args.exists():
+        return data_yaml_from_args.resolve()
+
     p = resolve_data_yaml(dataset_root)
-    if p:
+    if p is not None:
         return p.resolve()
     raise RuntimeError(f"未找到 data.yaml/dataset.yaml: {dataset_root}")
 
@@ -398,23 +676,6 @@ def resolve_split_for_model(model_cfg: Dict, global_cfg: Dict, cli_split: str, d
     if model_cfg.get("split"):
         return choose_split(data_yaml, str(model_cfg["split"]))
     return choose_split(data_yaml, str(global_cfg.get("split", "auto")))
-
-
-def build_runtime_config(args: argparse.Namespace) -> Dict:
-    cfg = copy.deepcopy(USER_EDIT_CONFIG)
-    if args.config_json:
-        cfg = deep_merge(cfg, json.loads(args.config_json))
-
-    # CLI 单模型覆盖：不依赖 USER_EDIT_CONFIG["models"]
-    if args.weight:
-        single = {
-            "name": Path(args.weight).stem,
-            "path": str(args.weight),
-            "method": args.method_label or "",
-        }
-        cfg["models"] = [single]
-
-    return cfg
 
 
 def main() -> None:
@@ -437,29 +698,30 @@ def main() -> None:
         if not isinstance(mcfg, dict):
             failures.append({"model": str(mcfg), "error": "model config item is not dict"})
             continue
-        model_name = str(mcfg.get("name", "unnamed"))
+        name = str(mcfg.get("name", "unnamed")).strip() or "unnamed"
         weight_path_raw = str(mcfg.get("path", "")).strip()
         if not weight_path_raw:
-            failures.append({"model": model_name, "error": "missing model path"})
+            failures.append({"name": name, "error": "missing model path"})
             continue
         weight = Path(weight_path_raw).expanduser().resolve()
         if not weight.exists():
-            failures.append({"model": model_name, "weight": str(weight), "error": "weight not found"})
+            failures.append({"name": name, "weight": str(weight), "error": "weight not found"})
             continue
 
         try:
             args_yaml_path = find_args_yaml(weight)
             args_yaml_obj = read_yaml(args_yaml_path) if args_yaml_path and args_yaml_path.exists() else {}
-            dataset_root = resolve_dataset_root(mcfg, cfg, args.dataset_root, args_yaml_obj, weight)
+
+            dataset_root = resolve_dataset_root(mcfg, cfg, args.dataset_root, args_yaml_obj, args_yaml_path, weight)
             if not dataset_root.exists():
                 raise RuntimeError(f"dataset_root not found: {dataset_root}")
-            data_yaml = resolve_data_yaml_for_model(mcfg, cfg, args.data_yaml, dataset_root)
+
+            data_yaml = resolve_data_yaml_for_model(mcfg, cfg, args.data_yaml, dataset_root, args_yaml_obj, args_yaml_path)
             if not data_yaml.exists():
                 raise RuntimeError(f"data_yaml not found: {data_yaml}")
-            split = resolve_split_for_model(mcfg, cfg, args.split, data_yaml)
-            method_label = pick_method_label(weight, str(mcfg.get("method", "") or args.method_label))
-            dataset_label = str(mcfg.get("dataset_label", "")).strip() or infer_dataset_label_from_text(str(dataset_root))
 
+            split = resolve_split_for_model(mcfg, cfg, args.split, data_yaml)
+            dataset_label = str(mcfg.get("dataset_label", "")).strip() or infer_dataset_label_from_text(str(dataset_root))
             eval_params = choose_eval_params(
                 args_yaml_obj=args_yaml_obj,
                 global_infer=cfg.get("infer_params", {}) if isinstance(cfg.get("infer_params"), dict) else {},
@@ -467,15 +729,18 @@ def main() -> None:
                 cli_device=args.device,
             )
 
+            split_paths = resolve_split_paths(data_yaml, dataset_root, split)
+            split_images = list_split_images(split_paths)
+
             used = {
-                "name": model_name,
+                "name": name,
                 "weight": str(weight),
                 "args_yaml": str(args_yaml_path) if args_yaml_path else None,
                 "dataset_root": str(dataset_root),
                 "dataset_label": dataset_label,
                 "data_yaml": str(data_yaml),
                 "split": split,
-                "method": method_label,
+                "num_images_in_split": len(split_images),
                 "eval_params": eval_params,
             }
             used_items.append(used)
@@ -498,24 +763,34 @@ def main() -> None:
                 save_json=False,
                 verbose=False,
             )
-            metric = extract_metrics(val_res)
+            cls_metrics = extract_multiclass_metrics(val_res)
+            bin_metrics = compute_binary_image_metrics(model, split_images, dataset_root, eval_params)
+
             row = {
-                "name": model_name,
+                "name": name,
                 "dataset": dataset_label,
-                "method": method_label,
                 "weight": str(weight),
                 "data_yaml": str(data_yaml),
                 "split": split,
-                "mAP@0.5": f"{metric['map50']:.6f}",
-                "mAP@0.5:0.95": f"{metric['map50_95']:.6f}",
-                "P_obj": f"{metric['obj_precision']:.6f}",
-                "R_obj": f"{metric['obj_recall']:.6f}",
+                "mAP@0.5": f"{cls_metrics['mAP@0.5']:.6f}",
+                "mAP@0.5:0.95": f"{cls_metrics['mAP@0.5:0.95']:.6f}",
+                "avg_cls_precision": f"{cls_metrics['avg_cls_precision']:.6f}",
+                "avg_cls_recall": f"{cls_metrics['avg_cls_recall']:.6f}",
+                "bin_img_AP": f"{bin_metrics['bin_img_AP']:.6f}",
+                "bin_img_precision": f"{bin_metrics['bin_img_precision']:.6f}",
+                "bin_img_recall": f"{bin_metrics['bin_img_recall']:.6f}",
+                "pos_images": int(bin_metrics["pos_images"]),
+                "neg_images": int(bin_metrics["neg_images"]),
+                "tp_img": int(bin_metrics["tp_img"]),
+                "fp_img": int(bin_metrics["fp_img"]),
+                "fn_img": int(bin_metrics["fn_img"]),
+                "tn_img": int(bin_metrics["tn_img"]),
             }
             success_rows.append(row)
         except Exception as ex:
-            failures.append({"model": model_name, "weight": str(weight), "error": str(ex)})
+            failures.append({"name": name, "weight": str(weight), "error": str(ex)})
 
-    # 输出文件
+    # 输出
     (out_dir / "run.log").write_text("\n".join(logs) + ("\n" if logs else ""), encoding="utf-8")
     (out_dir / "used_params.json").write_text(
         json.dumps({"config": cfg, "used": used_items}, ensure_ascii=False, indent=2),
@@ -526,15 +801,24 @@ def main() -> None:
         write_csv(out_dir / "metrics_all.csv", success_rows, list(success_rows[0].keys()))
         if len(success_rows) == 1:
             write_csv(out_dir / "metrics_single.csv", success_rows, list(success_rows[0].keys()))
-
-    table_rows = build_public_rows_filled(success_rows)
+    compare_rows = build_compare_rows_by_name(success_rows)
     write_csv(
-        out_dir / "public_compare_template.csv",
-        table_rows,
-        ["dataset", "method", "mAP@0.5", "mAP@0.5:0.95", "P_obj/%", "R_obj/%"],
+        out_dir / "public_compare_by_name.csv",
+        compare_rows,
+        [
+            "dataset",
+            "name",
+            "mAP@0.5",
+            "mAP@0.5:0.95",
+            "avg_cls_P/%",
+            "avg_cls_R/%",
+            "bin_img_AP/%",
+            "bin_img_P/%",
+            "bin_img_R/%",
+        ],
     )
-    write_markdown_table(out_dir / "public_compare_template.md", table_rows)
-    write_latex_table(out_dir / "public_compare_table.tex", table_rows)
+    write_markdown_table(out_dir / "public_compare_by_name.md", compare_rows)
+    write_latex_table(out_dir / "public_compare_by_name.tex", compare_rows)
 
     if failures:
         (out_dir / "failures.json").write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -544,9 +828,9 @@ def main() -> None:
         print(f"[done] metrics_all: {out_dir / 'metrics_all.csv'}")
     else:
         print("[warn] no successful model run.")
-    print(f"[done] table_csv: {out_dir / 'public_compare_template.csv'}")
-    print(f"[done] table_md : {out_dir / 'public_compare_template.md'}")
-    print(f"[done] table_tex: {out_dir / 'public_compare_table.tex'}")
+    print(f"[done] table_csv: {out_dir / 'public_compare_by_name.csv'}")
+    print(f"[done] table_md : {out_dir / 'public_compare_by_name.md'}")
+    print(f"[done] table_tex: {out_dir / 'public_compare_by_name.tex'}")
     if failures:
         print(f"[warn] failures: {out_dir / 'failures.json'}")
 
