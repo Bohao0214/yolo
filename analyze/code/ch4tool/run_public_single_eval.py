@@ -41,12 +41,17 @@ USER_EDIT_CONFIG: Dict = {
     "dataset_root": "",  # 全局默认 dataset_root；留空=自动解析
     "split": "auto",  # auto/test/val/train
     "infer_params": {
-        "imgsz": None,  # None=自动读 args.yaml
-        "conf": None,
-        "iou": None,
-        "max_det": None,
-        "device": "",  # 空=自动读 args.yaml
-        "batch": None,
+        # 统一口径对齐 p2604_multi_model_eval.py
+        "imgsz": 640,
+        "conf": 0.25,
+        "iou": 0.7,  # NMS IoU
+        "max_det": 100,
+        "device": "0",
+        "batch": 4,
+        "tp_iou": 0.3,  # 预留（本脚本当前不做 GT-Pred 匹配统计）
+        "match_metric": "iou",  # 预留: iou | ios
+        "score_floor": 0.01,  # 二分类图像级 AP 统计时的最低打分阈值
+        "raw_max_det": 3000,  # 二分类图像级 AP 统计时的最大候选框数
     },
     "out_root": "/home/ubuntu/hpproject/yolo/analyze/result",
     "report_prefix": "result_",
@@ -226,6 +231,33 @@ def choose_split(data_yaml: Path, split_arg: str) -> str:
     return "val"
 
 
+def parse_split_spec(split_spec: str, data_yaml: Path) -> List[str]:
+    """
+    支持:
+    - auto
+    - test / val / train
+    - val+test / test+val
+    - val,test
+    """
+    spec = (split_spec or "auto").strip()
+    if not spec or spec == "auto":
+        return [choose_split(data_yaml, "auto")]
+
+    raw_parts = spec.replace(",", "+").split("+")
+    parts = [p.strip() for p in raw_parts if p.strip()]
+    if not parts:
+        return [choose_split(data_yaml, "auto")]
+
+    # 去重且保持顺序
+    seen = set()
+    out: List[str] = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 def choose_eval_params(args_yaml_obj: Dict, global_infer: Dict, model_infer: Dict, cli_device: str) -> Dict:
     conf_auto = float_or(args_yaml_obj.get("metric_conf", args_yaml_obj.get("conf", 0.001)), 0.001)
     iou_auto = float_or(args_yaml_obj.get("nms_iou", args_yaml_obj.get("iou", 0.7)), 0.7)
@@ -233,12 +265,20 @@ def choose_eval_params(args_yaml_obj: Dict, global_infer: Dict, model_infer: Dic
     max_det_auto = int_or(args_yaml_obj.get("max_det", 300), 300)
     batch_auto = int_or(args_yaml_obj.get("eval_batch", args_yaml_obj.get("batch", 4)), 4)
     device_auto = str(args_yaml_obj.get("eval_device", args_yaml_obj.get("device", "0")) or "0")
+    tp_iou_auto = float_or(args_yaml_obj.get("tp_iou", 0.3), 0.3)
+    match_metric_auto = str(args_yaml_obj.get("match_metric", "iou") or "iou")
+    score_floor_auto = float_or(args_yaml_obj.get("score_floor", 0.01), 0.01)
+    raw_max_det_auto = int_or(args_yaml_obj.get("raw_max_det", 3000), 3000)
 
     conf = model_infer.get("conf", global_infer.get("conf", None))
     iou = model_infer.get("iou", global_infer.get("iou", None))
     imgsz = model_infer.get("imgsz", global_infer.get("imgsz", None))
     max_det = model_infer.get("max_det", global_infer.get("max_det", None))
     batch = model_infer.get("batch", global_infer.get("batch", None))
+    tp_iou = model_infer.get("tp_iou", global_infer.get("tp_iou", None))
+    match_metric = model_infer.get("match_metric", global_infer.get("match_metric", None))
+    score_floor = model_infer.get("score_floor", global_infer.get("score_floor", None))
+    raw_max_det = model_infer.get("raw_max_det", global_infer.get("raw_max_det", None))
     if conf is None:
         conf = conf_auto
     if iou is None:
@@ -249,6 +289,14 @@ def choose_eval_params(args_yaml_obj: Dict, global_infer: Dict, model_infer: Dic
         max_det = max_det_auto
     if batch is None:
         batch = batch_auto
+    if tp_iou is None:
+        tp_iou = tp_iou_auto
+    if match_metric is None:
+        match_metric = match_metric_auto
+    if score_floor is None:
+        score_floor = score_floor_auto
+    if raw_max_det is None:
+        raw_max_det = raw_max_det_auto
 
     if cli_device:
         device = cli_device
@@ -272,6 +320,10 @@ def choose_eval_params(args_yaml_obj: Dict, global_infer: Dict, model_infer: Dic
         "imgsz": int_or(imgsz, imgsz_auto),
         "max_det": int_or(max_det, max_det_auto),
         "batch": int_or(batch, batch_auto),
+        "tp_iou": float_or(tp_iou, tp_iou_auto),
+        "match_metric": str(match_metric or match_metric_auto),
+        "score_floor": float_or(score_floor, score_floor_auto),
+        "raw_max_det": int_or(raw_max_det, raw_max_det_auto),
         "device": device,
         "device_source": device_src,
     }
@@ -312,6 +364,32 @@ def extract_multiclass_metrics(val_res) -> Dict[str, float]:
         "avg_cls_precision": float(avg_cls_p),
         "avg_cls_recall": float(avg_cls_r),
     }
+
+
+def extract_instances_weight(val_res) -> float:
+    try:
+        per_class = val_res.summary(normalize=True, decimals=8)
+        if isinstance(per_class, list):
+            s = 0.0
+            for c in per_class:
+                if isinstance(c, dict):
+                    s += float_or(c.get("Instances", 0.0), 0.0)
+            if s > 0:
+                return s
+    except Exception:
+        pass
+    return 0.0
+
+
+def weighted_avg(values: List[float], weights: List[float]) -> float:
+    if not values:
+        return 0.0
+    if len(values) != len(weights):
+        return float(sum(values) / len(values))
+    wsum = sum(weights)
+    if wsum <= 0:
+        return float(sum(values) / len(values))
+    return float(sum(v * w for v, w in zip(values, weights)) / wsum)
 
 
 def resolve_split_paths(data_yaml: Path, dataset_root: Path, split: str) -> List[Path]:
@@ -468,10 +546,12 @@ def compute_binary_image_metrics(
         }
 
     decision_thr = float_or(eval_params["conf"], 0.001)
-    predict_floor = min(0.001, decision_thr)
+    score_floor = float_or(eval_params.get("score_floor", 0.01), 0.01)
+    predict_floor = min(score_floor, decision_thr)
     iou = float_or(eval_params["iou"], 0.7)
     imgsz = int_or(eval_params["imgsz"], 640)
     max_det = int_or(eval_params["max_det"], 300)
+    raw_max_det = int_or(eval_params.get("raw_max_det", 3000), 3000)
     batch = int_or(eval_params["batch"], 4)
     device = str(eval_params["device"])
 
@@ -482,7 +562,7 @@ def compute_binary_image_metrics(
             conf=predict_floor,
             iou=iou,
             imgsz=imgsz,
-            max_det=max_det,
+            max_det=max(raw_max_det, max_det),
             batch=max(1, batch),
             device=device,
             save=False,
@@ -670,12 +750,12 @@ def resolve_data_yaml_for_model(
     raise RuntimeError(f"未找到 data.yaml/dataset.yaml: {dataset_root}")
 
 
-def resolve_split_for_model(model_cfg: Dict, global_cfg: Dict, cli_split: str, data_yaml: Path) -> str:
+def resolve_splits_for_model(model_cfg: Dict, global_cfg: Dict, cli_split: str, data_yaml: Path) -> List[str]:
     if cli_split:
-        return choose_split(data_yaml, cli_split)
+        return parse_split_spec(cli_split, data_yaml)
     if model_cfg.get("split"):
-        return choose_split(data_yaml, str(model_cfg["split"]))
-    return choose_split(data_yaml, str(global_cfg.get("split", "auto")))
+        return parse_split_spec(str(model_cfg["split"]), data_yaml)
+    return parse_split_spec(str(global_cfg.get("split", "auto")), data_yaml)
 
 
 def main() -> None:
@@ -691,6 +771,7 @@ def main() -> None:
 
     logs: List[str] = []
     success_rows: List[Dict] = []
+    per_split_rows: List[Dict] = []
     failures: List[Dict] = []
     used_items: List[Dict] = []
 
@@ -720,7 +801,7 @@ def main() -> None:
             if not data_yaml.exists():
                 raise RuntimeError(f"data_yaml not found: {data_yaml}")
 
-            split = resolve_split_for_model(mcfg, cfg, args.split, data_yaml)
+            splits = resolve_splits_for_model(mcfg, cfg, args.split, data_yaml)
             dataset_label = str(mcfg.get("dataset_label", "")).strip() or infer_dataset_label_from_text(str(dataset_root))
             eval_params = choose_eval_params(
                 args_yaml_obj=args_yaml_obj,
@@ -729,8 +810,14 @@ def main() -> None:
                 cli_device=args.device,
             )
 
-            split_paths = resolve_split_paths(data_yaml, dataset_root, split)
-            split_images = list_split_images(split_paths)
+            split_images_map: Dict[str, List[Path]] = {}
+            merged_images: List[Path] = []
+            for sp in splits:
+                sps = resolve_split_paths(data_yaml, dataset_root, sp)
+                imgs = list_split_images(sps)
+                split_images_map[sp] = imgs
+                merged_images.extend(imgs)
+            merged_images = sorted({p.resolve() for p in merged_images})
 
             used = {
                 "name": name,
@@ -739,8 +826,10 @@ def main() -> None:
                 "dataset_root": str(dataset_root),
                 "dataset_label": dataset_label,
                 "data_yaml": str(data_yaml),
-                "split": split,
-                "num_images_in_split": len(split_images),
+                "split": "+".join(splits),
+                "splits": splits,
+                "num_images_by_split": {k: len(v) for k, v in split_images_map.items()},
+                "num_images_total": len(merged_images),
                 "eval_params": eval_params,
             }
             used_items.append(used)
@@ -750,28 +839,57 @@ def main() -> None:
                 continue
 
             model = YOLO(str(weight))
-            val_res = model.val(
-                data=str(data_yaml),
-                split=str(split),
-                conf=float(eval_params["conf"]),
-                iou=float(eval_params["iou"]),
-                imgsz=int(eval_params["imgsz"]),
-                max_det=int(eval_params["max_det"]),
-                batch=int(eval_params["batch"]),
-                device=str(eval_params["device"]),
-                plots=False,
-                save_json=False,
-                verbose=False,
-            )
-            cls_metrics = extract_multiclass_metrics(val_res)
-            bin_metrics = compute_binary_image_metrics(model, split_images, dataset_root, eval_params)
+            split_cls_metrics: List[Dict[str, float]] = []
+            split_weights: List[float] = []
+            for sp in splits:
+                val_res = model.val(
+                    data=str(data_yaml),
+                    split=str(sp),
+                    conf=float(eval_params["conf"]),
+                    iou=float(eval_params["iou"]),
+                    imgsz=int(eval_params["imgsz"]),
+                    max_det=int(eval_params["max_det"]),
+                    batch=int(eval_params["batch"]),
+                    device=str(eval_params["device"]),
+                    plots=False,
+                    save_json=False,
+                    verbose=False,
+                )
+                cls_m = extract_multiclass_metrics(val_res)
+                w = extract_instances_weight(val_res)
+                if w <= 0:
+                    w = float(len(split_images_map.get(sp, [])))
+                split_cls_metrics.append(cls_m)
+                split_weights.append(w)
+                per_split_rows.append(
+                    {
+                        "name": name,
+                        "dataset": dataset_label,
+                        "split": sp,
+                        "weight": str(weight),
+                        "mAP@0.5": f"{cls_m['mAP@0.5']:.6f}",
+                        "mAP@0.5:0.95": f"{cls_m['mAP@0.5:0.95']:.6f}",
+                        "avg_cls_precision": f"{cls_m['avg_cls_precision']:.6f}",
+                        "avg_cls_recall": f"{cls_m['avg_cls_recall']:.6f}",
+                        "weight_for_agg": f"{w:.3f}",
+                        "num_images": len(split_images_map.get(sp, [])),
+                    }
+                )
+
+            cls_metrics = {
+                "mAP@0.5": weighted_avg([m["mAP@0.5"] for m in split_cls_metrics], split_weights),
+                "mAP@0.5:0.95": weighted_avg([m["mAP@0.5:0.95"] for m in split_cls_metrics], split_weights),
+                "avg_cls_precision": weighted_avg([m["avg_cls_precision"] for m in split_cls_metrics], split_weights),
+                "avg_cls_recall": weighted_avg([m["avg_cls_recall"] for m in split_cls_metrics], split_weights),
+            }
+            bin_metrics = compute_binary_image_metrics(model, merged_images, dataset_root, eval_params)
 
             row = {
                 "name": name,
                 "dataset": dataset_label,
                 "weight": str(weight),
                 "data_yaml": str(data_yaml),
-                "split": split,
+                "split": "+".join(splits),
                 "mAP@0.5": f"{cls_metrics['mAP@0.5']:.6f}",
                 "mAP@0.5:0.95": f"{cls_metrics['mAP@0.5:0.95']:.6f}",
                 "avg_cls_precision": f"{cls_metrics['avg_cls_precision']:.6f}",
@@ -779,6 +897,7 @@ def main() -> None:
                 "bin_img_AP": f"{bin_metrics['bin_img_AP']:.6f}",
                 "bin_img_precision": f"{bin_metrics['bin_img_precision']:.6f}",
                 "bin_img_recall": f"{bin_metrics['bin_img_recall']:.6f}",
+                "num_images_eval": len(merged_images),
                 "pos_images": int(bin_metrics["pos_images"]),
                 "neg_images": int(bin_metrics["neg_images"]),
                 "tp_img": int(bin_metrics["tp_img"]),
@@ -801,6 +920,8 @@ def main() -> None:
         write_csv(out_dir / "metrics_all.csv", success_rows, list(success_rows[0].keys()))
         if len(success_rows) == 1:
             write_csv(out_dir / "metrics_single.csv", success_rows, list(success_rows[0].keys()))
+    if per_split_rows:
+        write_csv(out_dir / "metrics_by_split.csv", per_split_rows, list(per_split_rows[0].keys()))
     compare_rows = build_compare_rows_by_name(success_rows)
     write_csv(
         out_dir / "public_compare_by_name.csv",
@@ -828,6 +949,8 @@ def main() -> None:
         print(f"[done] metrics_all: {out_dir / 'metrics_all.csv'}")
     else:
         print("[warn] no successful model run.")
+    if per_split_rows:
+        print(f"[done] metrics_by_split: {out_dir / 'metrics_by_split.csv'}")
     print(f"[done] table_csv: {out_dir / 'public_compare_by_name.csv'}")
     print(f"[done] table_md : {out_dir / 'public_compare_by_name.md'}")
     print(f"[done] table_tex: {out_dir / 'public_compare_by_name.tex'}")
