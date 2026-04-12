@@ -146,38 +146,114 @@ def find_args_yaml_from_weight(weight: Path) -> Path:
     raise FileNotFoundError(f"args.yaml not found near weight: {weight}")
 
 
+def _dedup_paths(paths: Sequence[Path]) -> List[Path]:
+    out: List[Path] = []
+    seen = set()
+    for p in paths:
+        k = str(p)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(p)
+    return out
+
+
+def _resolve_ref_candidates(raw: str, anchors: Sequence[Path]) -> List[Path]:
+    s = str(raw or "").strip()
+    if not s:
+        return []
+    p = Path(s).expanduser()
+    out: List[Path] = []
+    if p.is_absolute():
+        out.append(p.resolve())
+    else:
+        for a in anchors:
+            out.append((a / p).resolve())
+    return _dedup_paths(out)
+
+
+def _first_existing(paths: Sequence[Path]) -> Optional[Path]:
+    for p in paths:
+        if p.exists():
+            return p
+    return None
+
+
 def infer_data_yaml_and_root(args_cfg: Dict, args_yaml_path: Path) -> Tuple[Path, Path]:
     data_ref = str(args_cfg.get("data", "")).strip()
     if not data_ref:
         raise RuntimeError(f"`data` missing in args yaml: {args_yaml_path}")
-    p = Path(data_ref).expanduser()
-    if not p.is_absolute():
-        p = (args_yaml_path.parent / p).resolve()
-    else:
-        p = p.resolve()
+    anchors = [
+        REPO_ROOT,
+        args_yaml_path.parent,
+        args_yaml_path.parent.parent,
+    ]
 
-    if p.is_file():
-        data_yaml = p
-        data_cfg = load_yaml(data_yaml)
-        root = data_cfg.get("path")
-        if isinstance(root, str) and root.strip():
-            root_p = Path(root).expanduser()
-            if not root_p.is_absolute():
-                root_p = (data_yaml.parent / root_p).resolve()
-            else:
-                root_p = root_p.resolve()
-            dataset_root = root_p
-        else:
-            dataset_root = data_yaml.parent
-    else:
-        dataset_root = p
-        data_yaml = dataset_root / "data.yaml"
-        if not data_yaml.exists():
-            data_yaml = dataset_root / "dataset.yaml"
-        if not data_yaml.exists():
-            raise FileNotFoundError(f"data yaml not found under dataset root: {dataset_root}")
+    data_ref_candidates = _resolve_ref_candidates(data_ref, anchors)
+    data_entry = _first_existing(data_ref_candidates)
+    if data_entry is None:
+        raise FileNotFoundError(
+            "data entry not found. candidates:\n" + "\n".join(str(x) for x in data_ref_candidates)
+        )
 
-    return data_yaml.resolve(), dataset_root.resolve()
+    if data_entry.is_file():
+        data_yaml = data_entry.resolve()
+    else:
+        cand = _first_existing(
+            [
+                (data_entry / "data.yaml").resolve(),
+                (data_entry / "dataset.yaml").resolve(),
+                (data_entry / "data.yml").resolve(),
+                (data_entry / "dataset.yml").resolve(),
+            ]
+        )
+        if cand is None:
+            raise FileNotFoundError(f"data yaml not found under dataset root: {data_entry}")
+        data_yaml = cand.resolve()
+
+    data_cfg = load_yaml(data_yaml)
+
+    # dataset_root 优先级：
+    # 1) args.yaml:data_root（通常最可靠，指向当前机器真实数据）
+    # 2) data.yaml:path
+    # 3) 回退猜测（针对旧机器绝对路径）
+    root_candidates: List[Path] = []
+
+    for raw in [args_cfg.get("data_root", ""), data_cfg.get("path", "")]:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        root_candidates.extend(_resolve_ref_candidates(raw, [REPO_ROOT, data_yaml.parent, args_yaml_path.parent]))
+
+        # 旧环境绝对路径回退：/old/.../datasetm6c -> REPO_ROOT/dataset/yolo/datasetm6c
+        try:
+            raw_p = Path(raw).expanduser()
+            ds_name = raw_p.name
+            if ds_name:
+                root_candidates.append((REPO_ROOT / "dataset" / "yolo" / ds_name).resolve())
+                root_candidates.append((REPO_ROOT / "dataset" / ds_name).resolve())
+        except Exception:
+            pass
+
+    # 兜底：若 data.yaml 就在数据集根目录
+    root_candidates.append(data_yaml.parent.resolve())
+    root_candidates = _dedup_paths(root_candidates)
+
+    dataset_root: Optional[Path] = None
+    for c in root_candidates:
+        if c.exists() and c.is_dir() and (c / "images").exists():
+            dataset_root = c.resolve()
+            break
+    if dataset_root is None:
+        dataset_root = _first_existing(root_candidates)
+        if dataset_root is not None:
+            dataset_root = dataset_root.resolve()
+
+    if dataset_root is None:
+        raise FileNotFoundError(
+            "dataset root not found. candidates:\n" + "\n".join(str(x) for x in root_candidates)
+        )
+
+    return data_yaml.resolve(), dataset_root
 
 
 def parse_split_spec(spec: str) -> List[str]:
