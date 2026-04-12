@@ -26,6 +26,7 @@ import copy
 import csv
 import datetime as dt
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -35,10 +36,20 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 import yaml
-from ultralytics import YOLO
 
 REPO_ROOT = Path("/home/ubuntu/hpproject/yolo")
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+
+# Ensure custom checkpoint modules (third_party.*) are importable before YOLO(weight) load.
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+try:
+    import third_party  # type: ignore # noqa: F401
+except Exception:
+    pass
+
+from ultralytics import YOLO
 
 ENHANCE_BOOL_KEYS = [
     "a3",
