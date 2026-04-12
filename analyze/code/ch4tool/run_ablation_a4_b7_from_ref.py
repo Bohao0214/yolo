@@ -14,7 +14,7 @@ It will:
 
 Usage:
 python /home/ubuntu/hpproject/yolo/analyze/code/ch4tool/run_ablation_a4_b7_from_ref.py \
-  --ref-weight /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/weights/best.pt \
+  --ref-args /home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/args.yaml \
   --split test \
   --device 0
 """
@@ -91,7 +91,21 @@ class Det:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run a4/b7 ablation from reference weight config.")
-    p.add_argument("--ref-weight", type=Path, required=True, help="Reference best.pt path.")
+    p.add_argument(
+        "--ref-weight",
+        type=Path,
+        default=None,
+        help="Reference best.pt path (optional if --ref-args is provided).",
+    )
+    p.add_argument(
+        "--ref-args",
+        type=Path,
+        default=None,
+        help="Reference args.yaml path. If set, it has higher priority than --ref-weight.",
+    )
+    p.add_argument("--a4-weight", type=Path, default=None, help="Existing a4-only weight for eval-only mode.")
+    p.add_argument("--b7-weight", type=Path, default=None, help="Existing b7-only weight for eval-only mode.")
+    p.add_argument("--a4b7-weight", type=Path, default=None, help="Existing a4+b7 weight for eval-only mode.")
     p.add_argument("--split", type=str, default="test", help="test / val / train / val+test.")
     p.add_argument("--device", type=str, default="", help="Override device, e.g. 0")
     p.add_argument("--epochs", type=int, default=0, help="Override epochs if >0.")
@@ -548,13 +562,31 @@ def format_pct(x: float) -> str:
     return f"{x * 100.0:.2f}"
 
 
+def resolve_optional_weight(p: Optional[Path]) -> Optional[Path]:
+    if p is None:
+        return None
+    return resolve_path_maybe_repo(str(p))
+
+
 def main() -> None:
     args = parse_args()
-    ref_weight = resolve_path_maybe_repo(str(args.ref_weight))
-    if not ref_weight.exists():
-        raise FileNotFoundError(f"ref weight not found: {ref_weight}")
+    ref_weight: Optional[Path] = None
+    if args.ref_args is not None:
+        args_yaml_path = resolve_path_maybe_repo(str(args.ref_args))
+        if not args_yaml_path.exists():
+            raise FileNotFoundError(f"ref args yaml not found: {args_yaml_path}")
+        if args_yaml_path.is_dir():
+            args_yaml_path = (args_yaml_path / "args.yaml").resolve()
+        if not args_yaml_path.exists():
+            raise FileNotFoundError(f"args.yaml not found: {args_yaml_path}")
+    else:
+        if args.ref_weight is None:
+            raise RuntimeError("require one of: --ref-args or --ref-weight")
+        ref_weight = resolve_path_maybe_repo(str(args.ref_weight))
+        if not ref_weight.exists():
+            raise FileNotFoundError(f"ref weight not found: {ref_weight}")
+        args_yaml_path = find_args_yaml_from_weight(ref_weight)
 
-    args_yaml_path = find_args_yaml_from_weight(ref_weight)
     ref_args_cfg = load_yaml(args_yaml_path)
     data_yaml, dataset_root = infer_data_yaml_and_root(ref_args_cfg, args_yaml_path)
     dataset_tag = dataset_root.name
@@ -590,7 +622,7 @@ def main() -> None:
     summary_rows: List[Dict] = []
     run_manifest: Dict = {
         "timestamp": ts,
-        "ref_weight": str(ref_weight),
+        "ref_weight": str(ref_weight) if ref_weight is not None else "",
         "args_yaml": str(args_yaml_path),
         "data_yaml": str(data_yaml),
         "dataset_root": str(dataset_root),
@@ -608,26 +640,49 @@ def main() -> None:
         "variants": [],
     }
 
+    a4_w = resolve_optional_weight(args.a4_weight)
+    b7_w = resolve_optional_weight(args.b7_weight)
+    a4b7_w = resolve_optional_weight(args.a4b7_weight)
+    eval_only_mode = any(x is not None for x in [a4_w, b7_w, a4b7_w])
+    if eval_only_mode and not (a4_w and b7_w and a4b7_w):
+        raise RuntimeError("eval-only mode requires all three: --a4-weight --b7-weight --a4b7-weight")
+
+    explicit_variant_weights = {
+        "a4_only": a4_w,
+        "b7_only": b7_w,
+        "a4_b7": a4b7_w,
+    }
+
     for variant_tag, keys, method_name in VARIANTS:
         cfg_path = cfg_dir / f"{variant_tag}.yaml"
-        cfg = prepare_variant_config(
-            ref_cfg=ref_args_cfg,
-            variant_keys=keys,
-            variant_tag=variant_tag,
-            out_cfg_path=cfg_path,
-            dataset_tag=dataset_tag,
-            args=args,
-        )
         log_path = log_dir / f"{variant_tag}.log"
-        if not args.skip_train:
-            run_train(cfg_path=cfg_path, log_path=log_path)
+        exp_dir: Optional[Path] = None
 
-        exp_dir = resolve_latest_exp_dir(str(cfg["exp_name"]))
-        best_w = exp_dir / "train" / "weights" / "best.pt"
-        last_w = exp_dir / "train" / "weights" / "last.pt"
-        use_w = best_w if best_w.exists() else last_w
-        if not use_w.exists():
-            raise FileNotFoundError(f"no best/last weight found in {exp_dir}")
+        if eval_only_mode:
+            use_w = explicit_variant_weights[variant_tag]
+            if use_w is None:
+                raise RuntimeError(f"missing weight for variant: {variant_tag}")
+            if not use_w.exists():
+                raise FileNotFoundError(f"variant weight not found: {use_w}")
+            cfg = copy.deepcopy(ref_args_cfg)
+        else:
+            cfg = prepare_variant_config(
+                ref_cfg=ref_args_cfg,
+                variant_keys=keys,
+                variant_tag=variant_tag,
+                out_cfg_path=cfg_path,
+                dataset_tag=dataset_tag,
+                args=args,
+            )
+            if not args.skip_train:
+                run_train(cfg_path=cfg_path, log_path=log_path)
+
+            exp_dir = resolve_latest_exp_dir(str(cfg["exp_name"]))
+            best_w = exp_dir / "train" / "weights" / "best.pt"
+            last_w = exp_dir / "train" / "weights" / "last.pt"
+            use_w = best_w if best_w.exists() else last_w
+            if not use_w.exists():
+                raise FileNotFoundError(f"no best/last weight found in {exp_dir}")
 
         pred_map = infer_pred_map(
             weight_path=use_w,
@@ -664,7 +719,7 @@ def main() -> None:
             "R_img(%)": format_pct(img_m["img_recall"]),
             "FPR_img(%)": format_pct(img_m["img_fpr"]),
             "weight": str(use_w),
-            "exp_dir": str(exp_dir),
+            "exp_dir": str(exp_dir) if exp_dir is not None else "",
         }
         summary_rows.append(row)
         run_manifest["variants"].append(
@@ -674,8 +729,9 @@ def main() -> None:
                 "method_name": method_name,
                 "config": str(cfg_path),
                 "log": str(log_path),
-                "exp_dir": str(exp_dir),
+                "exp_dir": str(exp_dir) if exp_dir is not None else "",
                 "weight": str(use_w),
+                "eval_only": bool(eval_only_mode),
             }
         )
 
