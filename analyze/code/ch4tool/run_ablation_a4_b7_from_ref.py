@@ -122,6 +122,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=0, help="Override epochs if >0.")
     p.add_argument("--batch", type=int, default=0, help="Override batch if >0.")
     p.add_argument("--workers", type=int, default=0, help="Override workers if >0.")
+    p.add_argument(
+        "--eval-conf",
+        type=float,
+        default=-1.0,
+        help="Override eval confidence threshold. <0 means use config default.",
+    )
+    p.add_argument(
+        "--eval-conf-list",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Evaluate with multiple confidence thresholds, e.g. --eval-conf-list 0.25 0.3",
+    )
     p.add_argument("--out-root", type=Path, default=None, help="Output root; default under experiments/ablation_a4_b7.")
     p.add_argument("--skip-train", action="store_true", help="Skip train, only evaluate existing latest runs.")
     return p.parse_args()
@@ -277,6 +290,28 @@ def parse_split_spec(spec: str) -> List[str]:
             out.append(x)
             seen.add(x)
     return out if out else ["test"]
+
+
+def resolve_eval_confs(args: argparse.Namespace, ref_args_cfg: Dict) -> List[float]:
+    vals: List[float] = []
+    if args.eval_conf_list:
+        vals.extend([float(x) for x in args.eval_conf_list if float(x) >= 0.0])
+    elif args.eval_conf is not None and float(args.eval_conf) >= 0.0:
+        vals.append(float(args.eval_conf))
+    else:
+        # default: prioritize train/eval conf, not metric_conf
+        vals.append(float(ref_args_cfg.get("conf", ref_args_cfg.get("metric_conf", 0.25))))
+
+    # dedup keep order
+    out: List[float] = []
+    seen = set()
+    for v in vals:
+        key = f"{v:.8f}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(float(v))
+    return out if out else [0.25]
 
 
 def list_images(image_dir: Path) -> List[Path]:
@@ -693,7 +728,7 @@ def main() -> None:
     table_dir.mkdir(parents=True, exist_ok=True)
 
     # eval params (match your existing evaluation口径)
-    conf = float(ref_args_cfg.get("metric_conf", ref_args_cfg.get("conf", 0.25)))
+    eval_conf_list = resolve_eval_confs(args, ref_args_cfg)
     nms_iou = float(ref_args_cfg.get("nms_iou", ref_args_cfg.get("iou", 0.7)))
     tp_iou = float(ref_args_cfg.get("tp_iou", 0.3))
     score_floor = float(ref_args_cfg.get("score_floor", 0.01))
@@ -715,7 +750,7 @@ def main() -> None:
         "dataset_root": str(dataset_root),
         "split": "+".join(split_list),
         "eval_params": {
-            "conf": conf,
+            "conf_list": eval_conf_list,
             "nms_iou": nms_iou,
             "tp_iou": tp_iou,
             "score_floor": score_floor,
@@ -781,34 +816,36 @@ def main() -> None:
             batch=eval_batch,
             device=eval_device,
         )
-        obj_map = compute_obj_map_metrics(
-            gt_map=gt_map,
-            pred_map=pred_map,
-            classes=gt_classes,
-            score_thr=conf,
-            obj_iou=tp_iou,
-        )
-        img_m = compute_image_recall_fpr(gt_map=gt_map, pred_map=pred_map, score_thr=conf)
+        for eval_conf in eval_conf_list:
+            obj_map = compute_obj_map_metrics(
+                gt_map=gt_map,
+                pred_map=pred_map,
+                classes=gt_classes,
+                score_thr=float(eval_conf),
+                obj_iou=tp_iou,
+            )
+            img_m = compute_image_recall_fpr(gt_map=gt_map, pred_map=pred_map, score_thr=float(eval_conf))
 
-        row = {
-            "method": method_name,
-            "variant": variant_tag,
-            "mAP@0.5": f"{obj_map['map50']:.6f}",
-            "mAP@0.5:0.95": f"{obj_map['map50_95']:.6f}",
-            "P_obj": f"{obj_map['obj_precision']:.6f}",
-            "R_obj": f"{obj_map['obj_recall']:.6f}",
-            "R_img": f"{img_m['img_recall']:.6f}",
-            "FPR_img": f"{img_m['img_fpr']:.6f}",
-            "mAP@0.5(%)": format_pct(obj_map["map50"]),
-            "mAP@0.5:0.95(%)": format_pct(obj_map["map50_95"]),
-            "P_obj(%)": format_pct(obj_map["obj_precision"]),
-            "R_obj(%)": format_pct(obj_map["obj_recall"]),
-            "R_img(%)": format_pct(img_m["img_recall"]),
-            "FPR_img(%)": format_pct(img_m["img_fpr"]),
-            "weight": str(use_w),
-            "exp_dir": str(exp_dir) if exp_dir is not None else "",
-        }
-        summary_rows.append(row)
+            row = {
+                "eval_conf": f"{float(eval_conf):.4f}",
+                "method": method_name,
+                "variant": variant_tag,
+                "mAP@0.5": f"{obj_map['map50']:.6f}",
+                "mAP@0.5:0.95": f"{obj_map['map50_95']:.6f}",
+                "P_obj": f"{obj_map['obj_precision']:.6f}",
+                "R_obj": f"{obj_map['obj_recall']:.6f}",
+                "R_img": f"{img_m['img_recall']:.6f}",
+                "FPR_img": f"{img_m['img_fpr']:.6f}",
+                "mAP@0.5(%)": format_pct(obj_map["map50"]),
+                "mAP@0.5:0.95(%)": format_pct(obj_map["map50_95"]),
+                "P_obj(%)": format_pct(obj_map["obj_precision"]),
+                "R_obj(%)": format_pct(obj_map["obj_recall"]),
+                "R_img(%)": format_pct(img_m["img_recall"]),
+                "FPR_img(%)": format_pct(img_m["img_fpr"]),
+                "weight": str(use_w),
+                "exp_dir": str(exp_dir) if exp_dir is not None else "",
+            }
+            summary_rows.append(row)
         run_manifest["variants"].append(
             {
                 "variant": variant_tag,
@@ -819,6 +856,7 @@ def main() -> None:
                 "exp_dir": str(exp_dir) if exp_dir is not None else "",
                 "weight": str(use_w),
                 "eval_only": bool(eval_only_mode),
+                "eval_conf_list": eval_conf_list,
             }
         )
 
@@ -829,6 +867,7 @@ def main() -> None:
     manifest_path = out_root / "run_manifest.json"
 
     fieldnames = [
+        "eval_conf",
         "method",
         "variant",
         "mAP@0.5",
@@ -855,25 +894,25 @@ def main() -> None:
     md_lines = [
         "# Ablation Summary (a4 / b7 / a4+b7)",
         "",
-        "| 方法 | mAP@0.5 | mAP@0.5:0.95 | P_obj/% | R_obj/% | R_img/% | FPR_img/% |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| conf | 方法 | mAP@0.5 | mAP@0.5:0.95 | P_obj/% | R_obj/% | R_img/% | FPR_img/% |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
     for r in summary_rows:
         md_lines.append(
-            f"| {r['method']} | {r['mAP@0.5(%)']} | {r['mAP@0.5:0.95(%)']} | "
+            f"| {r['eval_conf']} | {r['method']} | {r['mAP@0.5(%)']} | {r['mAP@0.5:0.95(%)']} | "
             f"{r['P_obj(%)']} | {r['R_obj(%)']} | {r['R_img(%)']} | {r['FPR_img(%)']} |"
         )
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
     tex_lines = [
-        "\\begin{tabular}{lcccccc}",
+        "\\begin{tabular}{lccccccc}",
         "\\toprule",
-        "方法 & $mAP@0.5$ & $mAP@0.5:0.95$ & $P_{\\mathrm{obj}}$/\\% & $R_{\\mathrm{obj}}$/\\% & $R_{\\mathrm{img}}$/\\% & $FPR_{\\mathrm{img}}$/\\% \\\\",
+        "conf & 方法 & $mAP@0.5$ & $mAP@0.5:0.95$ & $P_{\\mathrm{obj}}$/\\% & $R_{\\mathrm{obj}}$/\\% & $R_{\\mathrm{img}}$/\\% & $FPR_{\\mathrm{img}}$/\\% \\\\",
         "\\midrule",
     ]
     for r in summary_rows:
         tex_lines.append(
-            f"{r['method']} & {r['mAP@0.5(%)']} & {r['mAP@0.5:0.95(%)']} & "
+            f"{r['eval_conf']} & {r['method']} & {r['mAP@0.5(%)']} & {r['mAP@0.5:0.95(%)']} & "
             f"{r['P_obj(%)']} & {r['R_obj(%)']} & {r['R_img(%)']} & {r['FPR_img(%)']} \\\\"
         )
     tex_lines += ["\\bottomrule", "\\end{tabular}", ""]
