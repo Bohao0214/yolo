@@ -40,19 +40,10 @@ IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 # 你可以只修改这里，不改其它代码
 USER_EDIT_CONFIG: Dict[str, Any] = {
     "models": [
-        # {"name": "baseline", "path": "/abs/path/to/best.pt"},
-            {"name": "bsd", "path": "/home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt"},
-            {"name": "baseline", "path": "/home/ubuntu/hpproject/yolo/experiments/baseline/datasetm6c/exp_2603040206/train/weights/best.pt"},
-            {"name": "our", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/weights/best.pt"},
-            {"name": "hmc", "path": "/home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt"},
-            
-            {"name": "al3", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d11/exp_2603060251/train/weights/best.pt"},
-            {"name": "al2", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b7__d11/exp_2603060315/train/weights/best.pt"},
-            {"name": "al1", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a6__b6__c6__d6/exp_2603060222/train/weights/best.pt"},     
-
-            {"name": "op1", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603012143/train/weights/best.pt"},
-            {"name": "op2", "path": "/home/ubuntu/hpproject/yolo/experiments/yolo11/defect241__a3__c5/exp_2603012344/train/weights/best.pt"},
-            {"name": "op3", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d11/exp_2603060251/train/weights/best.pt"},  
+        {"name": "bsd", "path": "/home/ubuntu/hpproject/yolo/experiments/a3b3d3/datasetm6c/exp_2604050042/train/weights/best.pt"},
+        {"name": "baseline", "path": "/home/ubuntu/hpproject/yolo/experiments/baseline/datasetm6c/exp_2603040206/train/weights/best.pt"},
+        {"name": "ours", "path": "/home/ubuntu/hpproject/yolo/experiments/a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/weights/best.pt"},
+        {"name": "hmc", "path": "/home/ubuntu/hpproject/yolo/experiments/a7b7c7d7/datasetm6c/exp_2604050107/train/weights/best.pt"},
     ],
     "data_yaml": "/home/ubuntu/hpproject/yolo/configs/enhance/datasetm6c/defect241.yaml",
     "dataset_root": "/home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c",
@@ -71,14 +62,14 @@ USER_EDIT_CONFIG: Dict[str, Any] = {
     },
     "out_root": "/home/ubuntu/hpproject/yolo/analyze/result",
     "report_prefix": "report_",
-    "ours_model_name": "our",
+    "ours_model_name": "ours",
     "ours_name_patterns": ["our", "ours", "本文", "sd-yolo11"],
     "visual": {
-        "save_overlays": True,
         "draw_conf": 0.25,
         "jpeg_quality": 92,
         "max_images_per_split": 0,  # 0 = all
-        "draw_gt": True,
+        "selected_image_ids": ["0241", "0221", "0146", "0324", "0409", "0349"],
+        "save_raw_preds": False,
     },
     "advantage": {
         "topk_samples_per_other": 300,
@@ -298,6 +289,45 @@ def collect_images_and_gt(dataset_root: Path, splits: Sequence[str], max_images_
     return items, gt_map, sorted(classes)
 
 
+def _norm_id(s: str) -> str:
+    raw = str(s).strip()
+    if not raw:
+        return ""
+    if raw.isdigit():
+        return str(int(raw))
+    return raw.lower()
+
+
+def filter_items_by_selected_ids(items: Sequence[ImageItem], selected_ids: Sequence[str]) -> List[ImageItem]:
+    raw_ids = [str(x).strip() for x in selected_ids if str(x).strip()]
+    if not raw_ids:
+        return list(items)
+    raw_set = set(raw_ids)
+    norm_set = {_norm_id(x) for x in raw_ids if _norm_id(x)}
+    out: List[ImageItem] = []
+    for it in items:
+        stem = it.image_path.stem
+        stem_norm = _norm_id(stem)
+        if stem in raw_set or stem_norm in norm_set:
+            out.append(it)
+    return out
+
+
+def build_flat_filename(stem: str, suffix: str, used: set[str], split: str) -> str:
+    base = f"{stem}_{suffix}.jpg"
+    if base not in used:
+        used.add(base)
+        return base
+    alt = f"{stem}_{split}_{suffix}.jpg"
+    idx = 2
+    name = alt
+    while name in used:
+        name = f"{stem}_{split}_{suffix}_{idx}.jpg"
+        idx += 1
+    used.add(name)
+    return name
+
+
 def iou_one_to_many(box: Sequence[float], boxes: np.ndarray) -> np.ndarray:
     if boxes.size == 0:
         return np.zeros((0,), dtype=np.float32)
@@ -338,6 +368,7 @@ def run_inference_one_model(
     items: Sequence[ImageItem],
     infer_cfg: Dict[str, Any],
     raw_preds_dir: Path,
+    save_raw_preds: bool,
 ) -> Dict[str, List[Det]]:
     model = YOLO(str(weight_path))
     pred_map: Dict[str, List[Det]] = {str(i.image_path): [] for i in items}
@@ -395,22 +426,23 @@ def run_inference_one_model(
                     }
                 )
 
-        out_json = raw_preds_dir / name / f"{sp}.json"
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        out_json.write_text(
-            json.dumps(
-                {
-                    "format": "det_preds_v1",
-                    "model": name,
-                    "weights": str(weight_path),
-                    "split": sp,
-                    "predictions": rows,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        if save_raw_preds:
+            out_json = raw_preds_dir / name / f"{sp}.json"
+            out_json.parent.mkdir(parents=True, exist_ok=True)
+            out_json.write_text(
+                json.dumps(
+                    {
+                        "format": "det_preds_v1",
+                        "model": name,
+                        "weights": str(weight_path),
+                        "split": sp,
+                        "predictions": rows,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
     return pred_map
 
 
@@ -433,14 +465,11 @@ def _draw_label_box(img: np.ndarray, x: int, y: int, text: str, color: Tuple[int
     cv2.putText(img, text, (x1 + pad, y2 - pad - bl), font, font_scale, (20, 20, 20), 1, cv2.LINE_AA)
 
 
-def draw_overlay(
+def draw_pred_overlay(
     item: ImageItem,
-    gt_dets: Sequence[Det],
     pred_dets: Sequence[Det],
     draw_conf: float,
     out_path: Path,
-    model_name: str,
-    draw_gt: bool,
     jpeg_quality: int,
 ) -> None:
     img = cv2.imread(str(item.image_path))
@@ -449,30 +478,32 @@ def draw_overlay(
     h, w = img.shape[:2]
     thick, fscale, pad = _auto_style(h, w)
 
-    if draw_gt:
-        for g in gt_dets:
-            x1, y1, x2, y2 = [int(round(v)) for v in g.box]
-            cv2.rectangle(img, (x1, y1), (x2, y2), (70, 210, 70), thickness=thick + 1, lineType=cv2.LINE_AA)
-        if gt_dets:
-            _draw_label_box(img, 8, 26 + int(20 * fscale), f"GT: {len(gt_dets)}", (70, 210, 70), fscale, pad)
-
     keep = [d for d in pred_dets if d.score >= float(draw_conf)]
     keep = sorted(keep, key=lambda d: d.score, reverse=True)
     for d in keep:
         x1, y1, x2, y2 = [int(round(v)) for v in d.box]
         color = (55, 130, 255)
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness=thick, lineType=cv2.LINE_AA)
-        _draw_label_box(img, x1, y1, f"c{int(d.label)} {d.score:.2f}", color, fscale, pad)
+        _draw_label_box(img, x1, y1, f"{d.score:.2f}", color, fscale, pad)
 
-    _draw_label_box(
-        img,
-        8,
-        h - 8,
-        f"{model_name} | pred>={draw_conf:.2f}: {len(keep)} | split={item.split}",
-        (210, 200, 85),
-        max(0.45, fscale * 0.9),
-        max(2, pad - 1),
-    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+
+
+def draw_gt_only(
+    item: ImageItem,
+    gt_dets: Sequence[Det],
+    out_path: Path,
+    jpeg_quality: int,
+) -> None:
+    img = cv2.imread(str(item.image_path))
+    if img is None:
+        return
+    h, w = img.shape[:2]
+    thick, _, _ = _auto_style(h, w)
+    for g in gt_dets:
+        x1, y1, x2, y2 = [int(round(v)) for v in g.box]
+        cv2.rectangle(img, (x1, y1), (x2, y2), (70, 210, 70), thickness=thick + 1, lineType=cv2.LINE_AA)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
 
@@ -914,51 +945,45 @@ def main() -> None:
     splits = parse_split_spec(str(cfg.get("split", "test")))
     infer_cfg = cfg.get("infer_params", {}) if isinstance(cfg.get("infer_params"), dict) else {}
     vis_cfg = cfg.get("visual", {}) if isinstance(cfg.get("visual"), dict) else {}
-    topk = int((cfg.get("advantage", {}) or {}).get("topk_samples_per_other", 300))
 
     max_images_per_split = int(vis_cfg.get("max_images_per_split", 0))
-    items, gt_map, gt_classes = collect_images_and_gt(dataset_root, splits, max_images_per_split=max_images_per_split)
-    image_index = {str(it.image_path): it for it in items}
+    items_all, gt_map_all, _ = collect_images_and_gt(dataset_root, splits, max_images_per_split=max_images_per_split)
+    selected_ids = [str(x).strip() for x in vis_cfg.get("selected_image_ids", []) if str(x).strip()]
+    items = filter_items_by_selected_ids(items_all, selected_ids)
+    gt_map = {str(it.image_path): gt_map_all.get(str(it.image_path), []) for it in items}
 
     out_root = resolve_path(str(cfg.get("out_root", "/home/ubuntu/hpproject/yolo/analyze/result")))
     report_dir = make_report_dir(out_root, str(cfg.get("report_prefix", "report_")))
-    raw_preds_dir = report_dir / "raw_preds"
-    fig_dir = report_dir / "figures" / "overlays"
-    tables_dir = report_dir / "tables"
-    logs_dir = report_dir / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-
-    runtime_info = {
-        "time": dt.datetime.now().isoformat(timespec="seconds"),
-        "data_yaml": str(data_yaml),
-        "dataset_root": str(dataset_root),
-        "split": splits,
-        "num_images": len(items),
-        "infer_params": infer_cfg,
-    }
-    (report_dir / "config_used.json").write_text(json.dumps({"config": cfg, "runtime": runtime_info}, ensure_ascii=False, indent=2), encoding="utf-8")
+    fig_dir = report_dir / "figures"
 
     if args.dry_run:
         print(f"[dry-run] report_dir={report_dir}")
         print(f"[dry-run] dataset_root={dataset_root}")
-        print(f"[dry-run] splits={splits}, images={len(items)}")
+        print(f"[dry-run] splits={splits}, total_images={len(items_all)}, selected_images={len(items)}")
         return
 
     models = cfg.get("models", [])
     if not isinstance(models, list) or not models:
         raise RuntimeError("USER_EDIT_CONFIG.models is empty.")
+    if not items:
+        raise RuntimeError(f"no images matched selected_image_ids={selected_ids}")
 
     failures: List[Dict[str, Any]] = []
-    model_metrics: Dict[str, Dict[str, Any]] = {}
-    main_rows: List[Dict[str, Any]] = []
-
     score_thr = float(infer_cfg.get("conf", 0.25))
-    tp_iou = float(infer_cfg.get("tp_iou", 0.3))
-    match_metric = str(infer_cfg.get("match_metric", "iou")).lower().strip() or "iou"
     draw_conf = float(vis_cfg.get("draw_conf", score_thr))
     jpeg_quality = int(vis_cfg.get("jpeg_quality", 92))
-    save_overlays = bool(vis_cfg.get("save_overlays", True))
-    draw_gt = bool(vis_cfg.get("draw_gt", True))
+    save_raw_preds = bool(vis_cfg.get("save_raw_preds", False))
+
+    # 保存一份 GT（文件名：原图名_gt.jpg）
+    used_names: set[str] = set()
+    for it in items:
+        gt_name = build_flat_filename(it.image_path.stem, "gt", used_names, it.split)
+        draw_gt_only(
+            item=it,
+            gt_dets=gt_map.get(str(it.image_path), []),
+            out_path=fig_dir / gt_name,
+            jpeg_quality=jpeg_quality,
+        )
 
     for m in models:
         if not isinstance(m, dict):
@@ -974,89 +999,34 @@ def main() -> None:
             failures.append({"model": name, "error": "weight not found", "weight": str(w)})
             continue
         try:
-            pred_map = run_inference_one_model(name, w, items, infer_cfg, raw_preds_dir)
-            mm = compute_main_metrics(gt_map, pred_map, score_thr=score_thr, tp_iou=tp_iou, match_metric=match_metric)
-            model_metrics[name] = mm
-            main_rows.append(
-                {
-                    "model": name,
-                    "mAP@0.5": f"{mm['map50']:.6f}",
-                    "mAP@0.5:0.95": f"{mm['map50_95']:.6f}",
-                    "P_obj": f"{mm['obj_precision']:.6f}",
-                    "R_obj": f"{mm['obj_recall']:.6f}",
-                    "R_img": f"{mm['img_recall']:.6f}",
-                    "FPR_img": f"{mm['img_fpr']:.6f}",
-                    "img_precision": f"{mm['img_precision']:.6f}",
-                    "TP": int(mm["tp"]),
-                    "FP": int(mm["fp"]),
-                    "FN": int(mm["fn"]),
-                }
+            pred_map = run_inference_one_model(
+                name=name,
+                weight_path=w,
+                items=items,
+                infer_cfg=infer_cfg,
+                raw_preds_dir=report_dir / "raw_preds",
+                save_raw_preds=save_raw_preds,
             )
-            if save_overlays:
-                for it in items:
-                    out_img = fig_dir / name / it.split / Path(it.rel_key).with_suffix(".jpg")
-                    draw_overlay(
-                        item=it,
-                        gt_dets=gt_map.get(str(it.image_path), []),
-                        pred_dets=pred_map.get(str(it.image_path), []),
-                        draw_conf=draw_conf,
-                        out_path=out_img,
-                        model_name=name,
-                        draw_gt=draw_gt,
-                        jpeg_quality=jpeg_quality,
-                    )
+            for it in items:
+                pred_name = build_flat_filename(it.image_path.stem, name, used_names, it.split)
+                draw_pred_overlay(
+                    item=it,
+                    pred_dets=pred_map.get(str(it.image_path), []),
+                    draw_conf=draw_conf,
+                    out_path=fig_dir / pred_name,
+                    jpeg_quality=jpeg_quality,
+                )
         except Exception as ex:
             failures.append({"model": name, "weight": str(w), "error": str(ex)})
 
-    main_rows = sorted(main_rows, key=lambda x: x["model"])
-    write_csv(tables_dir / "main_metrics.csv", main_rows)
-
-    ours_name = infer_ours_name(sorted(model_metrics.keys()), cfg)
-    if ours_name is None:
-        failures.append({"error": "cannot infer ours model from config/model names"})
-        adv = {
-            "object_pairwise": [],
-            "object_pairwise_samples": [],
-            "object_strict": [],
-            "object_strict_samples": [],
-            "image_pairwise": [],
-            "image_pairwise_samples": [],
-            "image_strict": [],
-            "image_strict_samples": [],
-            "fp_box_suppress_pairwise": [],
-        }
-    else:
-        adv = analyze_ours_advantage(ours_name, model_metrics, gt_map, image_index, topk=topk)
-
-    write_csv(tables_dir / "ours_adv_object_pairwise.csv", adv["object_pairwise"])
-    write_csv(tables_dir / "ours_adv_object_pairwise_samples.csv", adv["object_pairwise_samples"])
-    write_csv(tables_dir / "ours_adv_object_strict.csv", adv["object_strict"])
-    write_csv(tables_dir / "ours_adv_object_strict_samples.csv", adv["object_strict_samples"])
-    write_csv(tables_dir / "ours_adv_image_pairwise.csv", adv["image_pairwise"])
-    write_csv(tables_dir / "ours_adv_image_pairwise_samples.csv", adv["image_pairwise_samples"])
-    write_csv(tables_dir / "ours_adv_image_strict.csv", adv["image_strict"])
-    write_csv(tables_dir / "ours_adv_image_strict_samples.csv", adv["image_strict_samples"])
-    write_csv(tables_dir / "ours_adv_fp_box_suppress_pairwise.csv", adv["fp_box_suppress_pairwise"])
-
-    if failures:
-        (report_dir / "failures.json").write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    save_report_md(
-        report_path=report_dir / "report.md",
-        cfg=cfg,
-        report_dir=report_dir,
-        main_rows=main_rows,
-        ours_name=ours_name,
-        adv=adv,
-        failures=failures,
-    )
-
     print(f"[done] report_dir: {report_dir}")
-    print(f"[done] main metrics: {tables_dir / 'main_metrics.csv'}")
-    print(f"[done] advantage table: {tables_dir / 'ours_adv_object_pairwise.csv'}")
-    print(f"[done] overlays dir: {fig_dir}")
+    print(f"[done] figures dir: {fig_dir}")
+    print(f"[done] selected_image_ids: {selected_ids}")
+    print(f"[done] selected_images: {len(items)}")
     if failures:
-        print(f"[warn] failures: {report_dir / 'failures.json'}")
+        print("[warn] failures:")
+        for e in failures:
+            print(f"  - {json.dumps(e, ensure_ascii=False)}")
 
 
 if __name__ == "__main__":
