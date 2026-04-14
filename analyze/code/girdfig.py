@@ -69,6 +69,8 @@ USER_EDIT_CONFIG: Dict[str, Any] = {
         "jpeg_quality": 92,
         "max_images_per_split": 0,  # 0 = all
         "selected_image_ids": ["0241", "0221", "0146", "0324", "0409", "0349"],
+        "draw_gt_on_pred": True,
+        "crop_margin_ratio": 0.10,
         "save_raw_preds": False,
     },
     "advantage": {
@@ -465,10 +467,27 @@ def _draw_label_box(img: np.ndarray, x: int, y: int, text: str, color: Tuple[int
     cv2.putText(img, text, (x1 + pad, y2 - pad - bl), font, font_scale, (20, 20, 20), 1, cv2.LINE_AA)
 
 
+def crop_margin(img: np.ndarray, ratio: float) -> np.ndarray:
+    r = max(0.0, min(0.45, float(ratio)))
+    if r <= 0:
+        return img
+    h, w = img.shape[:2]
+    dx = int(round(w * r))
+    dy = int(round(h * r))
+    x1 = min(max(dx, 0), w - 1)
+    y1 = min(max(dy, 0), h - 1)
+    x2 = max(min(w - dx, w), x1 + 1)
+    y2 = max(min(h - dy, h), y1 + 1)
+    return img[y1:y2, x1:x2]
+
+
 def draw_pred_overlay(
     item: ImageItem,
+    gt_dets: Sequence[Det],
     pred_dets: Sequence[Det],
     draw_conf: float,
+    draw_gt_on_pred: bool,
+    crop_margin_ratio: float,
     out_path: Path,
     jpeg_quality: int,
 ) -> None:
@@ -478,6 +497,11 @@ def draw_pred_overlay(
     h, w = img.shape[:2]
     thick, fscale, pad = _auto_style(h, w)
 
+    if draw_gt_on_pred:
+        for g in gt_dets:
+            x1, y1, x2, y2 = [int(round(v)) for v in g.box]
+            cv2.rectangle(img, (x1, y1), (x2, y2), (70, 210, 70), thickness=thick + 1, lineType=cv2.LINE_AA)
+
     keep = [d for d in pred_dets if d.score >= float(draw_conf)]
     keep = sorted(keep, key=lambda d: d.score, reverse=True)
     for d in keep:
@@ -486,6 +510,7 @@ def draw_pred_overlay(
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness=thick, lineType=cv2.LINE_AA)
         _draw_label_box(img, x1, y1, f"{d.score:.2f}", color, fscale, pad)
 
+    img = crop_margin(img, crop_margin_ratio)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
 
@@ -493,6 +518,7 @@ def draw_pred_overlay(
 def draw_gt_only(
     item: ImageItem,
     gt_dets: Sequence[Det],
+    crop_margin_ratio: float,
     out_path: Path,
     jpeg_quality: int,
 ) -> None:
@@ -504,6 +530,7 @@ def draw_gt_only(
     for g in gt_dets:
         x1, y1, x2, y2 = [int(round(v)) for v in g.box]
         cv2.rectangle(img, (x1, y1), (x2, y2), (70, 210, 70), thickness=thick + 1, lineType=cv2.LINE_AA)
+    img = crop_margin(img, crop_margin_ratio)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
 
@@ -972,6 +999,8 @@ def main() -> None:
     score_thr = float(infer_cfg.get("conf", 0.25))
     draw_conf = float(vis_cfg.get("draw_conf", score_thr))
     jpeg_quality = int(vis_cfg.get("jpeg_quality", 92))
+    draw_gt_on_pred = bool(vis_cfg.get("draw_gt_on_pred", True))
+    crop_margin_ratio = float(vis_cfg.get("crop_margin_ratio", 0.10))
     save_raw_preds = bool(vis_cfg.get("save_raw_preds", False))
 
     # 保存一份 GT（文件名：原图名_gt.jpg）
@@ -981,6 +1010,7 @@ def main() -> None:
         draw_gt_only(
             item=it,
             gt_dets=gt_map.get(str(it.image_path), []),
+            crop_margin_ratio=crop_margin_ratio,
             out_path=fig_dir / gt_name,
             jpeg_quality=jpeg_quality,
         )
@@ -1011,8 +1041,11 @@ def main() -> None:
                 pred_name = build_flat_filename(it.image_path.stem, name, used_names, it.split)
                 draw_pred_overlay(
                     item=it,
+                    gt_dets=gt_map.get(str(it.image_path), []),
                     pred_dets=pred_map.get(str(it.image_path), []),
                     draw_conf=draw_conf,
+                    draw_gt_on_pred=draw_gt_on_pred,
+                    crop_margin_ratio=crop_margin_ratio,
                     out_path=fig_dir / pred_name,
                     jpeg_quality=jpeg_quality,
                 )

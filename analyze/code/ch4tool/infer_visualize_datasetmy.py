@@ -93,6 +93,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jpeg-quality", type=int, default=85)
     parser.add_argument("--line-width", type=int, default=0, help="0 means auto.")
     parser.add_argument("--max-samples", type=int, default=0, help="0 means all images.")
+    parser.add_argument(
+        "--image-ids",
+        type=str,
+        default="",
+        help="Comma-separated image stem ids to keep, e.g. 0241,0221,0146.",
+    )
+    parser.add_argument(
+        "--flat-output",
+        action="store_true",
+        help="Save overlays into one folder as <image_stem>_<model>.jpg.",
+    )
+    parser.add_argument(
+        "--crop-margin-ratio",
+        type=float,
+        default=0.10,
+        help="Crop margin ratio for each side before saving, e.g. 0.10 means crop 10%% from left/right/top/bottom.",
+    )
     return parser.parse_args()
 
 
@@ -140,6 +157,48 @@ def choose_line_width(width: int, height: int, user_line_width: int) -> int:
     return max(2, int(round(base / 280)))
 
 
+def norm_image_id(x: str) -> str:
+    s = str(x).strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return str(int(s))
+    return s.lower()
+
+
+def parse_image_ids(raw: str) -> Tuple[set, set]:
+    ids = [x.strip() for x in str(raw).split(",") if x.strip()]
+    raw_set = set(ids)
+    norm_set = {norm_image_id(x) for x in ids if norm_image_id(x)}
+    return raw_set, norm_set
+
+
+def match_image_id(stem: str, raw_ids: set, norm_ids: set) -> bool:
+    if not raw_ids and not norm_ids:
+        return True
+    if stem in raw_ids:
+        return True
+    return norm_image_id(stem) in norm_ids
+
+
+def build_flat_overlay_name(stem: str, model_name: str, split_name: str, used: set) -> str:
+    base = f"{stem}_{model_name}.jpg"
+    if base not in used:
+        used.add(base)
+        return base
+    alt = f"{stem}_{model_name}_{split_name}.jpg"
+    if alt not in used:
+        used.add(alt)
+        return alt
+    idx = 2
+    while True:
+        name = f"{stem}_{model_name}_{split_name}_{idx}.jpg"
+        if name not in used:
+            used.add(name)
+            return name
+        idx += 1
+
+
 def clamp_box(x1: float, y1: float, x2: float, y2: float, w: int, h: int) -> Tuple[float, float, float, float]:
     x1 = max(0.0, min(float(w - 1), x1))
     y1 = max(0.0, min(float(h - 1), y1))
@@ -150,6 +209,20 @@ def clamp_box(x1: float, y1: float, x2: float, y2: float, w: int, h: int) -> Tup
     if y2 < y1:
         y1, y2 = y2, y1
     return x1, y1, x2, y2
+
+
+def crop_margin_pil(img: Image.Image, ratio: float) -> Image.Image:
+    r = max(0.0, min(0.45, float(ratio)))
+    if r <= 0:
+        return img
+    w, h = img.size
+    dx = int(round(w * r))
+    dy = int(round(h * r))
+    x1 = min(max(dx, 0), w - 1)
+    y1 = min(max(dy, 0), h - 1)
+    x2 = max(min(w - dx, w), x1 + 1)
+    y2 = max(min(h - dy, h), y1 + 1)
+    return img.crop((x1, y1, x2, y2))
 
 
 def text_size(draw: ImageDraw.ImageDraw, text: str) -> Tuple[int, int]:
@@ -215,6 +288,7 @@ def draw_overlay(
     resize_ratio: float,
     jpeg_quality: int,
     line_width: int,
+    crop_margin_ratio: float,
 ) -> None:
     src = Image.open(image_path).convert("RGB")
     src_w, src_h = src.size
@@ -247,6 +321,7 @@ def draw_overlay(
         draw.rectangle((tx, ty, tx + tw + 2 * pad, ty + th + 2 * pad), fill=color)
         draw.text((tx + pad, ty + pad), label_txt, fill=(0, 0, 0))
 
+    canvas = crop_margin_pil(canvas, crop_margin_ratio)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(save_path, format="JPEG", quality=jpeg_quality, optimize=True)
 
@@ -409,6 +484,10 @@ def run_one_model(
     dataset_root: Path,
     requested_splits: List[str],
     class_names: Dict[int, str],
+    image_id_raw_set: set,
+    image_id_norm_set: set,
+    flat_output: bool,
+    flat_name_used: set,
     out_root: Path,
     conf: float,
     iou: float,
@@ -419,6 +498,7 @@ def run_one_model(
     resize_ratio: float,
     jpeg_quality: int,
     line_width: int,
+    crop_margin_ratio: float,
     max_samples: int,
 ) -> Dict[str, int]:
     stats: Dict[str, int] = {}
@@ -433,6 +513,8 @@ def run_one_model(
             continue
         processed_actual_splits.add(split_name)
         image_paths = list_images(split_dir)
+        if image_id_raw_set or image_id_norm_set:
+            image_paths = [p for p in image_paths if match_image_id(p.stem, image_id_raw_set, image_id_norm_set)]
         if max_samples > 0:
             image_paths = image_paths[:max_samples]
         if not image_paths:
@@ -456,7 +538,16 @@ def run_one_model(
                 )
             for img_path, pred in zip(chunk, out_chunk):
                 rel = img_path.relative_to(split_dir)
-                save_jpg = (out_root / "overlays" / spec.name / split_name / rel).with_suffix(".jpg")
+                if flat_output:
+                    file_name = build_flat_overlay_name(
+                        stem=img_path.stem,
+                        model_name=spec.name,
+                        split_name=split_name,
+                        used=flat_name_used,
+                    )
+                    save_jpg = out_root / "figures" / file_name
+                else:
+                    save_jpg = (out_root / "overlays" / spec.name / split_name / rel).with_suffix(".jpg")
                 draw_overlay(
                     image_path=img_path,
                     boxes=pred["boxes"],
@@ -467,6 +558,7 @@ def run_one_model(
                     resize_ratio=resize_ratio,
                     jpeg_quality=jpeg_quality,
                     line_width=line_width,
+                    crop_margin_ratio=crop_margin_ratio,
                 )
                 preds.append(
                     {
@@ -513,6 +605,8 @@ def main() -> None:
     model_specs = [parse_model_spec(x) for x in args.model]
     requested_splits = [x.strip() for x in str(args.splits).split(",") if x.strip()]
     device = resolve_device(str(args.device).strip())
+    image_id_raw_set, image_id_norm_set = parse_image_ids(str(args.image_ids))
+    flat_name_used: set = set()
     class_names = load_class_names(dataset_root)
     if class_names:
         print(f"[info] loaded {len(class_names)} class names from dataset yaml.")
@@ -536,6 +630,10 @@ def main() -> None:
             dataset_root=dataset_root,
             requested_splits=requested_splits,
             class_names=class_names,
+            image_id_raw_set=image_id_raw_set,
+            image_id_norm_set=image_id_norm_set,
+            flat_output=bool(args.flat_output),
+            flat_name_used=flat_name_used,
             out_root=out_root,
             conf=float(args.conf),
             iou=float(args.iou),
@@ -546,6 +644,7 @@ def main() -> None:
             resize_ratio=float(args.resize_ratio),
             jpeg_quality=int(args.jpeg_quality),
             line_width=int(args.line_width),
+            crop_margin_ratio=float(args.crop_margin_ratio),
             max_samples=int(args.max_samples),
         )
         summary["models"].append(
