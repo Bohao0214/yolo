@@ -159,11 +159,58 @@ def text_size(draw: ImageDraw.ImageDraw, text: str) -> Tuple[int, int]:
     return draw.textsize(text=text)  # type: ignore[attr-defined]
 
 
+def find_data_yaml(dataset_root: Path) -> Optional[Path]:
+    for name in ("data.yaml", "data.yml", "dataset.yaml", "dataset.yml"):
+        p = dataset_root / name
+        if p.exists():
+            return p
+    return None
+
+
+def load_class_names(dataset_root: Path) -> Dict[int, str]:
+    data_yaml = find_data_yaml(dataset_root)
+    if data_yaml is None:
+        return {}
+
+    try:
+        import yaml
+    except Exception:
+        return {}
+
+    try:
+        cfg = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(cfg, dict):
+        return {}
+
+    names = cfg.get("names", None)
+    if isinstance(names, list):
+        return {i: str(v) for i, v in enumerate(names)}
+    if isinstance(names, dict):
+        out: Dict[int, str] = {}
+        for k, v in names.items():
+            try:
+                idx = int(k)
+            except Exception:
+                continue
+            out[idx] = str(v)
+        return out
+    return {}
+
+
+def class_text(cls_id: int, class_names: Optional[Dict[int, str]]) -> str:
+    if class_names and cls_id in class_names:
+        return class_names[cls_id]
+    return f"c{cls_id}"
+
+
 def draw_overlay(
     image_path: Path,
     boxes: List[List[float]],
     scores: List[float],
     labels: List[int],
+    class_names: Optional[Dict[int, str]],
     save_path: Path,
     resize_ratio: float,
     jpeg_quality: int,
@@ -193,7 +240,7 @@ def draw_overlay(
         for t in range(lw):
             draw.rectangle((x1 - t, y1 - t, x2 + t, y2 + t), outline=color, width=1)
 
-        label_txt = f"c{cls_id}:{score:.2f}"
+        label_txt = f"{class_text(cls_id, class_names)}:{score:.2f}"
         tw, th = text_size(draw, label_txt)
         tx = max(0, int(x1))
         ty = max(0, int(y1) - th - 2 * pad)
@@ -361,6 +408,7 @@ def run_one_model(
     spec: ModelSpec,
     dataset_root: Path,
     requested_splits: List[str],
+    class_names: Dict[int, str],
     out_root: Path,
     conf: float,
     iou: float,
@@ -414,6 +462,7 @@ def run_one_model(
                     boxes=pred["boxes"],
                     scores=pred["scores"],
                     labels=pred["labels"],
+                    class_names=class_names,
                     save_path=save_jpg,
                     resize_ratio=resize_ratio,
                     jpeg_quality=jpeg_quality,
@@ -464,6 +513,11 @@ def main() -> None:
     model_specs = [parse_model_spec(x) for x in args.model]
     requested_splits = [x.strip() for x in str(args.splits).split(",") if x.strip()]
     device = resolve_device(str(args.device).strip())
+    class_names = load_class_names(dataset_root)
+    if class_names:
+        print(f"[info] loaded {len(class_names)} class names from dataset yaml.")
+    else:
+        print("[info] class names not found, fallback to c<id> labels.")
 
     summary = {
         "dataset_root": str(dataset_root),
@@ -481,6 +535,7 @@ def main() -> None:
             spec=spec,
             dataset_root=dataset_root,
             requested_splits=requested_splits,
+            class_names=class_names,
             out_root=out_root,
             conf=float(args.conf),
             iou=float(args.iou),
