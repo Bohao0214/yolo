@@ -1,12 +1,12 @@
 yolo_version: yolo11
-exp_name: baseline/transmission_detection_5cls_final_merged
+exp_name: yolo11-baseline/transmission_detection_5cls_final_merged
 run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
 data: configs/data/transmission_detection_5cls_final_merged.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/transmission_detection_5cls_final_merged
 model: models/pretrained/yolo11m.pt  # 可选项：yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt
-epochs: 100
+epochs: 150
 imgsz: 640
-batch: 6
+batch: 12
 device: ""
 
 workers: 4

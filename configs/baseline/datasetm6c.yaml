@@ -1,5 +1,5 @@
 yolo_version: yolo11
-exp_name: baseline/datasetm6c
+exp_name: yolo11-baseline/datasetm6c
 run_name: ""  # 手动实验目录名；空则自动用 exp_YYMMDDHHMM
 data: configs/data/defect.yaml
 data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/datasetm6c
