@@ -6,6 +6,8 @@ BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 SWEEP_TAG="${SWEEP_TAG:-hparam_combo_$(date +%y%m%d%H%M%S)}"
+SWEEP_TAG_SAFE="$(echo "${SWEEP_TAG}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
+[[ -n "${SWEEP_TAG_SAFE}" ]] || SWEEP_TAG_SAFE="hparam_combo"
 MODULES_RAW="${MODULES_RAW:-a3+c5}"
 HPARAMS_RAW="${HPARAMS_RAW:-}"
 GRID_RAW="${GRID_RAW:-}"
@@ -278,10 +280,13 @@ if [[ "${VRAM_GUARD_OVERRIDE}" != "auto" && "${VRAM_GUARD_OVERRIDE}" != "on" && 
 fi
 
 if [[ -z "${TMP_CFG_DIR}" ]]; then
-  TMP_CFG_DIR="/tmp/yolo241_hparam_combo/${SWEEP_TAG}"
+  TMP_CFG_DIR="/tmp/yolo241_hparam_combo/${SWEEP_TAG_SAFE}"
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
-  LOG_ROOT="${ROOT_DIR}/experiments/_logs/hparam_combo/${SWEEP_TAG}"
+  LOG_DATASET_TAG_RAW="$(basename "$(dirname "${BASE_CONFIG}")")"
+  LOG_DATASET_TAG="$(echo "${LOG_DATASET_TAG_RAW}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
+  [[ -n "${LOG_DATASET_TAG}" ]] || LOG_DATASET_TAG="dataset"
+  LOG_ROOT="${ROOT_DIR}/experiments/yolo11-hparam-combo/${LOG_DATASET_TAG}/exp_${SWEEP_TAG_SAFE}/logs"
 fi
 
 if ! "${PYTHON_CFG_BIN}" - <<'PY' >/dev/null 2>&1

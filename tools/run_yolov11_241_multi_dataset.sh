@@ -483,11 +483,19 @@ fi
 RUN_TAG_SAFE="$(echo "${RUN_TAG}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
 [[ -n "${RUN_TAG_SAFE}" ]] || RUN_TAG_SAFE="multi_dataset"
 
+if [[ "${#DATASET_PATHS[@]}" -eq 1 ]]; then
+  LOG_DATASET_TAG_RAW="$(basename "${DATASET_PATHS[0]}")"
+else
+  LOG_DATASET_TAG_RAW="multi_dataset"
+fi
+LOG_DATASET_TAG="$(echo "${LOG_DATASET_TAG_RAW}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
+[[ -n "${LOG_DATASET_TAG}" ]] || LOG_DATASET_TAG="dataset"
+
 if [[ -z "${TMP_CFG_DIR}" ]]; then
   TMP_CFG_DIR="/tmp/yolo241_multi_dataset/${RUN_TAG_SAFE}"
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
-  LOG_ROOT="${ROOT_DIR}/experiments/_logs/multi_dataset/${RUN_TAG_SAFE}"
+  LOG_ROOT="${ROOT_DIR}/experiments/yolo11-multi-dataset/${LOG_DATASET_TAG}/exp_${RUN_TAG_SAFE}/logs"
 fi
 
 mkdir -p "${TMP_CFG_DIR}" "${LOG_ROOT}"
