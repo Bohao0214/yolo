@@ -18,6 +18,18 @@ dataset/**/labels/**/*.xml
 dataset/**/labels/**/*.json
 dataset/**/labels/**/*.cache
 dataset/**/annotations/**/*
+# dataset 压缩包（zip 等）
+dataset/**/*.zip
+dataset/**/*.7z
+dataset/**/*.rar
+dataset/**/*.tar
+dataset/**/*.gz
+dataset/**/*.bz2
+dataset/**/*.xz
+dataset/**/*.tgz
+dataset/**/*.tar.gz
+dataset/**/*.tar.bz2
+dataset/**/*.tar.xz
 # =====================
 # Pretrained weights
 # =====================

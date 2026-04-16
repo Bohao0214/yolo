@@ -93,6 +93,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jpeg-quality", type=int, default=85)
     parser.add_argument("--line-width", type=int, default=0, help="0 means auto.")
     parser.add_argument("--max-samples", type=int, default=0, help="0 means all images.")
+    parser.add_argument("--draw-gt", dest="draw_gt", action="store_true", default=True, help="Draw GT boxes.")
+    parser.add_argument("--no-draw-gt", dest="draw_gt", action="store_false", help="Do not draw GT boxes.")
     parser.add_argument(
         "--image-ids",
         type=str,
@@ -225,6 +227,45 @@ def crop_margin_pil(img: Image.Image, ratio: float) -> Image.Image:
     return img.crop((x1, y1, x2, y2))
 
 
+def xywhn_to_xyxy(xc: float, yc: float, w: float, h: float, img_w: int, img_h: int) -> Tuple[float, float, float, float]:
+    x1 = (xc - w / 2.0) * img_w
+    y1 = (yc - h / 2.0) * img_h
+    x2 = (xc + w / 2.0) * img_w
+    y2 = (yc + h / 2.0) * img_h
+    return float(x1), float(y1), float(x2), float(y2)
+
+
+def seg_norm_to_xyxy(coords: Sequence[float], img_w: int, img_h: int) -> Tuple[float, float, float, float]:
+    xs = [float(v) * img_w for v in coords[0::2]]
+    ys = [float(v) * img_h for v in coords[1::2]]
+    return float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))
+
+
+def parse_yolo_gt_boxes(label_path: Optional[Path], img_w: int, img_h: int) -> List[List[float]]:
+    out: List[List[float]] = []
+    if label_path is None or (not label_path.exists()):
+        return out
+    for line in label_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        parts = line.strip().split()
+        if len(parts) < 5:
+            continue
+        try:
+            coords = [float(x) for x in parts[1:]]
+        except Exception:
+            continue
+        if len(coords) > 4 and len(coords) % 2 == 0:
+            box = seg_norm_to_xyxy(coords, img_w, img_h)
+        else:
+            if len(coords) < 4:
+                continue
+            box = xywhn_to_xyxy(coords[0], coords[1], coords[2], coords[3], img_w, img_h)
+        x1, y1, x2, y2 = box
+        if x2 <= x1 or y2 <= y1:
+            continue
+        out.append([float(x1), float(y1), float(x2), float(y2)])
+    return out
+
+
 def text_size(draw: ImageDraw.ImageDraw, text: str) -> Tuple[int, int]:
     if hasattr(draw, "textbbox"):
         left, top, right, bottom = draw.textbbox((0, 0), text=text)
@@ -280,10 +321,12 @@ def class_text(cls_id: int, class_names: Optional[Dict[int, str]]) -> str:
 
 def draw_overlay(
     image_path: Path,
+    gt_label_path: Optional[Path],
     boxes: List[List[float]],
     scores: List[float],
     labels: List[int],
     class_names: Optional[Dict[int, str]],
+    draw_gt: bool,
     save_path: Path,
     resize_ratio: float,
     jpeg_quality: int,
@@ -301,6 +344,15 @@ def draw_overlay(
     sy = dst_h / float(src_h)
     lw = choose_line_width(dst_w, dst_h, line_width)
     pad = max(1, lw // 2)
+    _ = class_names  # Kept for backward compatibility; labels now display score only.
+
+    if draw_gt:
+        gt_boxes = parse_yolo_gt_boxes(gt_label_path, src_w, src_h)
+        for g in gt_boxes:
+            x1, y1, x2, y2 = g[:4]
+            x1, y1, x2, y2 = clamp_box(x1 * sx, y1 * sy, x2 * sx, y2 * sy, dst_w, dst_h)
+            for t in range(max(1, lw)):
+                draw.rectangle((x1 - t, y1 - t, x2 + t, y2 + t), outline=(70, 210, 70), width=1)
 
     order = sorted(range(len(scores)), key=lambda i: float(scores[i]), reverse=True)
     for i in order:
@@ -314,7 +366,7 @@ def draw_overlay(
         for t in range(lw):
             draw.rectangle((x1 - t, y1 - t, x2 + t, y2 + t), outline=color, width=1)
 
-        label_txt = f"{class_text(cls_id, class_names)}:{score:.2f}"
+        label_txt = f"{score:.2f}"
         tw, th = text_size(draw, label_txt)
         tx = max(0, int(x1))
         ty = max(0, int(y1) - th - 2 * pad)
@@ -499,6 +551,7 @@ def run_one_model(
     jpeg_quality: int,
     line_width: int,
     crop_margin_ratio: float,
+    draw_gt: bool,
     max_samples: int,
 ) -> Dict[str, int]:
     stats: Dict[str, int] = {}
@@ -538,6 +591,7 @@ def run_one_model(
                 )
             for img_path, pred in zip(chunk, out_chunk):
                 rel = img_path.relative_to(split_dir)
+                gt_label_path = (dataset_root / "labels" / split_name / rel).with_suffix(".txt")
                 if flat_output:
                     file_name = build_flat_overlay_name(
                         stem=img_path.stem,
@@ -550,10 +604,12 @@ def run_one_model(
                     save_jpg = (out_root / "overlays" / spec.name / split_name / rel).with_suffix(".jpg")
                 draw_overlay(
                     image_path=img_path,
+                    gt_label_path=gt_label_path,
                     boxes=pred["boxes"],
                     scores=pred["scores"],
                     labels=pred["labels"],
                     class_names=class_names,
+                    draw_gt=draw_gt,
                     save_path=save_jpg,
                     resize_ratio=resize_ratio,
                     jpeg_quality=jpeg_quality,
@@ -645,6 +701,7 @@ def main() -> None:
             jpeg_quality=int(args.jpeg_quality),
             line_width=int(args.line_width),
             crop_margin_ratio=float(args.crop_margin_ratio),
+            draw_gt=bool(args.draw_gt),
             max_samples=int(args.max_samples),
         )
         summary["models"].append(

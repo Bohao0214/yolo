@@ -1,0 +1,10 @@
+path: /home/ubuntu/hpproject/yolo/dataset/yolo/transmission_detection_5cls_final_merged
+train: images/train
+val: images/val
+nc: 5
+names:
+  0: balloon
+  1: kite
+  2: nets
+  3: trash
+  4: twigs
