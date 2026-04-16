@@ -539,6 +539,8 @@ dataset_tag = re.sub(r"[^a-z0-9]+", "_", dataset_tag_raw.lower()).strip("_") or 
 network_tag = "".join(keys).lower()
 if not network_tag:
     network_tag = "baseline"
+if not network_tag.startswith("yolo11-"):
+    network_tag = f"yolo11-{network_tag}"
 cfg["exp_name"] = f"{network_tag}/{dataset_tag}"
 
 out.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +576,7 @@ export _E241_VRAM_GUARD="${E241_VRAM_GUARD}"
 export _E241_GUARD_MAX_GB="${E241_GUARD_MAX_GB}"
 "${PYTHON_BIN}" - <<'PY'
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -598,6 +601,30 @@ with cfg_path.open("r", encoding="utf-8") as f:
 if not isinstance(cfg, dict):
     raise SystemExit(f"Invalid yaml mapping: {cfg_path}")
 
+# Normalize output layout to: experiments/<method>/<dataset>/exp_*
+# where method is prefixed with yolo11-.
+raw_exp = str(cfg.get("exp_name", "")).strip()
+parts = [p for p in raw_exp.split("/") if p.strip()]
+if len(parts) >= 2:
+    method_raw, dataset_raw = parts[-2], parts[-1]
+elif len(parts) == 1:
+    method_raw = parts[0]
+    dataset_raw = Path(str(cfg.get("data_root", "dataset"))).name
+else:
+    method_raw = "baseline"
+    dataset_raw = Path(str(cfg.get("data_root", "dataset"))).name
+
+method_tag = re.sub(r"[^a-z0-9]+", "-", str(method_raw).lower()).strip("-") or "baseline"
+dataset_tag = re.sub(r"[^a-z0-9]+", "_", str(dataset_raw).lower()).strip("_") or "dataset"
+if not method_tag.startswith("yolo11-"):
+    method_tag = f"yolo11-{method_tag}"
+normalized_exp_name = f"{method_tag}/{dataset_tag}"
+
+changed = False
+if str(cfg.get("exp_name", "")).strip() != normalized_exp_name:
+    cfg["exp_name"] = normalized_exp_name
+    changed = True
+
 enh = cfg.get("enhance241", {}) or {}
 if not isinstance(enh, dict):
     enh = {}
@@ -612,6 +639,9 @@ enhance_enabled = any(
     )
 )
 if not enhance_enabled:
+    if changed:
+        with cfg_path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
     raise SystemExit(0)
 
 enable_d3 = enable_d3_arg or bool(enh.get("d3", False)) or bool(enh.get("d1", False))
@@ -620,7 +650,6 @@ enable_d6 = enable_d6_arg or bool(enh.get("d6", False))
 enable_d7 = enable_d7_arg or bool(enh.get("d7", False))
 enable_d9 = enable_d9_arg or bool(enh.get("d9", False))
 enable_d11 = enable_d11_arg or bool(enh.get("d11", False))
-changed = False
 
 
 def _detect_total_vram_gb(cfg_obj: dict) -> float:

@@ -656,6 +656,8 @@ else:
 dataset_tag = re.sub(r"[^a-z0-9]+", "_", dataset_tag_raw.lower()).strip("_") or "dataset"
 
 network_tag = "".join(switches).lower() if switches else "baseline"
+if not network_tag.startswith("yolo11-"):
+    network_tag = f"yolo11-{network_tag}"
 cfg["exp_name"] = f"{network_tag}/{dataset_tag}"
 
 cfg["epochs"] = int(hparams["epochs"])

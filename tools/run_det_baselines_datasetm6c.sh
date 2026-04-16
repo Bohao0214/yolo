@@ -3,7 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATASET_ROOT="${DATASET_ROOT:-${ROOT_DIR}/dataset/yolo/datasetm6c}"
-OUT_ROOT="${OUT_ROOT:-${ROOT_DIR}/experiments/det_bench/datasetm6c}"
+DATASET_TAG_RAW="$(basename "${DATASET_ROOT}")"
+DATASET_TAG="${DATASET_TAG:-$(echo "${DATASET_TAG_RAW}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')}"
+METHOD_TAG="${METHOD_TAG:-yolo11-det-bench}"
+DATE_TAG="${DATE_TAG:-$(date +%y%m%d%H%M)}"
+OUT_ROOT="${OUT_ROOT:-${ROOT_DIR}/experiments/${METHOD_TAG}/${DATASET_TAG}/exp_${DATE_TAG}}"
 ENV_NAME="${ENV_NAME:-yolo11}"
 DEVICE="${DEVICE:-0}"
 IMGSZ="${IMGSZ:-640}"

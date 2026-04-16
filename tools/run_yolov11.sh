@@ -6,6 +6,7 @@ export LC_ALL=C.UTF-8
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${1:-${ROOT_DIR}/configs/baseline/datasetm6c.yaml}"
+RUNTIME_CONFIG="${CONFIG}"
 ACTIVE_CHILD_PID=""
 INTERRUPT_IN_PROGRESS=0
 INTERRUPT_COUNT=0
@@ -85,9 +86,53 @@ on_interrupt() {
 trap 'on_interrupt INT' INT
 trap 'on_interrupt TERM' TERM
 
-python "${ROOT_DIR}/src/train.py" --config "${CONFIG}" &
+if [[ -f "${CONFIG}" ]]; then
+  RUNTIME_CONFIG="$(mktemp /tmp/run_yolov11_cfg.XXXXXX.yaml)"
+  _Y11_CFG_IN="${CONFIG}" _Y11_CFG_OUT="${RUNTIME_CONFIG}" python - <<'PY'
+import os
+import re
+from pathlib import Path
+import yaml
+
+cfg_in = Path(os.environ["_Y11_CFG_IN"]).resolve()
+cfg_out = Path(os.environ["_Y11_CFG_OUT"]).resolve()
+with cfg_in.open("r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f) or {}
+if not isinstance(cfg, dict):
+    raise SystemExit(f"Invalid yaml mapping: {cfg_in}")
+
+raw_exp = str(cfg.get("exp_name", "")).strip()
+parts = [p for p in raw_exp.split("/") if p.strip()]
+if len(parts) >= 2:
+    method_raw, dataset_raw = parts[-2], parts[-1]
+elif len(parts) == 1:
+    method_raw = parts[0]
+    dataset_raw = Path(str(cfg.get("data_root", "dataset"))).name
+else:
+    method_raw = "baseline"
+    dataset_raw = Path(str(cfg.get("data_root", "dataset"))).name
+
+method_tag = re.sub(r"[^a-z0-9]+", "-", str(method_raw).lower()).strip("-") or "baseline"
+dataset_tag = re.sub(r"[^a-z0-9]+", "_", str(dataset_raw).lower()).strip("_") or "dataset"
+if not method_tag.startswith("yolo11-"):
+    method_tag = f"yolo11-{method_tag}"
+cfg["exp_name"] = f"{method_tag}/{dataset_tag}"
+
+with cfg_out.open("w", encoding="utf-8") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+PY
+fi
+
+cleanup_runtime_cfg() {
+  if [[ -n "${RUNTIME_CONFIG:-}" && "${RUNTIME_CONFIG}" != "${CONFIG}" && -f "${RUNTIME_CONFIG}" ]]; then
+    rm -f "${RUNTIME_CONFIG}" || true
+  fi
+}
+trap cleanup_runtime_cfg EXIT
+
+python "${ROOT_DIR}/src/train.py" --config "${RUNTIME_CONFIG}" &
 ACTIVE_CHILD_PID=$!
-echo "[run-yolov11][train-pid] pid=${ACTIVE_CHILD_PID} config=${CONFIG}"
+echo "[run-yolov11][train-pid] pid=${ACTIVE_CHILD_PID} config=${CONFIG} runtime_config=${RUNTIME_CONFIG}"
 train_status=0
 wait "${ACTIVE_CHILD_PID}" || train_status=$?
 ACTIVE_CHILD_PID=""

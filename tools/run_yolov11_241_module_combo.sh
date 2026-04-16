@@ -6,6 +6,8 @@ BASE_CONFIG_DEFAULT="${ROOT_DIR}/configs/enhance/datasetm6c/defect241.yaml"
 
 BASE_CONFIG="${BASE_CONFIG:-${BASE_CONFIG_DEFAULT}}"
 MATRIX_TAG="${MATRIX_TAG:-module_combo_$(date +%y%m%d%H%M%S)}"
+MATRIX_TAG_SAFE="$(echo "${MATRIX_TAG}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
+[[ -n "${MATRIX_TAG_SAFE}" ]] || MATRIX_TAG_SAFE="module_combo"
 EPOCHS_OVERRIDE="${EPOCHS_OVERRIDE:-}"
 FORCE_MODE="${FORCE_MODE:-}"
 SEED_OVERRIDE="${SEED_OVERRIDE:-}"
@@ -259,10 +261,13 @@ if [[ "${VRAM_GUARD_OVERRIDE}" != "auto" && "${VRAM_GUARD_OVERRIDE}" != "on" && 
 fi
 
 if [[ -z "${TMP_CFG_DIR}" ]]; then
-  TMP_CFG_DIR="/tmp/yolo241_module_combo/${MATRIX_TAG}"
+  TMP_CFG_DIR="/tmp/yolo241_module_combo/${MATRIX_TAG_SAFE}"
 fi
 if [[ -z "${LOG_ROOT}" ]]; then
-  LOG_ROOT="${ROOT_DIR}/experiments/_logs/module_combo/${MATRIX_TAG}"
+  LOG_DATASET_TAG_RAW="$(basename "$(dirname "${BASE_CONFIG}")")"
+  LOG_DATASET_TAG="$(echo "${LOG_DATASET_TAG_RAW}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
+  [[ -n "${LOG_DATASET_TAG}" ]] || LOG_DATASET_TAG="dataset"
+  LOG_ROOT="${ROOT_DIR}/experiments/yolo11-module-combo/${LOG_DATASET_TAG}/exp_${MATRIX_TAG_SAFE}/logs"
 fi
 
 python_has_pyyaml() {
@@ -507,6 +512,8 @@ else:
 dataset_tag = re.sub(r"[^a-z0-9]+", "_", dataset_tag_raw.lower()).strip("_") or "dataset"
 
 network_tag = "".join(switches).lower() if switches else "baseline"
+if not network_tag.startswith("yolo11-"):
+    network_tag = f"yolo11-{network_tag}"
 cfg["exp_name"] = f"{network_tag}/{dataset_tag}"
 
 if force_mode:

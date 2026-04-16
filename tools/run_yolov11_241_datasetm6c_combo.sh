@@ -78,7 +78,7 @@ for raw_bs in "${_BATCHES[@]}"; do
     --epochs "${EPOCHS}" \
     --batch "${bs}" \
     --parallel "${PARALLEL}" \
-    --method-tag "combo_b${bs}" \
+    --method-tag "yolo11-combo_b${bs}" \
     --combos "${COMBOS}" \
     --vram-guard "${VRAM_GUARD}" \
     --tag "${tag}" \

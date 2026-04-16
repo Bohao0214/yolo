@@ -145,7 +145,12 @@ if not isinstance(cfg, dict):
     raise SystemExit(0)
 yolo_version = str(cfg.get("yolo_version", "yolo11")).strip() or "yolo11"
 exp_name = str(cfg.get("exp_name", "defect")).strip() or "defect"
-print(str(root_dir / "experiments" / yolo_version / exp_name))
+new_root = root_dir / "experiments" / exp_name
+old_root = root_dir / "experiments" / yolo_version / exp_name
+if new_root.exists():
+    print(str(new_root))
+else:
+    print(str(old_root))
 PY
 }
 
@@ -541,10 +546,12 @@ generate_dataset_bundle() {
   _M_EPOCHS_OVERRIDE="${EPOCHS_OVERRIDE}" \
   _M_TRAIN_MODE_OVERRIDE="${TRAIN_MODE_OVERRIDE}" \
   _M_METHOD_TAG="${METHOD_TAG_OVERRIDE}" \
+  _M_RUNNER_MODE="${RUNNER_MODE}" \
   _M_DATASET_REGISTRY="${DATASET_REGISTRY}" \
   "${PYTHON_CFG_BIN}" - <<'PY'
 import ast
 import os
+import re
 from pathlib import Path
 from typing import List
 
@@ -826,6 +833,7 @@ batch_override = os.environ["_M_BATCH_OVERRIDE"].strip()
 epochs_override = os.environ["_M_EPOCHS_OVERRIDE"].strip()
 train_mode_override = os.environ["_M_TRAIN_MODE_OVERRIDE"].strip()
 method_tag_override = os.environ["_M_METHOD_TAG"].strip()
+runner_mode = os.environ.get("_M_RUNNER_MODE", "baseline").strip().lower()
 dataset_registry_path_s = os.environ.get("_M_DATASET_REGISTRY", "").strip()
 
 if not dataset_root.is_dir():
@@ -985,8 +993,14 @@ with out_data.open("w", encoding="utf-8") as f:
     yaml.safe_dump(data_doc, f, sort_keys=False, allow_unicode=True)
 
 if method_tag_override:
-    cfg["yolo_version"] = method_tag_override
-cfg["exp_name"] = dataset_tag
+    method_tag_raw = method_tag_override
+else:
+    method_tag_raw = "baseline" if runner_mode == "baseline" else "module_combo"
+method_tag = re.sub(r"[^a-z0-9]+", "-", str(method_tag_raw).lower()).strip("-") or "baseline"
+if not method_tag.startswith("yolo11-"):
+    method_tag = f"yolo11-{method_tag}"
+cfg["yolo_version"] = "yolo11"
+cfg["exp_name"] = f"{method_tag}/{dataset_tag}"
 
 cfg["data"] = str(out_data)
 cfg["data_root"] = str(dataset_root)
