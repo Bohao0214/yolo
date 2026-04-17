@@ -1,0 +1,54 @@
+yolo_version: yolo11
+exp_name: yolo11-baseline/transmission_detection_5cls_packed
+run_name: ''
+data: configs/data/transmission_detection_5cls_packed.yaml
+data_root: /home/ubuntu/hpproject/yolo/dataset/yolo/transmission_detection_5cls_packed
+model: models/pretrained/yolo11m.pt
+epochs: 150
+imgsz: 640
+batch: 2
+device: ''
+workers: 2
+conf: 0.25
+nms_iou: 0.7
+max_det: 100
+match_iou: 0.3
+mode: train_test
+weights: ''
+patience: 0
+lr0: 0.012
+lrf: 0.12
+warmup_epochs: 2
+save_train_pic: false
+save_val_pic: true
+save_test_pic: true
+save_weights: true
+skip_eval_visuals: false
+skip_post_eval_metrics: false
+best_select_metric: iAUROC@fpr0.5
+record_epoch_image_metrics: false
+val_split: 0.0
+seed: 42
+metric_conf: 0.01
+eval_batch: 1
+eval_device: ''
+threshold_sweep:
+  fix: iou
+  fix_list:
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  curve:
+  - 0.01
+  - 0.01
+  - 1.0
+  table:
+  - 0.0
+  - 0.05
+  - 1.0
