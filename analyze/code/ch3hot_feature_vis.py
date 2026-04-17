@@ -29,12 +29,13 @@ except Exception as exc:  # pragma: no cover
 USER_EDIT_CONFIG: Dict[str, Any] = {
     # 至少包含 baseline + a4/b7 其中之一
     "models": [
-        # {"name": "baseline", "weight": "/abs/path/to/best.pt"},
-        # {"name": "a4", "weight": "/abs/path/to/a4_best.pt"},
+        {"name": "baseline", "weight": "experiments/yolo11-baseline/datasetm6c/exp_2603040206/train/weights/best.pt"},
+        {"name": "oura4", "weight": "experiments/yolo11a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/weights/best.pt"},
+        {"name": "ourb7", "weight": "experiments/yolo11a4b7d6/datasetm6c/defect241__a4__b7__d6/exp_2603060404/train/weights/best.pt"},
         # {"name": "b7", "weight": "/abs/path/to/b7_best.pt"},
     ],
     "images": [
-        # "/abs/path/to/image1.jpg",
+         "dataset/yolo/datasetm6c/images/train/0013.png",
     ],
     "reference_model": "baseline",  # 用于对比图的参考模型
     "imgsz": 640,
