@@ -19,6 +19,7 @@ dataset/**/labels/**/*.json
 dataset/**/labels/**/*.cache
 dataset/**/annotations/**/*
 # dataset 压缩包（zip 等）
+dataset.zip
 dataset/**/*.zip
 dataset/**/*.7z
 dataset/**/*.rar
